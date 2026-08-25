@@ -1,8 +1,13 @@
 #include "ShaderUnit.h"
+#include <fstream>
 
 #include "WallpaperEngine/Logging/Log.h"
+#include <algorithm>
+#include <cmath>
 #include <exception>
 #include <regex>
+#include <set>
+#include <sstream>
 #include <stack>
 #include <string>
 #include <utility>
@@ -18,6 +23,7 @@
 
 #include "WallpaperEngine/Data/Builders/VectorBuilder.h"
 #include "WallpaperEngine/FileSystem/Container.h"
+#include "WallpaperEngine/Render/Wallpapers/CScene.h"
 
 #define SHADER_HEADER(filename)                                                                                        \
     "#version 330\n"                                                                                                   \
@@ -65,11 +71,12 @@ using namespace WallpaperEngine::Render::Shaders;
 ShaderUnit::ShaderUnit (
     const GLSLContext::UnitType type, std::string file, std::string content, const AssetLocator& assetLocator,
     const ShaderConstantMap& constants, const TextureMap& passTextures, const TextureMap& overrideTextures,
-    const ComboMap& combos, const ComboMap& overrideCombos
+    const ComboMap& combos, const ComboMap& overrideCombos, const ShaderConstantMap& materialConstants
 ) :
     m_type (type), m_file (std::move (file)), m_content (std::move (content)), m_combos (combos),
-    m_overrideCombos (overrideCombos), m_constants (constants), m_passTextures (passTextures),
-    m_overrideTextures (overrideTextures), m_link (nullptr), m_assetLocator (assetLocator) {
+    m_overrideCombos (overrideCombos), m_constants (constants), m_materialConstants (materialConstants),
+    m_passTextures (passTextures), m_overrideTextures (overrideTextures), m_link (nullptr),
+    m_assetLocator (assetLocator) {
     // pre-process the shader so the units are clear
     this->preprocess ();
 }
@@ -81,6 +88,17 @@ void ShaderUnit::preprocess () {
     this->preprocessIncludes ();
     this->preprocessRequires ();
     this->preprocessVariables ();
+    this->preprocessGlobalConsts ();
+
+    {
+	const std::string ambFrom = "mix(g_LightSkylightColor, g_LightAmbientColor, dot(normal, vec3(0, 1, 0))";
+	const std::string ambTo = "mix(g_LightSkylightColor, g_LightAmbientColor, dot(normal, vec3(0, -1, 0))";
+	size_t pos = 0;
+	while ((pos = this->m_preprocessed.find (ambFrom, pos)) != std::string::npos) {
+	    this->m_preprocessed.replace (pos, ambFrom.length (), ambTo);
+	    pos += ambTo.length ();
+	}
+    }
 
     // replace gl_FragColor with the equivalent
     const std::string from = "gl_FragColor";
@@ -91,6 +109,89 @@ void ShaderUnit::preprocess () {
 	this->m_preprocessed.replace (start_pos, from.length (), to);
 	start_pos += to.length (); // Handles case where 'to' is a substring of 'from'
     }
+
+    if (this->m_type == GLSLContext::UnitType_Vertex && this->m_file.find ("genericropeparticle") != std::string::npos
+	&& getenv ("LWE_NOROPEUVFLIP") == nullptr) {
+	const std::string uvLine = "v_TexCoord.y = mix(uvMinimum, uvMinimum + uvDelta, uvs.y);";
+	const size_t uvAt = this->m_preprocessed.find (uvLine);
+	if (uvAt != std::string::npos) {
+	    this->m_preprocessed.replace (
+		uvAt, uvLine.length (), "v_TexCoord.y = 1.0 - mix(uvMinimum, uvMinimum + uvDelta, uvs.y);"
+	    );
+	    sLog.out ("LWE-ROPEUVFLIP active");
+	}
+    }
+
+    if (this->m_type == GLSLContext::UnitType_Vertex && this->m_file.find ("genericparticle") != std::string::npos) {
+	const std::string posLine
+	    = "vec3 position = ComputeParticlePosition(a_TexCoordVec4.xy, textureRatio, vec4(a_Position.xyz, "
+	      "in_ParticleSize), right, up);";
+	const size_t at = this->m_preprocessed.find (posLine);
+	if (at != std::string::npos) {
+	    this->m_preprocessed.replace (
+		at, posLine.length (),
+		posLine
+		    + "\n#if TRAILRENDERER\n"
+		      "\tposition -= up * (in_ParticleSize * 0.5 * textureRatio);\n"
+		      "#endif\n"
+		      "\tposition = a_Position.xyz + (position - a_Position.xyz) * g_LWEAxisComp;"
+	    );
+	    const std::string mainDecl = "void main()";
+	    const size_t mainAt = this->m_preprocessed.find (mainDecl);
+	    if (mainAt != std::string::npos) {
+		this->m_preprocessed.insert (mainAt, "uniform vec3 g_LWEAxisComp;\n");
+	    }
+	    sLog.debug ("LWE-AXISCOMP injected into ", this->m_file);
+	} else {
+	    sLog.error ("LWE-AXISCOMP anchor line NOT FOUND in ", this->m_file, " - compensation inactive");
+	}
+    }
+}
+
+void ShaderUnit::preprocessGlobalConsts () {
+    static const std::regex constDecl (
+	R"(^\s*(?:static\s+)?const\s+(?:high|medium|low)?p?\w*\s*(float|int|uint|vec[234]|ivec[234]|mat[234])\s+(\w+)\s*=\s*([^;]+);\s*$)"
+    );
+    static const std::regex identifier (R"([A-Za-z_]\w*)");
+    static const std::set<std::string> constantSafe = { "float", "int",   "uint", "vec2", "vec3", "vec4", "ivec2",
+							"ivec3", "ivec4", "mat2", "mat3", "mat4", "true", "false" };
+
+    std::istringstream input (this->m_preprocessed);
+    std::ostringstream output;
+    std::string line;
+    int braceDepth = 0;
+
+    while (std::getline (input, line)) {
+	std::smatch match;
+	if (std::regex_match (line, match, constDecl)) {
+	    const std::string& name = match[2];
+	    const std::string& expr = match[3];
+	    bool nonConstant = false;
+	    for (auto it = std::sregex_iterator (expr.begin (), expr.end (), identifier); it != std::sregex_iterator ();
+		 ++it) {
+		if (!constantSafe.contains (it->str ())) {
+		    nonConstant = true;
+		    break;
+		}
+	    }
+	    if (nonConstant) {
+		// wrap in the declared type's constructor: HLSL allows implicit
+		// narrowing (float2 x = <float4 expr>), GLSL needs vec2(<expr>)
+		const std::string& type = match[1];
+		if (braceDepth == 0) {
+		    output << "#define " << name << " (" << type << "(" << expr << "))\n";
+		} else {
+		    output << type << " " << name << " = " << type << "(" << expr << ");\n";
+		}
+		continue;
+	    }
+	}
+	braceDepth += static_cast<int> (std::count (line.begin (), line.end (), '{'));
+	braceDepth -= static_cast<int> (std::count (line.begin (), line.end (), '}'));
+	output << line << "\n";
+    }
+
+    this->m_preprocessed = output.str ();
 }
 
 void ShaderUnit::preprocessVariables () {
@@ -364,16 +465,112 @@ std::string ShaderUnit::resolveRequireModule (const std::string& moduleName) con
 }
 
 std::string ShaderUnit::generateLightingV1 () const {
-    // PerformLighting_V1 is dynamically generated by Wallpaper Engine based on the scene's
-    // light sources. Since linux-wallpaperengine does not yet support light objects, we
-    // generate a stub that returns no dynamic light contribution.
-    return "// begin of generated module LightingV1\n"
-	   "vec3 PerformLighting_V1(vec3 worldPos, vec3 albedo, vec3 normal, vec3 viewDir,\n"
-	   "    vec3 specularTint, vec3 baseReflectance, float roughness, float metallic)\n"
-	   "{\n"
-	   "    return vec3(0.0);\n"
-	   "}\n"
-	   "// end of generated module LightingV1\n";
+    const std::string slots = std::to_string (Wallpapers::CScene::MAX_LIGHTS);
+    const std::string features = std::to_string (Wallpapers::CScene::MAX_SHADOW_FEATURES);
+
+    std::ostringstream module;
+
+    module << "// ---- begin generated module: LightingV1 ----\n"
+	   << "uniform int lwe_LitPointCount;\n"
+	   << "uniform vec4 lwe_LitPointPosRad[" << slots << "];\n"
+	   << "uniform vec4 lwe_LitPointColorExp[" << slots << "];\n"
+	   << "uniform int lwe_LitSpotCount;\n"
+	   << "uniform vec4 lwe_LitSpotPosRad[" << slots << "];\n"
+	   << "uniform vec4 lwe_LitSpotColorExp[" << slots << "];\n"
+	   << "uniform vec4 lwe_LitSpotAxisCosIn[" << slots << "];\n"
+	   << "uniform float lwe_LitSpotCosOut[" << slots << "];\n"
+	   << "uniform int lwe_LitDirCount;\n"
+	   << "uniform vec4 lwe_LitDirToLight[" << slots << "];\n"
+	   << "uniform vec4 lwe_LitDirColor[" << slots << "];\n"
+	   << "uniform sampler2DShadow lwe_ShadowAtlas;\n"
+	   << "uniform int lwe_ShadowFeatureCount;\n"
+	   << "uniform mat4 lwe_ShadowMatrix[" << features << "];\n"
+	   << "uniform vec4 lwe_ShadowTransform[" << features << "];\n"
+	   << "uniform float lwe_ShadowEnabled[" << features << "];\n"
+	   << "uniform float lwe_LitSpotShadowFeature[" << slots << "];\n"
+	   << "uniform vec4 lwe_LitDirShadowFeatures[" << slots << "];\n"
+	   << "uniform mat4 lwe_LitPointShadowMat[" << slots << " * 6];\n"
+	   << "uniform vec4 lwe_LitPointShadowXform[" << slots << "];\n"
+	   << "uniform float lwe_LitPointShadowEnabled[" << slots << "];\n"
+	   << "uniform int lwe_LitTubeCount;\n"
+	   << "uniform vec4 lwe_LitTubePosRadA[" << slots << "];\n"
+	   << "uniform vec4 lwe_LitTubeEndExpB[" << slots << "];\n"
+	   << "uniform vec4 lwe_LitTubeColor[" << slots << "];\n"
+	   << "\n"
+	   << "float lweShadowFeatureFactor(vec3 worldPos, int feature) {\n"
+	   << "    if (feature < 0 || lwe_ShadowEnabled[feature] < 0.5) return 1.0;\n"
+	   << "    vec4 clip = lwe_ShadowMatrix[feature] * vec4(worldPos, 1.0);\n"
+	   << "    vec3 ndc = clip.xyz / max(clip.w, 1e-6);\n"
+	   << "    if (any(greaterThan(abs(ndc), vec3(1.0)))) return 1.0;\n"
+	   << "    vec2 uv = ndc.xy * 0.5 + 0.5;\n"
+	   << "    float depthRef = ndc.z * 0.5 + 0.5 - 0.0015;\n"
+	   << "    vec4 cell = lwe_ShadowTransform[feature];\n"
+	   << "    return texture(lwe_ShadowAtlas, vec3(cell.xy + uv * cell.zw, depthRef));\n"
+	   << "}\n"
+	   << "float lwePointShadowFactor(vec3 worldPos, int slot) {\n"
+	   << "    if (lwe_LitPointShadowEnabled[slot] < 0.5) return 1.0;\n"
+	   << "    vec4 block = lwe_LitPointShadowXform[slot];\n"
+	   << "    vec2 cellSize = vec2(block.z * 0.5, block.w / 3.0);\n"
+	   << "    for (int face = 0; face < 6; face++) {\n"
+	   << "        vec4 clip = lwe_LitPointShadowMat[slot * 6 + face] * vec4(worldPos, 1.0);\n"
+	   << "        if (clip.w <= 0.0) continue;\n"
+	   << "        vec3 ndc = clip.xyz / clip.w;\n"
+	   << "        if (any(greaterThan(abs(ndc), vec3(1.0)))) continue;\n"
+	   << "        vec2 uv = ndc.xy * 0.5 + 0.5;\n"
+	   << "        float depthRef = ndc.z * 0.5 + 0.5 - 0.0015;\n"
+	   << "        vec2 cellOrigin = block.xy + vec2(float(face % 2), float(face / 2)) * cellSize;\n"
+	   << "        return texture(lwe_ShadowAtlas, vec3(cellOrigin + uv * cellSize, depthRef));\n"
+	   << "    }\n"
+	   << "    return 1.0;\n"
+	   << "}\n"
+	   << "\n"
+	   << "vec3 PerformLighting_V1(vec3 worldPos, vec3 baseColor, vec3 surfNormal, vec3 towardEye,\n"
+	   << "                        vec3 specTint, vec3 reflect0, float roughVal, float metalVal) {\n"
+	   << "    vec3 accum = CAST3(0.0);\n"
+	   << "    for (int idx = 0; idx < lwe_LitPointCount; idx++) {\n"
+	   << "        vec3 towardLight = lwe_LitPointPosRad[idx].xyz - worldPos;\n"
+	   << "        float shadowFactor = lwePointShadowFactor(worldPos, idx);\n"
+	   << "        accum += ComputePBRLightShadow(surfNormal, towardLight, towardEye, baseColor,\n"
+	   << "            lwe_LitPointColorExp[idx].rgb, lwe_LitPointPosRad[idx].w, lwe_LitPointColorExp[idx].w,\n"
+	   << "            specTint, reflect0, roughVal, metalVal, shadowFactor);\n"
+	   << "    }\n"
+	   << "    for (int idx = 0; idx < lwe_LitSpotCount; idx++) {\n"
+	   << "        vec3 towardLight = lwe_LitSpotPosRad[idx].xyz - worldPos;\n"
+	   << "        float beamCos = dot(normalize(-towardLight), lwe_LitSpotAxisCosIn[idx].xyz);\n"
+	   << "        float coneFade = smoothstep(lwe_LitSpotCosOut[idx], lwe_LitSpotAxisCosIn[idx].w, beamCos);\n"
+	   << "        float shadowFactor = lweShadowFeatureFactor(worldPos, int(lwe_LitSpotShadowFeature[idx]));\n"
+	   << "        accum += ComputePBRLightShadow(surfNormal, towardLight, towardEye, baseColor,\n"
+	   << "            lwe_LitSpotColorExp[idx].rgb * coneFade, lwe_LitSpotPosRad[idx].w, "
+	      "lwe_LitSpotColorExp[idx].w,\n"
+	   << "            specTint, reflect0, roughVal, metalVal, shadowFactor);\n"
+	   << "    }\n"
+	   << "    for (int idx = 0; idx < lwe_LitDirCount; idx++) {\n"
+	   << "        vec4 dirFeatures = lwe_LitDirShadowFeatures[idx];\n"
+	   << "        float shadowFactor = 1.0;\n"
+	   << "        if (dirFeatures.x >= 0.0) {\n"
+	   << "            float f1 = lweShadowFeatureFactor(worldPos, int(dirFeatures.x));\n"
+	   << "            float f2 = lweShadowFeatureFactor(worldPos, int(dirFeatures.y));\n"
+	   << "            float f3 = lweShadowFeatureFactor(worldPos, int(dirFeatures.z));\n"
+	   << "            shadowFactor = min(f1, min(f2, f3));\n"
+	   << "        }\n"
+	   << "        accum += ComputePBRLightShadowInfinite(surfNormal, lwe_LitDirToLight[idx].xyz, towardEye,\n"
+	   << "            baseColor, lwe_LitDirColor[idx].rgb, specTint, reflect0, roughVal, metalVal, "
+	      "shadowFactor);\n"
+	   << "    }\n"
+	   << "    for (int idx = 0; idx < lwe_LitTubeCount; idx++) {\n"
+	   << "        vec3 segA = lwe_LitTubePosRadA[idx].xyz;\n"
+	   << "        vec3 segAB = lwe_LitTubeEndExpB[idx].xyz - segA;\n"
+	   << "        float segT = clamp(dot(worldPos - segA, segAB) / max(dot(segAB, segAB), 1e-6), 0.0, 1.0);\n"
+	   << "        vec3 towardLight = (segA + segAB * segT) - worldPos;\n"
+	   << "        accum += ComputePBRLightShadow(surfNormal, towardLight, towardEye, baseColor,\n"
+	   << "            lwe_LitTubeColor[idx].rgb, lwe_LitTubePosRadA[idx].w, lwe_LitTubeEndExpB[idx].w,\n"
+	   << "            specTint, reflect0, roughVal, metalVal, 1.0);\n"
+	   << "    }\n"
+	   << "    return accum;\n"
+	   << "}\n"
+	   << "// ---- end generated module: LightingV1 ----\n";
+
+    return module.str ();
 }
 
 std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) const {
@@ -414,6 +611,21 @@ std::string ShaderUnit::applyLinkedVaryingCompatibility (std::string source) con
     return source;
 }
 
+std::string ShaderUnit::applyTextureResolutionSwizzleCompatibility (std::string source) const {
+    static const std::regex vec2ThenRes (
+	R"((CAST2\s*\([^()]*\)|vec2\s*\([^()]*\))(\s*[*/+-]\s*)(g_Texture\d+Resolution)\b(?!\.))"
+    );
+    static const std::regex resThenVec2 (
+	R"((g_Texture\d+Resolution)\b(?!\.)(\s*[*/+-]\s*)(CAST2\s*\([^()]*\)|vec2\s*\([^()]*\)))"
+    );
+    std::string patched = std::regex_replace (source, vec2ThenRes, "$1$2$3.xy");
+    patched = std::regex_replace (patched, resThenVec2, "$1.xy$2$3");
+    if (patched != source) {
+	sLog.out ("Applied g_TextureResolution vec4/vec2 swizzle compatibility in ", this->m_file);
+    }
+    return patched;
+}
+
 std::string ShaderUnit::applyFragmentTexCoordCompatibility (std::string source) const {
     if (this->m_type != GLSLContext::UnitType_Fragment) {
 	return source;
@@ -443,7 +655,7 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
     // TODO: SUPPORT REQUIRES SO WE PROPERLY FOLLOW THE REQUIRED CHAIN
     JSON data;
     try {
-	data = JSON::parse (content);
+	data = WallpaperEngine::Data::JSON::parseLenient (content);
     } catch (const std::exception& e) {
 	sLog.error ("Cannot parse combo metadata in shader ", this->m_file, ": ", e.what ());
 	return;
@@ -468,11 +680,19 @@ void ShaderUnit::parseComboConfiguration (const std::string& content, const int 
 	    // TODO: PROPERLY SUPPORT EMPTY COMBOS
 	    this->m_discoveredCombos.emplace (combo, defaultValue);
 	} else if (defvalue->is_number_float ()) {
-	    sLog.exception ("float combos are not supported in shader ", this->m_file, ". ", combo);
+	    this->m_discoveredCombos.emplace (combo, static_cast<int> (std::round (defvalue->get<float> ())));
 	} else if (defvalue->is_number_integer ()) {
 	    this->m_discoveredCombos.emplace (combo, defvalue->get<int> ());
 	} else if (defvalue->is_string ()) {
-	    sLog.exception ("string combos are not supported in shader ", this->m_file, ". ", combo);
+	    try {
+		this->m_discoveredCombos.emplace (combo, std::stoi (defvalue->get<std::string> ()));
+	    } catch (const std::exception&) {
+		sLog.error (
+		    "Cannot parse string combo default for ", combo, " in shader ", this->m_file, " - using ",
+		    defaultValue
+		);
+		this->m_discoveredCombos.emplace (combo, defaultValue);
+	    }
 	} else {
 	    sLog.exception ("cannot parse combo information ", combo, ". unknown type for ", defvalue->dump ());
 	}
@@ -484,7 +704,7 @@ void ShaderUnit::parseParameterConfiguration (
 ) {
     JSON data;
     try {
-	data = JSON::parse (content);
+	data = WallpaperEngine::Data::JSON::parseLenient (content);
     } catch (const std::exception& e) {
 	sLog.error ("Cannot parse parameter metadata for ", name, " in shader ", this->m_file, ": ", e.what ());
 	return;
@@ -532,14 +752,32 @@ void ShaderUnit::parseParameterConfiguration (
 	// samplers can have special requirements, check what sampler we're working with and create definitions
 	// if needed
 	const auto textureName = data.find ("default");
-	// TODO: CREATE TEXTURE WITH THE GIVEN COLOR
-	// extract the texture number from the name
-	const char value = name.at (std::string ("g_Texture").length ());
+	size_t index = 0;
+	try {
+	    index = std::stoul (name.substr (std::string ("g_Texture").length ()));
+	} catch (const std::exception&) {
+	    sLog.error ("Cannot parse texture index from name: ", name, " in shader ", this->m_file);
+	    return;
+	}
+
+	const auto paintDefaultColor = data.find ("paintdefaultcolor");
+	if (paintDefaultColor != data.end () && paintDefaultColor->is_string ()) {
+	    try {
+		const std::string& colorStr = paintDefaultColor->get<std::string> ();
+		const int colorComponents = VectorBuilder::preparseSize (colorStr);
+		if (colorComponents == 4) {
+		    this->m_paintDefaultColors.emplace (index, VectorBuilder::parse<glm::vec4> (colorStr));
+		} else if (colorComponents == 3) {
+		    this->m_paintDefaultColors.emplace (
+			index, glm::vec4 (VectorBuilder::parse<glm::vec3> (colorStr), 1.0f)
+		    );
+		}
+	    } catch (const std::exception& e) {
+		sLog.error ("Cannot parse paintdefaultcolor for ", name, " in shader ", this->m_file, ": ", e.what ());
+	    }
+	}
 	const auto requireany = data.find ("requireany");
 	const auto require = data.find ("require");
-	// now convert it to integer
-	// TODO: BETTER CONVERSION HERE
-	size_t index = value - '0';
 	// TODO: SUPPORT USER TEXTURES!!
 
 	if (combo != data.end ()) {
@@ -615,6 +853,42 @@ void ShaderUnit::parseParameterConfiguration (
 		this->m_discoveredCombos.emplace (*combo, comboValue);
 		// textures linked to combos need to be tracked too
 		this->m_usedCombos.emplace (*combo, true);
+
+		const auto components = data.find ("components");
+		if (textureSlotUsed && components != data.end () && components->is_array ()) {
+		    for (const auto& component : *components) {
+			const auto componentCombo = component.find ("combo");
+			if (componentCombo == component.end () || !componentCombo->is_string ()) {
+			    continue;
+			}
+			if (this->m_combos.contains (*componentCombo)
+			    || this->m_overrideCombos.contains (*componentCombo)) {
+			    continue;
+			}
+			const std::string comboName = *componentCombo;
+			bool enable = true;
+			if (comboName == "METALLIC_MAP") {
+			    enable = this->m_constants.find ("metallic") == this->m_constants.end ()
+				&& this->m_materialConstants.find ("metallic") == this->m_materialConstants.end ();
+			} else if (comboName == "ROUGHNESS_MAP") {
+			    enable = this->m_constants.find ("roughness") == this->m_constants.end ()
+				&& this->m_materialConstants.find ("roughness") == this->m_materialConstants.end ();
+			} else if (comboName == "REFLECTION_MAP") {
+			    const auto reflection = this->m_combos.find ("REFLECTION");
+			    enable = reflection != this->m_combos.end () && reflection->second != 0;
+			}
+			if (getenv ("LWE_AUDIT") != nullptr) {
+			    sLog.out (
+				"LWE-AUDIT PBRMASKS component ", comboName, " enable=", enable, " shader=", this->m_file
+			    );
+			}
+			if (!enable) {
+			    continue;
+			}
+			this->m_discoveredCombos.emplace (*componentCombo, 1);
+			this->m_usedCombos.emplace (*componentCombo, true);
+		    }
+		}
 	    }
 	}
 
@@ -641,6 +915,12 @@ const ComboMap& ShaderUnit::getCombos () const { return this->m_combos; }
 
 const ComboMap& ShaderUnit::getDiscoveredCombos () const { return this->m_discoveredCombos; }
 
+ShaderUnit::~ShaderUnit () {
+    for (const auto* parameter : this->m_parameters) {
+	delete parameter;
+    }
+}
+
 void ShaderUnit::linkToUnit (const ShaderUnit* unit) { this->m_link = unit; }
 
 const ShaderUnit* ShaderUnit::getLinkedUnit () const { return this->m_link; }
@@ -659,6 +939,23 @@ const std::string& ShaderUnit::compile () {
     }
 
     std::map<std::string, bool> addedCombos;
+
+    static const char* s_forceCombo = getenv ("LWE_FORCECOMBO");
+    if (s_forceCombo != nullptr) {
+	const std::string spec = s_forceCombo;
+	if (const auto eq = spec.find ('='); eq != std::string::npos) {
+	    std::string uppercase;
+	    std::ranges::transform (spec.substr (0, eq), std::back_inserter (uppercase), ::toupper);
+	    const int value = atoi (spec.c_str () + eq + 1);
+	    this->m_final += DEFINE_COMBO (uppercase, value);
+	    addedCombos.emplace (uppercase, true);
+	    static bool s_logged = false;
+	    if (!s_logged) {
+		s_logged = true;
+		sLog.out ("LWE-FORCECOMBO forcing ", uppercase, "=", value, " on all shader units");
+	    }
+	}
+    }
 
     for (const auto& [name, value] : this->m_overrideCombos) {
 	std::string uppercase;
@@ -714,8 +1011,25 @@ const std::string& ShaderUnit::compile () {
     }
 
     // this should be the rest of the shader
-    this->m_final
-	+= this->applyFragmentTexCoordCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed));
+    this->m_final += this->applyFragmentTexCoordCompatibility (
+	this->applyTextureResolutionSwizzleCompatibility (this->applyLinkedVaryingCompatibility (this->m_preprocessed))
+    );
+
+    static const char* s_shaderDump = getenv ("LWE_SHADERDUMP_MATCH");
+    if (s_shaderDump != nullptr && s_shaderDump[0] != '\0' && this->m_file.find (s_shaderDump) != std::string::npos) {
+	const char* home = getenv ("HOME");
+	if (home != nullptr) {
+	    std::string safeName;
+	    for (const char c : this->m_file) {
+		safeName += (isalnum (c) != 0 ? c : '_');
+	    }
+	    const std::string path = std::string (home) + "/.local/state/lwe/shaderdump-" + safeName
+		+ (this->m_type == GLSLContext::UnitType_Vertex ? ".vert" : ".frag") + ".glsl";
+	    std::ofstream out (path, std::ios::trunc);
+	    out << this->m_final;
+	    sLog.out ("LWE-SHADERDUMP wrote ", path);
+	}
+    }
 
     // the pass itself handles shader compilation, the unit doesn't have enough information for this step
     return this->m_final;
@@ -723,3 +1037,5 @@ const std::string& ShaderUnit::compile () {
 
 const std::vector<Variables::ShaderVariable*>& ShaderUnit::getParameters () const { return this->m_parameters; }
 const TextureMap& ShaderUnit::getTextures () const { return this->m_defaultTextures; }
+
+const std::map<int, glm::vec4>& ShaderUnit::getPaintDefaultColors () const { return this->m_paintDefaultColors; }

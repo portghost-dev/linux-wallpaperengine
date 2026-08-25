@@ -8,13 +8,12 @@
 using namespace WallpaperEngine::Render;
 using namespace WallpaperEngine::Scripting;
 
-ScriptableObject::ScriptableObject (Wallpapers::CScene& scene, const Object& object) : CObject (scene, object) {
-    // register common dynamic values
-    this->registerProperty ("origin", *object.origin->value);
-    this->registerProperty ("scale", *object.groupScale->value);
-    this->registerProperty ("angles", *object.groupAngles->value);
-    this->registerProperty ("visible", *object.groupVisible->value);
+ScriptableObject::~ScriptableObject () {
+    this->getScene ().forgetObjectAnimations (*this);
+    this->getScene ().getScriptEngine ().unregisterScriptable (this);
 }
+
+ScriptableObject::ScriptableObject (Wallpapers::CScene& scene, const Object& object) : CObject (scene, object) { }
 
 DynamicValue& ScriptableObject::getProperty (const std::string& name) {
     const auto it = this->m_properties.find (name);
@@ -40,4 +39,5 @@ void ScriptableObject::registerProperty (const std::string& name, DynamicValue& 
     }
 
     this->getScene ().getScriptEngine ().queueScript (inserted.first->second.key, inserted.first->second.value, *this);
+    this->getScene ().queueAnimation (inserted.first->second.value, *this);
 }

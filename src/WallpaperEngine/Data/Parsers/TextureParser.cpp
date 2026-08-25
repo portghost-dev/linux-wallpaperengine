@@ -18,11 +18,12 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
     parseContainer (*result, file);
 
     for (uint32_t image = 0; image < result->imageCount; image++) {
-	const uint32_t mipmapCount = file.nextUInt32 ();
+	const uint32_t placeholderMipmapCount = file.nextUInt32 ();
+	const uint32_t mipmapCount = result->rawGLMipLevels > 0 ? result->rawGLMipLevels : placeholderMipmapCount;
 	MipmapList mipmaps;
 
 	for (uint32_t mipmap = 0; mipmap < mipmapCount; mipmap++) {
-	    mipmaps.emplace_back (parseMipmap (file, *result));
+	    mipmaps.emplace_back (parseMipmap (file, *result, image, mipmap));
 	}
 
 	result->images.emplace (image, mipmaps);
@@ -37,8 +38,70 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
     return result;
 }
 
-MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Texture& header) {
+// sizes come straight from an untrusted .tex file (PR #631 hardening): reject negatives
+// (which would turn into a huge size_t in new[]), absurd allocations, and payloads larger
+// than the bytes actually left in the stream. Shared by every mip variant below.
+void TextureParser::validateMipmapPayloadBounds (const Mipmap& mipmap, const BinaryReader& file) {
+    if (mipmap.compressedSize < 0 || mipmap.uncompressedSize < 0) {
+	sLog.exception ("Texture mipmap has a negative size");
+    }
+
+    // upper bound on a single decompressed mipmap; a genuine texture never approaches this, but it
+    // stops a tiny compressed payload from forcing a multi-gigabyte allocation before decompression
+    constexpr int MAX_MIPMAP_BYTES = 1 << 30; // 1 GiB
+    if (mipmap.uncompressedSize > MAX_MIPMAP_BYTES) {
+	sLog.exception ("Texture mipmap uncompressed size ", mipmap.uncompressedSize, " exceeds sane limit");
+    }
+
+    // the bytes we are about to read from the file (compressed payload, or the raw payload otherwise)
+    // must actually exist in what remains of the stream
+    const std::streamsize toRead = (mipmap.compression == 1) ? mipmap.compressedSize : mipmap.uncompressedSize;
+    if (toRead > file.remaining ()) {
+	sLog.exception ("Texture mipmap claims ", toRead, " bytes but only ", file.remaining (), " remain");
+    }
+}
+
+MipmapSharedPtr
+TextureParser::parseMipmap (const BinaryReader& file, const Texture& header, uint32_t imageIndex, uint32_t mipIndex) {
     auto result = std::make_shared<Mipmap> ();
+
+    if (header.containerVersion == ContainerVersion_TEXB0004 && header.freeImageFormat == FIF_UNKNOWN) {
+	uint32_t mipWidth = header.textureWidth;
+	uint32_t mipHeight = header.textureHeight;
+
+	if (imageIndex > 0 || mipIndex > 0) {
+	    mipWidth = file.nextUInt32 ();
+	    mipHeight = file.nextUInt32 ();
+	    std::ignore = file.nextUInt32 (); // 0/1-valued flag, purpose unknown
+	}
+
+	result->width = mipWidth;
+	result->height = mipHeight;
+	result->uncompressedSize = file.nextInt ();
+	result->compressedSize = file.nextInt ();
+	result->compression = (result->uncompressedSize != result->compressedSize) ? 1 : 0;
+
+	validateMipmapPayloadBounds (*result, file);
+
+	result->uncompressedData = std::unique_ptr<char[]> (new char[result->uncompressedSize]);
+
+	if (result->compression == 1) {
+	    result->compressedData = std::unique_ptr<char[]> (new char[result->compressedSize]);
+	    file.next (result->compressedData.get (), result->compressedSize);
+
+	    if (LZ4_decompress_safe (
+		    result->compressedData.get (), result->uncompressedData.get (), result->compressedSize,
+		    result->uncompressedSize
+		)
+		!= static_cast<int> (result->uncompressedSize)) {
+		sLog.exception ("Cannot decompress raw-GL texture mipmap data");
+	    }
+	} else {
+	    file.next (result->uncompressedData.get (), result->uncompressedSize);
+	}
+
+	return result;
+    }
 
     // TEXB0004 has some extra data in the header that has to be handled
     if (header.containerVersion == ContainerVersion_TEXB0004) {
@@ -70,6 +133,8 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 	result->uncompressedSize = result->compressedSize;
     }
 
+    validateMipmapPayloadBounds (*result, file);
+
     result->uncompressedData = std::unique_ptr<char[]> (new char[result->uncompressedSize]);
 
     if (result->compression == 1) {
@@ -82,7 +147,8 @@ MipmapSharedPtr TextureParser::parseMipmap (const BinaryReader& file, const Text
 	    result->uncompressedSize
 	);
 
-	if (bytes < 0) {
+	// a short decode would leave the buffer tail as uninitialized heap, uploaded as texels
+	if (bytes != static_cast<int> (result->uncompressedSize)) {
 	    sLog.exception ("Cannot decompress texture data, LZ4_decompress_safe returned an error");
 	}
     } else {
@@ -219,8 +285,15 @@ void TextureParser::parseContainer (Texture& header, const BinaryReader& file) {
 	    header.freeImageFormat = FIF_MP4;
 	}
 
-	// default to TEXB0003 format here
-	if (header.freeImageFormat != FIF_MP4) {
+	if (header.freeImageFormat == FIF_UNKNOWN) {
+	    header.rawGLMipLevels = file.nextUInt32 ();
+	    std::ignore = file.nextUInt32 ();
+	    std::ignore = file.nextUInt32 ();
+
+	    if (header.rawGLMipLevels == 0 || header.rawGLMipLevels > 16) {
+		sLog.exception ("raw-GL texture declares ", header.rawGLMipLevels, " mip levels");
+	    }
+	} else if (header.freeImageFormat != FIF_MP4) {
 	    header.containerVersion = ContainerVersion_TEXB0003;
 	}
     } else if (strncmp (magic, "TEXB0003", 9) == 0) {
@@ -268,8 +341,13 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) 
 
     // ensure gif width and height is right for TEXS0001, TEXS0002
     if (header.animatedVersion == AnimatedVersion_TEXS0001 || header.animatedVersion == AnimatedVersion_TEXS0002) {
-	header.gifWidth = (*header.frames.begin ())->width1;
-	header.gifHeight = (*header.frames.begin ())->height1;
+	// a frame count of zero would otherwise dereference begin() on an empty vector
+	if (header.frames.empty ()) {
+	    sLog.exception ("Animated texture declares no frames");
+	}
+
+	header.gifWidth = header.frames.front ()->width1;
+	header.gifHeight = header.frames.front ()->height1;
     }
 
     // Calculate spritesheet grid dimensions from animation frames
@@ -286,7 +364,7 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) 
 	    const uint32_t frameCount = static_cast<uint32_t> (header.frames.size ());
 
 	    // Only populate spritesheet metadata if the inferred grid can actually hold all frames
-	    // This prevents GIFs (where frameWidth == textureWidth) from being treated as 1×1 spritesheets
+	    // This prevents GIFs (where frameWidth == textureWidth) from being treated as 1x1 spritesheets
 	    if (cols > 0 && rows > 0 && cols * rows >= frameCount) {
 		header.spritesheetCols = cols;
 		header.spritesheetRows = rows;
@@ -303,11 +381,15 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) 
 }
 
 uint32_t TextureParser::parseTextureFlags (uint32_t value) {
-    if (value < TextureFlags_All) {
-	return value;
+    // Windows-parity: NEVER reject content over unknown flag bits (silent-default is
+    // engine policy, behaviorally confirmed). Keep the bits we model,
+    // log the rest once per value. Rejecting here dropped real textures (3D Earth
+    // masks flags 0x800000, Bus Stop class) and killed whole objects with them.
+    const uint32_t known = value & TextureFlags_All;
+    if (known != value) {
+	sLog.out ("ignoring unknown texture flag bits: ", value & ~TextureFlags_All, " (keeping ", known, ")");
     }
-
-    sLog.exception ("unknown texture flags: ", value);
+    return known;
 }
 
 FIF TextureParser::parseFIF (uint32_t value) {

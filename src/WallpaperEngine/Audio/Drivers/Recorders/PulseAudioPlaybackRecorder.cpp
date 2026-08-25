@@ -4,6 +4,9 @@
 #include <cstring>
 #include <glm/common.hpp>
 
+// live band-gain dial (WallpaperApplication.cpp defines + env-seeds; set-tuning writes)
+extern float g_LweAudioGain;
+
 float movetowards (float current, float target, float maxDelta) {
     if (abs (target - current) <= maxDelta) {
 	return target;
@@ -214,6 +217,23 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
 void PulseAudioPlaybackRecorder::update () {
     pa_mainloop_iterate (this->m_mainloop, 0, nullptr);
 
+    if (!this->enabled) {
+	for (int i = 0; i < 64; i++) {
+	    this->audio64[i] = movetowards (this->audio64[i], 0.0f, 0.3f);
+	    if (i >= 32) {
+		continue;
+	    }
+	    this->audio32[i] = movetowards (this->audio32[i], 0.0f, 0.3f);
+	    if (i >= 16) {
+		continue;
+	    }
+	    this->audio16[i] = movetowards (this->audio16[i], 0.0f, 0.3f);
+	}
+
+	this->m_captureData.fullFrameReady = false;
+	return;
+    }
+
     // interpolate current values to the destination
     for (int i = 0; i < 64; i++) {
 	this->audio64[i] = movetowards (this->audio64[i], this->m_FFTdestination64[i], 0.3f);
@@ -254,12 +274,14 @@ void PulseAudioPlaybackRecorder::update () {
 	    f1 = 0.35f * log10 (f2);
 	}
 
+	f1 *= g_LweAudioGain;
+
 	this->m_FFTdestination64[band]
-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f)));
+	    = fmax (0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 63.0f) * 1.0f - 0.5f))));
 	this->m_FFTdestination32[band >> 1]
-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 31.0f) * 1.0f - 0.5f)));
+	    = fmax (0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 31.0f) * 1.0f - 0.5f))));
 	this->m_FFTdestination16[band >> 2]
-	    = fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 15.0f) * 1.0f - 0.5f)));
+	    = fmax (0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 15.0f) * 1.0f - 0.5f))));
     }
 }
 

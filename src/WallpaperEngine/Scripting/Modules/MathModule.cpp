@@ -10,23 +10,41 @@ using namespace WallpaperEngine::Scripting::Modules;
 static uint32_t MathModuleInstanceId = 0;
 std::map<uint32_t, MathModule&> mathModules;
 
+JSValue wemath_smoothstep (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic);
+JSValue wemath_mix (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic);
+
 int wemath_init (JSContext* ctx, JSModuleDef* m) {
+    // runs at module instantiation (first import): the export slots declared by
+    // JS_AddModuleExport in the constructor exist now and can receive values
+    for (const auto& [id, module] : mathModules) {
+	if (module.getDefinition () != m) {
+	    continue;
+	}
 
-    JS_AddModuleExport (ctx, m, "smoothStep");
-    JS_AddModuleExport (ctx, m, "mix");
-    JS_AddModuleExport (ctx, m, "deg2rad");
-    JS_AddModuleExport (ctx, m, "rad2deg");
+	JS_SetModuleExport (
+	    ctx, m, "smoothStep",
+	    JS_NewCFunctionMagic (ctx, wemath_smoothstep, "smoothStep", 3, JS_CFUNC_generic_magic, id)
+	);
+	JS_SetModuleExport (
+	    ctx, m, "mix", JS_NewCFunctionMagic (ctx, wemath_mix, "mix", 3, JS_CFUNC_generic_magic, id)
+	);
+	JS_SetModuleExport (ctx, m, "deg2rad", JS_NewFloat64 (ctx, 0.01745329251994329576923690768489));
+	JS_SetModuleExport (ctx, m, "rad2deg", JS_NewFloat64 (ctx, 57.295779513082320876798154814105));
 
-    return 0;
+	return 0;
+    }
+
+    JS_ThrowReferenceError (ctx, "WEMath module instantiated without a registered definition");
+    return -1;
 }
 
 JSValue wemath_smoothstep (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 3) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "invalid arguments");
     }
 
     if (!JS_IsNumber (argv[0]) || !JS_IsNumber (argv[1]) || !JS_IsNumber (argv[2])) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "invalid arguments");
     }
 
     double edge0 = 0.0f;
@@ -42,11 +60,11 @@ JSValue wemath_smoothstep (JSContext* ctx, JSValueConst this_val, int argc, JSVa
 
 JSValue wemath_mix (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic) {
     if (argc != 3) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "invalid arguments");
     }
 
     if (!JS_IsNumber (argv[0]) || !JS_IsNumber (argv[1]) || !JS_IsNumber (argv[2])) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "invalid arguments");
     }
 
     double a = 0.0f;
@@ -63,30 +81,13 @@ JSValue wemath_mix (JSContext* ctx, JSValueConst this_val, int argc, JSValueCons
 MathModule::MathModule (ScriptEngine& engine) : ScriptModule (engine, "WEMath", wemath_init) {
     this->m_instanceId = ++MathModuleInstanceId;
 
-    JS_SetModuleExport (
-	this->getEngine ().getContext (), this->getDefinition (), "smoothStep",
-	JS_NewCFunctionMagic (
-	    this->getEngine ().getContext (), wemath_smoothstep, "smoothStep", 3, JS_CFUNC_generic_magic,
-	    this->m_instanceId
-	)
-    );
-
-    JS_SetModuleExport (
-	this->getEngine ().getContext (), this->getDefinition (), "mix",
-	JS_NewCFunctionMagic (
-	    this->getEngine ().getContext (), wemath_mix, "mix", 1, JS_CFUNC_generic_magic, this->m_instanceId
-	)
-    );
-
-    JS_SetModuleExport (
-	this->getEngine ().getContext (), this->getDefinition (), "deg2rad",
-	JS_NewFloat64 (this->getEngine ().getContext (), 0.01745329251994329576923690768489)
-    );
-
-    JS_SetModuleExport (
-	this->getEngine ().getContext (), this->getDefinition (), "rad2deg",
-	JS_NewFloat64 (this->getEngine ().getContext (), 57.295779513082320876798154814105)
-    );
+    // exports must be DECLARED before the module is instantiated; their values
+    // are set in wemath_init, which quickjs calls at instantiation time
+    JSContext* ctx = this->getEngine ().getContext ();
+    JS_AddModuleExport (ctx, this->getDefinition (), "smoothStep");
+    JS_AddModuleExport (ctx, this->getDefinition (), "mix");
+    JS_AddModuleExport (ctx, this->getDefinition (), "deg2rad");
+    JS_AddModuleExport (ctx, this->getDefinition (), "rad2deg");
 
     mathModules.emplace (this->m_instanceId, *this);
 }

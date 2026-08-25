@@ -39,9 +39,17 @@ public:
     void update () const override;
     bool isReady () const override;
 
+    void ensureDepthAttachment () const;
+    void ensureDepthTextureAttachment () const;
+    /** the sampleable depth texture id, GL_NONE unless ensureDepthTextureAttachment ran */
+    [[nodiscard]] GLuint getDepthTexture () const { return this->m_depthTexture; }
+
 private:
+    void createGL (uint32_t textureWidth, uint32_t textureHeight);
+
     GLuint m_framebuffer = GL_NONE;
-    GLuint m_depthbuffer = GL_NONE;
+    mutable GLuint m_depthbuffer = GL_NONE;
+    mutable GLuint m_depthTexture = GL_NONE;
     GLuint m_texture = GL_NONE;
     glm::vec4 m_resolution = {};
     float m_scale = 0;

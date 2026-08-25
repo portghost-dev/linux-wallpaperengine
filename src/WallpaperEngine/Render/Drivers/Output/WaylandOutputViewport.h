@@ -41,6 +41,8 @@ namespace Output {
 	int scale = 1;
 	bool initialized = false;
 	bool rendering = false;
+	/** a frame callback arrived; the dispatch loop renders this viewport ONCE per pass */
+	bool framePending = false;
 
 	wl_egl_window* eglWindow = nullptr;
 	EGLSurface eglSurface = nullptr;
@@ -53,11 +55,14 @@ namespace Output {
 	wl_cursor* pointer = nullptr;
 	wl_surface* cursorSurface = nullptr;
 	bool callbackInitialized = false;
+	/** eglSwapInterval(0) applied to this surface (see makeCurrent) */
+	bool swapIntervalConfigured = false;
 	bool hasXdgLogicalPosition = false;
 	zxdg_output_v1* xdgOutput = nullptr;
 
 	void setupLS ();
 	void setupXdgOutput (zxdg_output_manager_v1* manager);
+	void teardownSurfaces ();
 
 	/**
 	 * Activates output's context for drawing

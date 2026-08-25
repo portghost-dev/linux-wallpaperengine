@@ -33,6 +33,10 @@ public:
      */
     [[nodiscard]] glm::dvec2 position () const override;
 
+    [[nodiscard]] glm::dvec2 normalized () const override;
+
+    [[nodiscard]] bool hasPointer () const override;
+
     /**
      * @return The status of the mouse's left click
      */
@@ -44,6 +48,7 @@ public:
     [[nodiscard]] MouseClickStatus rightClick () const override;
 
 private:
+    [[nodiscard]] std::optional<glm::dvec2> resolveNormalized () const;
     [[nodiscard]] const Render::Drivers::Output::WaylandOutputViewport* getActiveOutputViewport () const;
     [[nodiscard]] std::optional<glm::dvec2> queryHyprlandCursorPosition () const;
 

@@ -9,10 +9,19 @@
 using namespace WallpaperEngine::FileSystem;
 using namespace WallpaperEngine::FileSystem::Adapters;
 
+namespace {
+// component-aware containment; a bare string-prefix test also matches sibling
+// directories whose name extends the base ("123" vs "1234-evil")
+bool within (const std::filesystem::path& base, const std::filesystem::path& target) {
+    const auto rel = target.lexically_relative (base);
+    return !rel.empty () && *rel.begin () != "..";
+}
+} // namespace
+
 ReadStreamSharedPtr DirectoryAdapter::open (const std::filesystem::path& path) const {
     auto finalpath = std::filesystem::canonical (this->basepath / path);
 
-    if (finalpath.string ().find (this->basepath.string ()) != 0) {
+    if (!within (this->basepath, finalpath)) {
 	throw std::filesystem::filesystem_error ("Cannot find file", path, std::error_code ());
     }
 
@@ -33,7 +42,7 @@ bool DirectoryAdapter::exists (const std::filesystem::path& path) const {
     try {
 	const auto finalpath = std::filesystem::canonical (this->basepath / path);
 
-	if (finalpath.string ().find (this->basepath.string ()) != 0) {
+	if (!within (this->basepath, finalpath)) {
 	    return false;
 	}
 
@@ -56,7 +65,7 @@ bool DirectoryAdapter::exists (const std::filesystem::path& path) const {
 std::filesystem::path DirectoryAdapter::physicalPath (const std::filesystem::path& path) const {
     auto finalpath = std::filesystem::canonical (this->basepath / path);
 
-    if (finalpath.string ().find (this->basepath.string ()) != 0) {
+    if (!within (this->basepath, finalpath)) {
 	throw std::filesystem::filesystem_error ("Cannot find file", path, std::error_code ());
     }
 

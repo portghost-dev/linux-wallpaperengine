@@ -6,6 +6,7 @@
 #include "CTexture.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
+#include "WallpaperEngine/Render/MipResidency.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Parsers/TextureParser.h"
@@ -75,12 +76,22 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 	    };
 
 	    auto parsedTexture = TextureParser::parse (stream, filename, metadataLoader);
-	    auto texture = std::make_shared<CTexture> (this->getContext (), std::move (parsedTexture));
+	    // mip residency: the scene-load reference map decided this texture's
+	    // cappability before anything resolved; the cap itself resolves LIVE from
+	    // the current outputs at this moment (hotplug-fresh, never launch-cached);
+	    // 0 = full chain (default path)
+	    const int capDim = MipResidency::cappable (filename)
+		? MipResidency::capDimension (MipResidency::largestOutputDimension (this->getContext ()))
+		: 0;
+	    auto texture = std::make_shared<CTexture> (this->getContext (), std::move (parsedTexture), capDim);
 
 #if !NDEBUG
 	    glObjectLabel (GL_TEXTURE, texture->getTextureID (0), -1, filename.c_str ());
 #endif
 
+	    if (getenv ("LWE_AUDIT") != nullptr) {
+		sLog.out ("LWE-AUDIT texture resolve '", filename, "' -> texid=", texture->getTextureID (0));
+	    }
 	    this->store (filename, texture);
 
 	    return texture;
@@ -95,4 +106,23 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 
 void TextureCache::store (const std::string& name, std::shared_ptr<const TextureProvider> texture) {
     this->m_textureCache.insert_or_assign (name, texture);
+}
+
+size_t TextureCache::evictUnused () {
+    static const bool dump = getenv ("LWE_TEXCACHEDUMP") != nullptr;
+    size_t evicted = 0;
+
+    for (auto it = this->m_textureCache.begin (); it != this->m_textureCache.end ();) {
+	if (it->second.use_count () == 1) {
+	    it = this->m_textureCache.erase (it);
+	    evicted++;
+	} else {
+	    if (dump) {
+		sLog.out ("LWE-TEXCACHE survivor ", it->first, " refs=", it->second.use_count ());
+	    }
+	    ++it;
+	}
+    }
+
+    return evicted;
 }

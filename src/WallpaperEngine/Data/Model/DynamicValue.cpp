@@ -296,6 +296,10 @@ void DynamicValue::setProperties (std::map<std::string, UserSettingUniquePtr> pr
     this->m_properties = std::move (properties);
 }
 
+void DynamicValue::setAnimation (AnimationTimeline animation) { this->m_animation = std::move (animation); }
+
+const std::optional<AnimationTimeline>& DynamicValue::getAnimation () const { return this->m_animation; }
+
 void DynamicValue::propagate (UpdateSource source) const {
     for (const auto& callback : this->m_listeners) {
 	callback (*this, source);

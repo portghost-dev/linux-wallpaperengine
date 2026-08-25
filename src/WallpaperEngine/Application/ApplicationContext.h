@@ -19,6 +19,24 @@
 
 namespace WallpaperEngine::Application {
 using namespace WallpaperEngine::Data::Assets;
+
+/**
+ * What the engine does while something else is fullscreen.
+ *
+ * LIVE-settable through the API's `set-fullscreen` verb and carried by every `show`
+ * as the resolved `fullscreen_behavior` arg, so a mode change takes effect on the
+ * running scene instead of at the next swap. `Off` is spelled Off rather than None
+ * because X11 #defines None.
+ */
+enum class FullscreenBehavior {
+    /** keep playing underneath the fullscreen window */
+    Off = 0,
+    /** freeze the scene, surfaces and VRAM retained, resume is instant */
+    Pause = 1,
+    /** tear the surfaces down and free the resources; re-acquired when it clears */
+    Stop = 2,
+};
+
 /**
  * Application information as parsed off the command line arguments
  */
@@ -83,10 +101,13 @@ public:
 	    bool onlyListProperties;
 	    /** If the user requested a dump of the background structure */
 	    bool dumpStructure;
+	    bool apiSocket;
+	    bool daemonMode;
 	    /** If the user requested the particles to be deactivated */
 	    bool disableParticles;
 	    /** The path to the assets folder */
 	    std::filesystem::path assets;
+	    std::string propertiesFile;
 	    /** Background to load (provided as the final argument) as fallback for multi-screen setups */
 	    std::filesystem::path defaultBackground;
 	    /** The backgrounds specified for different screens */
@@ -113,8 +134,15 @@ public:
 	    WINDOW_MODE mode;
 	    /** Maximum FPS */
 	    int maximumFPS;
-	    /** Indicates if pausing should happen when something goes fullscreen */
+	    /**
+	     * Indicates if pausing should happen when something goes fullscreen.
+	     * LAUNCH-scoped: it decides whether a REAL fullscreen detector is built
+	     * (VideoFactories) and is what --no-fullscreen-pause writes. The running
+	     * policy lives in fullscreenBehavior below - read that, not this, when
+	     * deciding what to do on a fullscreen edge.
+	     */
 	    bool pauseOnFullscreen;
+	    FullscreenBehavior fullscreenBehavior;
 	    /**
 	     * Wayland-only: if true, only consider fullscreen toplevels that are also activated.
 	     * Useful for compositors with "virtual" fullscreen windows (e.g. scrollable tiling).
@@ -187,6 +215,8 @@ public:
         .general = {
             .onlyListProperties = false,
             .dumpStructure = false,
+            .apiSocket = false,
+            .daemonMode = false,
             .assets = "",
             .defaultBackground = "",
             .screenBackgrounds = {},
@@ -201,6 +231,7 @@ public:
             .mode = NORMAL_WINDOW,
             .maximumFPS = 30,
             .pauseOnFullscreen = true,
+            .fullscreenBehavior = FullscreenBehavior::Pause,
             .pauseOnFullscreenOnlyWhenActive = false,
             .fullscreenPauseIgnoreAppIds = {},
             .debug = {

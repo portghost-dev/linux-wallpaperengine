@@ -41,6 +41,8 @@ public:
      */
     void store (const std::string& name, std::shared_ptr<const TextureProvider> texture);
 
+    size_t evictUnused ();
+
 private:
     /** The previous album thumbnail texture */
     std::shared_ptr<const AlbumTexture> m_previousThumbnail = nullptr;

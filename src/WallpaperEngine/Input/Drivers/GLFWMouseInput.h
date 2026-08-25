@@ -3,6 +3,7 @@
 #include "WallpaperEngine/Input/MouseInput.h"
 
 #include <glm/vec2.hpp>
+#include <optional>
 
 namespace WallpaperEngine::Render::Drivers {
 class GLFWOpenGLDriver;
@@ -26,6 +27,10 @@ public:
      */
     [[nodiscard]] glm::dvec2 position () const override;
 
+    [[nodiscard]] glm::dvec2 normalized () const override;
+
+    [[nodiscard]] bool hasPointer () const override;
+
     /**
      * @return The status of the mouse's left click
      */
@@ -37,6 +42,8 @@ public:
     [[nodiscard]] MouseClickStatus rightClick () const override;
 
 private:
+    [[nodiscard]] std::optional<glm::dvec2> resolveNormalized () const;
+
     const Render::Drivers::GLFWOpenGLDriver& m_driver;
 
     /**

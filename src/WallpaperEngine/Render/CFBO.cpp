@@ -7,6 +7,28 @@ CFBO::CFBO (
     std::string name, const TextureFormat format, const uint32_t flags, const float scale, uint32_t realWidth,
     uint32_t realHeight, uint32_t textureWidth, uint32_t textureHeight
 ) : m_scale (scale), m_name (std::move (name)), m_format (format), m_flags (flags) {
+    this->createGL (textureWidth, textureHeight);
+
+    this->m_resolution = { textureWidth, textureHeight, realWidth, realHeight };
+
+    // create the textureframe entries
+    const auto frame = std::make_shared<Frame> ();
+
+    frame->frameNumber = 0;
+    frame->frametime = 0;
+    frame->height1 = textureHeight;
+    frame->height2 = realHeight;
+    frame->width1 = textureWidth;
+    frame->width2 = realWidth;
+    frame->x = 0;
+    frame->y = 0;
+
+    this->m_frames.push_back (frame);
+}
+
+void CFBO::createGL (const uint32_t textureWidth, const uint32_t textureHeight) {
+    const TextureFormat format = this->m_format;
+    const uint32_t flags = this->m_flags;
     // create an empty texture that'll be free'd so the FBO is transparent
     constexpr GLenum drawBuffers[1] = { GL_COLOR_ATTACHMENT0 };
     // create the main framebuffer
@@ -16,8 +38,11 @@ CFBO::CFBO (
     glGenTextures (1, &this->m_texture);
     // bind the new texture to set settings on it
     glBindTexture (GL_TEXTURE_2D, this->m_texture);
-    // give OpenGL an empty image
-    glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, textureWidth, textureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    if (format == TextureFormat_RGBA16161616f) {
+	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA16F, textureWidth, textureHeight, 0, GL_RGBA, GL_HALF_FLOAT, nullptr);
+    } else {
+	glTexImage2D (GL_TEXTURE_2D, 0, GL_RGBA8, textureWidth, textureHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    }
     // label stuff for debugging
 #if !NDEBUG
     glObjectLabel (GL_TEXTURE, this->m_texture, -1, this->m_name.c_str ());
@@ -54,35 +79,90 @@ CFBO::CFBO (
 	sLog.exception ("Framebuffers are not properly set");
     }
 
-    // Layer framebuffers must start transparent. The scene clear color is often opaque,
-    // and using it here makes empty layer areas render as solid rectangles.
     GLfloat previousClearColor[4] = {};
     glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
+    glColorMask (true, true, true, true);
     glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
     glClear (GL_COLOR_BUFFER_BIT);
     glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
-
-    this->m_resolution = { textureWidth, textureHeight, realWidth, realHeight };
-
-    // create the textureframe entries
-    const auto frame = std::make_shared<Frame> ();
-
-    frame->frameNumber = 0;
-    frame->frametime = 0;
-    frame->height1 = textureHeight;
-    frame->height2 = realHeight;
-    frame->width1 = textureWidth;
-    frame->width2 = realWidth;
-    frame->x = 0;
-    frame->y = 0;
-
-    this->m_frames.push_back (frame);
 }
 
 CFBO::~CFBO () {
-    // free opengl texture and framebuffer
-    glDeleteTextures (1, &this->m_texture);
-    glDeleteFramebuffers (1, &this->m_framebuffer);
+    if (this->m_texture != GL_NONE) {
+	glDeleteTextures (1, &this->m_texture);
+    }
+    if (this->m_depthTexture != GL_NONE) {
+	glDeleteTextures (1, &this->m_depthTexture);
+    }
+    if (this->m_depthbuffer != GL_NONE) {
+	glDeleteRenderbuffers (1, &this->m_depthbuffer);
+    }
+    if (this->m_framebuffer != GL_NONE) {
+	glDeleteFramebuffers (1, &this->m_framebuffer);
+    }
+}
+
+void CFBO::ensureDepthTextureAttachment () const {
+    if (this->m_depthTexture != GL_NONE) {
+	return;
+    }
+
+    GLint prevFramebuffer = 0;
+    GLint prevTexture = 0;
+    glGetIntegerv (GL_FRAMEBUFFER_BINDING, &prevFramebuffer);
+    glGetIntegerv (GL_TEXTURE_BINDING_2D, &prevTexture);
+
+    glGenTextures (1, &this->m_depthTexture);
+    glBindTexture (GL_TEXTURE_2D, this->m_depthTexture);
+    glTexImage2D (
+	GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, static_cast<GLsizei> (this->getRealWidth ()),
+	static_cast<GLsizei> (this->getRealHeight ()), 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, nullptr
+    );
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    constexpr float litBorder[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    glTexParameterfv (GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, litBorder);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_framebuffer);
+    glFramebufferTexture2D (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, this->m_depthTexture, 0);
+
+    if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+	sLog.exception ("Framebuffer incomplete after depth-texture attachment on ", this->m_name);
+    }
+
+    glBindFramebuffer (GL_FRAMEBUFFER, static_cast<GLuint> (prevFramebuffer));
+    glBindTexture (GL_TEXTURE_2D, static_cast<GLuint> (prevTexture));
+}
+
+void CFBO::ensureDepthAttachment () const {
+    if (this->m_depthbuffer != GL_NONE) {
+	return;
+    }
+
+    GLint prevFramebuffer = 0;
+    GLint prevRenderbuffer = 0;
+    glGetIntegerv (GL_FRAMEBUFFER_BINDING, &prevFramebuffer);
+    glGetIntegerv (GL_RENDERBUFFER_BINDING, &prevRenderbuffer);
+
+    glGenRenderbuffers (1, &this->m_depthbuffer);
+    glBindRenderbuffer (GL_RENDERBUFFER, this->m_depthbuffer);
+    glRenderbufferStorage (
+	GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, static_cast<GLsizei> (this->getRealWidth ()),
+	static_cast<GLsizei> (this->getRealHeight ())
+    );
+    glBindFramebuffer (GL_FRAMEBUFFER, this->m_framebuffer);
+    glFramebufferRenderbuffer (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, this->m_depthbuffer);
+
+    if (glCheckFramebufferStatus (GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+	sLog.exception ("Framebuffer incomplete after depth attachment on ", this->m_name);
+    }
+
+    glBindFramebuffer (GL_FRAMEBUFFER, prevFramebuffer);
+    glBindRenderbuffer (GL_RENDERBUFFER, prevRenderbuffer);
 }
 
 const std::string& CFBO::getName () const { return this->m_name; }

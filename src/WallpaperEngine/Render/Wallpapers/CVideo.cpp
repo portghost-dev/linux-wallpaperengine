@@ -61,6 +61,13 @@ void CVideo::setPause (bool newState) {
     }
 }
 
+void CVideo::setPlaybackSpeed (const float speed) { this->m_player->setSpeed (speed); }
+
+void CVideo::setAudioVolume (const int volume) {
+    const auto& audioSettings = this->getContext ().getApp ().getContext ().settings.audio;
+    this->m_player->setVolume (audioSettings.enabled ? volume * 100.0 / 128.0 : 0.0);
+}
+
 int CVideo::getWidth () const { return this->m_player ? this->m_player->getWidth () : 16; }
 
 int CVideo::getHeight () const { return this->m_player ? this->m_player->getHeight () : 16; }

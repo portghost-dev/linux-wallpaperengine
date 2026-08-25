@@ -139,6 +139,7 @@ set(TARGET_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/output)
 set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
 set(CMAKE_INSTALL_RPATH "\$ORIGIN;\$ORIGIN/lib;\$ORIGIN/lib64")
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
+set(CMAKE_BUILD_RPATH "${TARGET_OUTPUT_DIRECTORY}")
 
 add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
 add_subdirectory(src/External/glslang-WallpaperEngine glslang)
@@ -301,11 +302,18 @@ set(COMMON_SOURCES
     src/Steam/FileSystem/FileSystem.cpp
     src/Steam/FileSystem/FileSystem.h
 
+    src/WallpaperEngine/Logging/InstrumentRegistry.cpp
+    src/WallpaperEngine/Logging/InstrumentRegistry.h
     src/WallpaperEngine/Logging/Log.cpp
     src/WallpaperEngine/Logging/Log.h
 
     src/WallpaperEngine/Debugging/CallStack.cpp
     src/WallpaperEngine/Debugging/CallStack.h
+
+    src/WallpaperEngine/Api/CommandDispatcher.cpp
+    src/WallpaperEngine/Api/CommandDispatcher.h
+    src/WallpaperEngine/Api/CommandServer.cpp
+    src/WallpaperEngine/Api/CommandServer.h
 
     src/WallpaperEngine/Application/ApplicationContext.cpp
     src/WallpaperEngine/Application/ApplicationContext.h
@@ -343,6 +351,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Audio/Drivers/AudioDriver.h
     src/WallpaperEngine/Audio/Drivers/SDLAudioDriver.cpp
     src/WallpaperEngine/Audio/Drivers/SDLAudioDriver.h
+    src/WallpaperEngine/Audio/Drivers/NullAudioDriver.cpp
+    src/WallpaperEngine/Audio/Drivers/NullAudioDriver.h
     src/WallpaperEngine/Audio/AudioContext.cpp
     src/WallpaperEngine/Audio/AudioContext.h
     src/WallpaperEngine/Audio/AudioStream.cpp
@@ -351,6 +361,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Input/InputContext.cpp
     src/WallpaperEngine/Input/InputContext.h
     src/WallpaperEngine/Input/MouseInput.h
+    src/WallpaperEngine/Input/PointerMoveGate.cpp
+    src/WallpaperEngine/Input/PointerMoveGate.h
     src/WallpaperEngine/Input/Drivers/GLFWMouseInput.cpp
     src/WallpaperEngine/Input/Drivers/GLFWMouseInput.h
 
@@ -412,6 +424,8 @@ set(COMMON_SOURCES
 
     src/WallpaperEngine/Render/CWallpaper.h
     src/WallpaperEngine/Render/CWallpaper.cpp
+    src/WallpaperEngine/Render/OverlayLabel.cpp
+    src/WallpaperEngine/Render/MipResidency.cpp
     src/WallpaperEngine/Render/WallpaperState.h
     src/WallpaperEngine/Render/WallpaperState.cpp
     src/WallpaperEngine/Render/Wallpapers/CScene.h
@@ -434,6 +448,11 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CRenderable.h
     src/WallpaperEngine/Render/Objects/CImage.h
     src/WallpaperEngine/Render/Objects/CImage.cpp
+    src/WallpaperEngine/Render/Objects/PuppetModel.h
+    src/WallpaperEngine/Render/Objects/PuppetModel.cpp
+    src/WallpaperEngine/Render/Objects/CModel.h
+    src/WallpaperEngine/Render/Objects/CLight.cpp
+    src/WallpaperEngine/Render/Objects/CModel.cpp
     src/WallpaperEngine/Render/Objects/CSound.h
     src/WallpaperEngine/Render/Objects/CSound.cpp
     src/WallpaperEngine/Render/Objects/CParticle.h
@@ -446,20 +465,20 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/Effects/CPass.h
     src/WallpaperEngine/Render/Objects/Effects/CPass.cpp
 
-    src/WallpaperEngine/WebBrowser/CEF/RenderHandler.cpp
-    src/WallpaperEngine/WebBrowser/CEF/RenderHandler.h
-    src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp
-    src/WallpaperEngine/WebBrowser/CEF/BrowserClient.h
-    src/WallpaperEngine/WebBrowser/CEF/BrowserApp.cpp
-    src/WallpaperEngine/WebBrowser/CEF/BrowserApp.h
-    src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp
-    src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.h
-    src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandlerFactory.cpp
-    src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandlerFactory.h
-    src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
-    src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.h
-    src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp
-    src/WallpaperEngine/WebBrowser/WebBrowserContext.h
+    src/WallpaperEngine/WebHelper/Protocol.cpp
+    src/WallpaperEngine/WebHelper/Protocol.h
+    src/WallpaperEngine/WebHelper/FrameContract.cpp
+    src/WallpaperEngine/WebHelper/FrameContract.h
+    src/WallpaperEngine/WebHelper/SpawnConfig.cpp
+    src/WallpaperEngine/WebHelper/SpawnConfig.h
+    src/WallpaperEngine/WebHelper/SpawnGate.cpp
+    src/WallpaperEngine/WebHelper/SpawnGate.h
+    src/WallpaperEngine/WebHelper/MessageChannel.cpp
+    src/WallpaperEngine/WebHelper/MessageChannel.h
+    src/WallpaperEngine/WebHelper/HelperClient.cpp
+    src/WallpaperEngine/WebHelper/HelperClient.h
+    src/WallpaperEngine/WebHelper/PropertyClassifier.cpp
+    src/WallpaperEngine/WebHelper/PropertyClassifier.h
 
     src/WallpaperEngine/Data/Assets/Types.h
     src/WallpaperEngine/Data/Assets/Texture.h
@@ -481,6 +500,7 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Data/Utils/MemoryStream.h
     src/WallpaperEngine/Data/Utils/SFINAE.h
     src/WallpaperEngine/Data/Parsers/DynamicValueParser.h
+    src/WallpaperEngine/Data/Model/AnimationTimeline.cpp
     src/WallpaperEngine/Data/Parsers/DynamicValueParser.cpp
     src/WallpaperEngine/Data/Parsers/EffectParser.cpp
     src/WallpaperEngine/Data/Parsers/EffectParser.h
@@ -529,6 +549,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Scripting/Modules/ColorModule.cpp
     src/WallpaperEngine/Scripting/Modules/MathModule.h
     src/WallpaperEngine/Scripting/Modules/MathModule.cpp
+    src/WallpaperEngine/Scripting/Modules/VectorModule.h
+    src/WallpaperEngine/Scripting/Modules/VectorModule.cpp
     src/WallpaperEngine/Scripting/Modules/ScriptModule.h
     src/WallpaperEngine/Scripting/Modules/ScriptModule.cpp
 
@@ -543,6 +565,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Scripting/ScriptEngine.h
     src/WallpaperEngine/Scripting/ScriptPropertiesObject.h
     src/WallpaperEngine/Scripting/ScriptPropertiesObject.cpp
+    src/WallpaperEngine/Scripting/LocalStorageObject.h
+    src/WallpaperEngine/Scripting/LocalStorageObject.cpp
     src/WallpaperEngine/Scripting/ScriptEngine.cpp
     src/WallpaperEngine/Scripting/ScriptableObject.h
     src/WallpaperEngine/Scripting/ScriptableObject.cpp
@@ -564,7 +588,13 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Harnesses/RenderHarness.cpp
         src/WallpaperEngine/Testing/Harnesses/RenderHarness.h
         src/WallpaperEngine/Testing/Cases/MouseCoordinates.cpp
-        src/WallpaperEngine/Testing/Cases/PropertyParser.cpp)
+        src/WallpaperEngine/Testing/Cases/PointerMoveGate.cpp
+        src/WallpaperEngine/Testing/Cases/WebHelperStartupCost.cpp
+        src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
+        src/WallpaperEngine/Testing/Cases/BinaryParserHardening.cpp
+        src/WallpaperEngine/Testing/Cases/InstrumentRegistry.cpp
+        src/WallpaperEngine/Testing/Cases/CommandSocket.cpp
+        src/WallpaperEngine/Testing/Cases/CommandDispatcher.cpp)
 endif()
 
 add_library(
@@ -594,8 +624,6 @@ target_link_libraries (linux-wallpaperengine-lib PUBLIC
     spirv-cross-core
     spirv-cross-glsl
     glfw
-    libcef_lib
-    libcef_dll_wrapper
     argparse
     qjs)
 
@@ -620,8 +648,6 @@ if (BUILD_TESTING)
         spirv-cross-core
         spirv-cross-glsl
         glfw
-        libcef_lib
-        libcef_dll_wrapper
         argparse
         qjs)
 endif()
@@ -689,6 +715,85 @@ add_executable(linux-wallpaperengine
 
 target_link_libraries (linux-wallpaperengine PUBLIC linux-wallpaperengine-lib)
 
+add_executable(lwe-web-helper
+    src/web-helper-main.cpp
+
+    src/WallpaperEngine/WebBrowser/CEF/SchemeName.h
+    src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp
+    src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.h)
+
+target_include_directories(lwe-web-helper PRIVATE
+    src
+    ${CEF_INCLUDE_PATH})
+
+target_link_libraries (lwe-web-helper PUBLIC
+    libcef_lib
+    libcef_dll_wrapper)
+
+add_dependencies(lwe-web-helper libcef_dll_wrapper)
+REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(lwe-web-helper)
+
+install(TARGETS lwe-web-helper
+    RUNTIME DESTINATION .
+)
+
+add_executable(lwe-web-service
+    src/web-service-main.cpp
+
+    src/WallpaperEngine/WebBrowser/CEF/RenderHandler.cpp
+    src/WallpaperEngine/WebBrowser/CEF/RenderHandler.h
+    src/WallpaperEngine/WebBrowser/CEF/BrowserClient.cpp
+    src/WallpaperEngine/WebBrowser/CEF/BrowserClient.h
+    src/WallpaperEngine/WebBrowser/CEF/BrowserApp.cpp
+    src/WallpaperEngine/WebBrowser/CEF/BrowserApp.h
+    src/WallpaperEngine/WebBrowser/CEF/SchemeName.h
+    src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp
+    src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.h
+    src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandlerFactory.cpp
+    src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandlerFactory.h
+    src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.cpp
+    src/WallpaperEngine/WebBrowser/CEF/WPSchemeHandler.h
+    src/WallpaperEngine/WebBrowser/WebBrowserContext.cpp
+    src/WallpaperEngine/WebBrowser/WebBrowserContext.h
+
+    src/WallpaperEngine/WebHelper/Service/HelperServer.cpp
+    src/WallpaperEngine/WebHelper/Service/HelperServer.h
+    src/WallpaperEngine/WebHelper/Service/NullMediaSource.cpp
+    src/WallpaperEngine/WebHelper/Service/NullMediaSource.h
+    src/WallpaperEngine/WebHelper/Service/WebInstance.cpp
+    src/WallpaperEngine/WebHelper/Service/WebInstance.h)
+
+target_include_directories(lwe-web-service PRIVATE
+    src
+    src/External/MimeTypes
+    src/External/json/include
+    ${CEF_INCLUDE_PATH})
+
+target_link_libraries (lwe-web-service PUBLIC
+    linux-wallpaperengine-lib
+    libcef_lib
+    libcef_dll_wrapper)
+
+add_dependencies(lwe-web-service libcef_dll_wrapper)
+REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(lwe-web-service)
+
+install(TARGETS lwe-web-service
+    RUNTIME DESTINATION .
+)
+
+if(BUILD_TESTING)
+    add_executable(lwe-web-frame-probe
+        tools/web-frame-probe.cpp)
+
+    target_include_directories(lwe-web-frame-probe PRIVATE
+        src
+        src/External/json/include)
+
+    target_link_libraries (lwe-web-frame-probe PUBLIC linux-wallpaperengine-lib)
+
+    REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(lwe-web-frame-probe)
+endif()
+
 # Install the main executable and shared library via install(TARGETS)
 # so that CMake automatically strips/replaces the build-time RPATH.
 install(TARGETS linux-wallpaperengine
@@ -704,3 +809,32 @@ install(DIRECTORY ${TARGET_OUTPUT_DIRECTORY}/ DESTINATION .
     PATTERN "linux-wallpaperengine" EXCLUDE
     PATTERN "liblinux-wallpaperengine-lib.so" EXCLUDE
 )
+
+# ---- lwe_bc7enc: the wizard's texture-compression shim (BC7/BC4/BC5) ----------------
+# Built only where ispc exists (x86-64); the installer treats a missing tool as fatal.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
+    find_program(ISPC_EXECUTABLE ispc)
+    if(ISPC_EXECUTABLE)
+        set(ISPC_TC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/src/External/ISPCTextureCompressor/ispc_texcomp)
+        set(ISPC_TC_OUT ${CMAKE_CURRENT_BINARY_DIR}/ispc_texcomp)
+        file(MAKE_DIRECTORY ${ISPC_TC_OUT})
+        add_custom_command(
+            OUTPUT ${ISPC_TC_OUT}/kernel_ispc.o ${ISPC_TC_OUT}/kernel_ispc_sse2.o
+                   ${ISPC_TC_OUT}/kernel_ispc_avx.o ${ISPC_TC_OUT}/kernel_ispc.h
+            COMMAND ${ISPC_EXECUTABLE} -O2 --arch=x86-64 --target=sse2,avx --opt=fast-math --pic
+                    -o ${ISPC_TC_OUT}/kernel_ispc.o -h ${ISPC_TC_OUT}/kernel_ispc.h
+                    ${ISPC_TC_SRC}/kernel.ispc
+            DEPENDS ${ISPC_TC_SRC}/kernel.ispc
+            COMMENT "ispc: compressing kernels")
+        add_executable(lwe_bc7enc
+            tools/texcomp/lwe_bc7enc.cpp
+            ${ISPC_TC_SRC}/ispc_texcomp.cpp
+            ${ISPC_TC_OUT}/kernel_ispc.o
+            ${ISPC_TC_OUT}/kernel_ispc_sse2.o
+            ${ISPC_TC_OUT}/kernel_ispc_avx.o)
+        target_include_directories(lwe_bc7enc PRIVATE ${ISPC_TC_SRC} ${ISPC_TC_OUT})
+        target_compile_options(lwe_bc7enc PRIVATE -msse2 -O2)
+        set_target_properties(lwe_bc7enc PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/output)
+    endif()
+endif()

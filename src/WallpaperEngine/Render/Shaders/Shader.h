@@ -41,7 +41,8 @@ public:
      */
     Shader (
 	const AssetLocator& assetLocator, std::string filename, const ComboMap& combos, const ComboMap& overrideCombos,
-	const TextureMap& textures, const TextureMap& overrideTextures, const ShaderConstantMap& constants
+	const TextureMap& textures, const TextureMap& overrideTextures, const ShaderConstantMap& constants,
+	const ShaderConstantMap& materialConstants
     );
     /**
      * @return The vertex's shader coude for OpenGL to use

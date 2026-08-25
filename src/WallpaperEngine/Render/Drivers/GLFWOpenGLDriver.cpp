@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "GLFWOpenGLDriver.h"
 #include "VideoFactories.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -26,8 +27,7 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
 	sLog.exception ("Failed to initialize glfw");
     }
 
-    // set some window hints (opengl version to be used)
-    glfwWindowHint (GLFW_SAMPLES, 4);
+    glfwWindowHint (GLFW_SAMPLES, 0);
     glfwWindowHint (GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint (GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint (GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
@@ -108,7 +108,9 @@ glm::ivec2 GLFWOpenGLDriver::getFramebufferSize () const {
 uint32_t GLFWOpenGLDriver::getFrameCounter () const { return this->m_frameCounter; }
 
 void GLFWOpenGLDriver::dispatchEventQueue () {
-    static float startTime, endTime, minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
+    // recomputed every pass so `set-fps` is honored live (see WaylandOpenGLDriver)
+    static float startTime, endTime;
+    const float minimumTime = 1.0f / static_cast<float> (std::max (1, this->m_context.settings.render.maximumFPS));
     // get the start time of the frame
     startTime = this->getRenderTime ();
     // clear the screen
@@ -176,7 +178,10 @@ __attribute__ ((constructor)) void registerGLFWOpenGLDriver () {
     sVideoFactories.registerDriver (
 	ApplicationContext::EXPLICIT_WINDOW, DEFAULT_WINDOW_NAME,
 	[] (ApplicationContext& context, WallpaperApplication& application) -> std::unique_ptr<VideoDriver> {
-	    return std::make_unique<GLFWOpenGLDriver> ("wallpaperengine", context, application);
+	    const char* title = getenv ("LWE_WINTITLE");
+	    return std::make_unique<GLFWOpenGLDriver> (
+		title != nullptr ? title : "wallpaperengine", context, application
+	    );
 	}
     );
     sVideoFactories.registerDriver (

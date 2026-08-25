@@ -20,8 +20,8 @@ namespace WallpaperEngine::Application {
 class WallpaperApplication;
 }
 
-namespace WallpaperEngine::WebBrowser {
-class WebBrowserContext;
+namespace WallpaperEngine::WebHelper {
+class HelperClient;
 }
 
 namespace WallpaperEngine::Render {
@@ -51,13 +51,19 @@ public:
      */
     void render (
 	const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition = { 0, 0 },
-	const glm::ivec2& logicalSize = { 0, 0 }
+	const glm::ivec2& logicalSize = { 0, 0 }, const std::string& screenName = ""
     );
 
     /**
      * Pause the renderer
      */
     virtual void setPause (bool newState);
+
+    /** mpv-backed wallpapers override: drive live playback speed (scenes no-op, g_Time owns them) */
+    virtual void setPlaybackSpeed (float speed);
+
+    /** mpv-backed wallpapers override: drive the live audio volume (0..128 scale) */
+    virtual void setAudioVolume (int volume);
 
     /**
      * @return The container to resolve files for this wallpaper
@@ -118,8 +124,23 @@ public:
     [[nodiscard]] const SpanInfo* getSpanInfo () const;
 
     /**
+     * Marks this wallpaper as shared across a mirror group. The named screen becomes the
+     * sole decode owner: only its viewport drives renderFrame(), while the other mirrored
+     * viewports simply present the shared texture. This keeps independent per-monitor
+     * vblanks from advancing/compositing the shared video multiple times per frame.
+     */
+    void setMirrorOwner (const std::string& screen);
+
+    /**
+     * @return The mirror-group decode owner screen, or empty if this is not a mirror group
+     */
+    [[nodiscard]] const std::string& getMirrorOwner () const;
+
+    /**
      * @return The width of this wallpaper
      */
+    [[nodiscard]] virtual glm::vec2 clampToCap (glm::vec2 size) const { return size; }
+
     [[nodiscard]] virtual int getWidth () const = 0;
 
     /**
@@ -139,7 +160,7 @@ public:
      */
     static std::unique_ptr<CWallpaper> fromWallpaper (
 	const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
-	WebBrowser::WebBrowserContext* browserContext, const WallpaperState::TextureUVsScaling& scalingMode,
+	WebHelper::HelperClient* webHelper, const WallpaperState::TextureUVsScaling& scalingMode,
 	const uint32_t& clampMode
     );
 
@@ -165,6 +186,7 @@ protected:
 
     /** The FBO used for scene output */
     std::shared_ptr<const CFBO> m_sceneFBO = nullptr;
+    TextureFormat m_sceneFormat = TextureFormat_ARGB8888;
 
     GLuint m_vaoBuffer = GL_NONE;
 
@@ -177,6 +199,8 @@ private:
     GLint g_Texture0 = GL_NONE;
     GLint a_Position = GL_NONE;
     GLint a_TexCoord = GL_NONE;
+    GLint g_CC = GL_NONE;
+    GLint g_SrgbOut = GL_NONE;
     /** The framebuffer to draw the background to */
     GLuint m_destFramebuffer = GL_NONE;
     /** Setups OpenGL's shaders for this wallpaper backbuffer */
@@ -189,6 +213,8 @@ private:
     WallpaperState m_state;
     /** Span info for multi-monitor spanning (optional) */
     std::optional<SpanInfo> m_spanInfo = std::nullopt;
+    /** Non-empty when this wallpaper is shared as a mirror group; holds the decode-owner screen */
+    std::string m_mirrorOwner = "";
     /** Frame counter to avoid redundant renderFrame calls when shared across viewports */
     uint32_t m_lastRenderedFrame = UINT32_MAX;
 };

@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lwe-ui"
+version = "0.1.0"
+description = "PySide6 + QML control panel for linux-wallpaperengine."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Craeton", email = "craeton@portghost.com" }]
+keywords = ["wallpaper", "linux-wallpaperengine", "pyside6", "qml", "hyprland"]
+classifiers = [
+    "Environment :: X11 Applications :: Qt",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Desktop Environment",
+]
+dependencies = ["PySide6>=6.6", "Pillow>=10"]
+
+[project.scripts]
+lwe-ui = "lwe_ui.app:main"
+lwe-discover = "lwe_ui.discover_cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+lwe_ui = ["qml/*.qml", "qml/qmldir"]

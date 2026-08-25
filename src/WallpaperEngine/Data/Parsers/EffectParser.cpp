@@ -11,7 +11,11 @@ using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
 
 EffectUniquePtr EffectParser::load (const Project& project, const std::string& filename) {
-    const auto effectJson = JSON::parse (project.assetLocator->readString (filename));
+    const auto content = project.assetLocator->readString (filename);
+    if (content.empty ()) {
+	sLog.exception ("EffectParser: '", filename, "' read EMPTY - missing asset or VFS lookup miss");
+    }
+    const auto effectJson = WallpaperEngine::Data::JSON::parseLenient (content);
 
     return parse (effectJson, project);
 }

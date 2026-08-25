@@ -30,6 +30,10 @@ public:
      */
     [[nodiscard]] virtual glm::dvec2 position () const = 0;
 
+    [[nodiscard]] virtual glm::dvec2 normalized () const = 0;
+
+    [[nodiscard]] virtual bool hasPointer () const = 0;
+
     /**
      * @return The status of the mouse's left click
      */

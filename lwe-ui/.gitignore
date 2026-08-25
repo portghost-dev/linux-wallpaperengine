@@ -1,0 +1,8 @@
+build/
+dist/
+__pycache__/
+*.pyc
+.venv/
+*.AppImage
+
+# local tool state - not part of the app

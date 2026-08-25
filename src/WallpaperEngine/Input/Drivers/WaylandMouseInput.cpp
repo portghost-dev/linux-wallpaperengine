@@ -23,7 +23,13 @@ void WaylandMouseInput::update () {
     }
 
     if (m_waylandDriver.viewportInFocus && m_waylandDriver.viewportInFocus->rendering) {
-	this->m_pos = m_waylandDriver.viewportInFocus->mousePos;
+	// GLOBAL layout coords: CScene::updateMouse subtracts the rendered
+	// output's layout origin, so surface-local positions broke every
+	// non-origin monitor (the multi-monitor "mouse never worked" bug)
+	const auto* vp = m_waylandDriver.viewportInFocus;
+	this->m_pos = glm::dvec2 (
+	    vp->mousePos.x + vp->globalPosition.x * vp->scale, vp->mousePos.y + vp->globalPosition.y * vp->scale
+	);
 	return;
     }
 
@@ -44,13 +50,14 @@ void WaylandMouseInput::update () {
 	    continue;
 	}
 
-	const double localX = globalCursor->x - viewport->position.x;
-	const double localY = globalCursor->y - viewport->position.y;
+	const double localX = globalCursor->x - viewport->globalPosition.x;
+	const double localY = globalCursor->y - viewport->globalPosition.y;
 	if (localX < 0.0 || localY < 0.0 || localX > viewport->size.x || localY > viewport->size.y) {
 	    continue;
 	}
 
-	this->m_pos = { localX * viewport->scale, (viewport->size.y - localY) * viewport->scale };
+	this->m_pos = { (localX + viewport->globalPosition.x) * viewport->scale,
+			(localY + viewport->globalPosition.y) * viewport->scale };
 	return;
     }
 
@@ -58,34 +65,85 @@ void WaylandMouseInput::update () {
 }
 
 glm::dvec2 WaylandMouseInput::position () const {
-    if (!this->m_waylandDriver.getApp ().getContext ().settings.mouse.enabled) {
-	return { 0, 0 };
-    }
-
     const auto* viewport = this->getActiveOutputViewport ();
 
     if (!viewport) {
 	return { 0, 0 };
     }
 
-    if (viewport == m_waylandDriver.viewportInFocus) {
-	return viewport->mousePos;
-    }
-
-    if (viewport->mousePos.x != 0 || viewport->mousePos.y != 0) {
-	return viewport->mousePos;
-    }
-
-    return {
-	static_cast<double> (viewport->size.x * viewport->scale) / 2.0,
-	static_cast<double> (viewport->size.y * viewport->scale) / 2.0,
+    const glm::dvec2 origin
+	= { viewport->globalPosition.x * viewport->scale, viewport->globalPosition.y * viewport->scale };
+    const glm::dvec2 center = {
+	origin.x + static_cast<double> (viewport->size.x * viewport->scale) / 2.0,
+	origin.y + static_cast<double> (viewport->size.y * viewport->scale) / 2.0,
     };
+
+    if (!this->m_waylandDriver.getApp ().getContext ().settings.mouse.enabled) {
+	return center;
+    }
+
+    if (viewport == m_waylandDriver.viewportInFocus) {
+	return { viewport->mousePos.x + origin.x, viewport->mousePos.y + origin.y };
+    }
+
+    if (this->m_pos.x != 0 || this->m_pos.y != 0) {
+	return this->m_pos;
+    }
+
+    // No IPC data (non-Hyprland): freeze at the last hover position, Windows-like
+    if (viewport->mousePos.x != 0 || viewport->mousePos.y != 0) {
+	return { viewport->mousePos.x + origin.x, viewport->mousePos.y + origin.y };
+    }
+
+    return center;
+}
+
+glm::dvec2 WaylandMouseInput::normalized () const {
+    return this->resolveNormalized ().value_or (glm::dvec2 { 0.5, 0.5 });
+}
+
+bool WaylandMouseInput::hasPointer () const { return this->resolveNormalized ().has_value (); }
+
+std::optional<glm::dvec2> WaylandMouseInput::resolveNormalized () const {
+    // the mouse being off is an UNKNOWN pointer, not a centered one: nothing should be
+    // pushed to a page on behalf of a pointer the user has switched off
+    if (!this->m_waylandDriver.getApp ().getContext ().settings.mouse.enabled) {
+	return std::nullopt;
+    }
+
+    if (m_waylandDriver.viewportInFocus && m_waylandDriver.viewportInFocus->rendering) {
+	const auto* vp = m_waylandDriver.viewportInFocus;
+	const double w = static_cast<double> (vp->size.x) * vp->scale;
+	const double h = static_cast<double> (vp->size.y) * vp->scale;
+	if (w > 0 && h > 0) {
+	    return glm::dvec2 { glm::clamp (vp->mousePos.x / w, 0.0, 1.0), glm::clamp (vp->mousePos.y / h, 0.0, 1.0) };
+	}
+    }
+
+    // IPC-tracked global position (update() keeps m_pos in scaled layout coords)
+    if (this->m_pos.x != 0 || this->m_pos.y != 0) {
+	for (const auto* vp : this->m_waylandDriver.m_screens) {
+	    if (!vp || vp->size.x <= 0 || vp->size.y <= 0) {
+		continue;
+	    }
+	    const double ox = vp->globalPosition.x * vp->scale;
+	    const double oy = vp->globalPosition.y * vp->scale;
+	    const double w = static_cast<double> (vp->size.x) * vp->scale;
+	    const double h = static_cast<double> (vp->size.y) * vp->scale;
+	    const double lx = this->m_pos.x - ox;
+	    const double ly = this->m_pos.y - oy;
+	    if (lx >= 0 && ly >= 0 && lx <= w && ly <= h) {
+		return glm::dvec2 { glm::clamp (lx / w, 0.0, 1.0), glm::clamp (ly / h, 0.0, 1.0) };
+	    }
+	}
+    }
+
+    return std::nullopt;
 }
 
 WallpaperEngine::Input::MouseClickStatus WaylandMouseInput::leftClick () const {
-    const auto* viewport = this->getActiveOutputViewport ();
-    if (viewport) {
-	return viewport->leftClick;
+    if (this->m_waylandDriver.viewportInFocus) {
+	return this->m_waylandDriver.viewportInFocus->leftClick;
     }
 
     return MouseClickStatus::Released;
@@ -172,10 +230,8 @@ std::optional<glm::dvec2> WaylandMouseInput::queryHyprlandCursorPosition () cons
 }
 
 WallpaperEngine::Input::MouseClickStatus WaylandMouseInput::rightClick () const {
-    const auto* viewport = this->getActiveOutputViewport ();
-
-    if (viewport) {
-	return viewport->rightClick;
+    if (this->m_waylandDriver.viewportInFocus) {
+	return this->m_waylandDriver.viewportInFocus->rightClick;
     }
 
     return MouseClickStatus::Released;

@@ -7,6 +7,8 @@ public:
 
     virtual void update ();
 
+    bool enabled = true;
+
     float audio16[16] = { 0 };
     float audio32[32] = { 0 };
     float audio64[64] = { 0 };

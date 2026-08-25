@@ -104,7 +104,7 @@ TEST_CASE ("OpenGL to CEF coordinate conversion") {
 }
 
 /**
- * Test complete coordinate flow: GLFW → OpenGL → Normalized
+ * Test complete coordinate flow: GLFW -> OpenGL -> Normalized
  * Verifies the full pipeline works correctly
  */
 TEST_CASE ("Complete coordinate flow: GLFW to normalized") {

@@ -32,6 +32,24 @@ void GLFWMouseInput::update () {
 
 glm::dvec2 GLFWMouseInput::position () const { return this->m_reportedPosition; }
 
+glm::dvec2 GLFWMouseInput::normalized () const { return this->resolveNormalized ().value_or (glm::dvec2 { 0.5, 0.5 }); }
+
+bool GLFWMouseInput::hasPointer () const { return this->resolveNormalized ().has_value (); }
+
+std::optional<glm::dvec2> GLFWMouseInput::resolveNormalized () const {
+    // [0,1]^2 within the window, y-down; nullopt when disabled/degenerate.
+    // m_reportedPosition is GL y-up (update() flips), so undo it here.
+    if (!this->m_driver.getApp ().getContext ().settings.mouse.enabled) {
+	return std::nullopt;
+    }
+    const glm::ivec2 fb = this->m_driver.getFramebufferSize ();
+    if (fb.x <= 0 || fb.y <= 0) {
+	return std::nullopt;
+    }
+    return glm::dvec2 { glm::clamp (this->m_reportedPosition.x / fb.x, 0.0, 1.0),
+			glm::clamp (1.0 - this->m_reportedPosition.y / fb.y, 0.0, 1.0) };
+}
+
 WallpaperEngine::Input::MouseClickStatus GLFWMouseInput::leftClick () const { return m_leftClick; }
 
 WallpaperEngine::Input::MouseClickStatus GLFWMouseInput::rightClick () const { return m_rightClick; }

@@ -22,7 +22,8 @@ public:
 	const BinaryReader& file, const std::string& filename,
 	std::function<std::string (const std::string&)> metadataLoader
     );
-    static MipmapSharedPtr parseMipmap (const BinaryReader& file, const Texture& header);
+    static MipmapSharedPtr
+    parseMipmap (const BinaryReader& file, const Texture& header, uint32_t imageIndex, uint32_t mipIndex);
     static FrameSharedPtr parseFrame (const BinaryReader& file);
     static FrameSharedPtr parseFrameV1 (const BinaryReader& file);
     static TextureMap parseTextureMap (const JSON& it);
@@ -30,6 +31,7 @@ public:
 private:
     static void parseTextureHeader (Texture& header, const BinaryReader& file);
     static void parseContainer (Texture& header, const BinaryReader& file);
+    static void validateMipmapPayloadBounds (const Mipmap& mipmap, const BinaryReader& file);
     static void parseAnimations (Texture& header, const BinaryReader& file);
     static void parseSpritesheetMetadata (
 	Texture& header, const std::string& filename, std::function<std::string (const std::string&)> metadataLoader

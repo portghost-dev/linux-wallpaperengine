@@ -76,5 +76,100 @@ DynamicValueUniquePtr DynamicValueParser::parse (const json& data, const Propert
 	value->setScriptSource (scriptSource.value ());
     }
 
+    if (data.is_object ()) {
+	const auto animationIt = data.optional ("animation");
+
+	if (animationIt.has_value () && animationIt->is_object ()) {
+	    value->setAnimation (DynamicValueParser::parseAnimation (*animationIt, value->getVec4 ()));
+	}
+    }
+
     return value;
+}
+
+namespace {
+AnimationTangent parseTangent (const WallpaperEngine::Data::Parsers::json& data) {
+    AnimationTangent tangent;
+    const auto enabledIt = data.optional ("enabled");
+    const auto xIt = data.optional ("x");
+    const auto yIt = data.optional ("y");
+
+    tangent.enabled = enabledIt.has_value () && enabledIt->is_boolean () && enabledIt->get<bool> ();
+    tangent.x = xIt.has_value () && xIt->is_number () ? xIt->get<float> () : 0.0f;
+    tangent.y = yIt.has_value () && yIt->is_number () ? yIt->get<float> () : 0.0f;
+
+    return tangent;
+}
+
+std::vector<AnimationKeyframe> parseChannel (const WallpaperEngine::Data::Parsers::json& data) {
+    std::vector<AnimationKeyframe> keyframes;
+
+    if (!data.is_array ()) {
+	return keyframes;
+    }
+
+    keyframes.reserve (data.size ());
+
+    for (const auto& cur : data) {
+	AnimationKeyframe keyframe;
+	const auto frameIt = cur.optional ("frame");
+	const auto valueIt = cur.optional ("value");
+	const auto backIt = cur.optional ("back");
+	const auto frontIt = cur.optional ("front");
+
+	keyframe.frame = frameIt.has_value () && frameIt->is_number () ? frameIt->get<float> () : 0.0f;
+	keyframe.value = valueIt.has_value () && valueIt->is_number () ? valueIt->get<float> () : 0.0f;
+	keyframe.back = backIt.has_value () && backIt->is_object () ? parseTangent (*backIt) : AnimationTangent {};
+	keyframe.front = frontIt.has_value () && frontIt->is_object () ? parseTangent (*frontIt) : AnimationTangent {};
+
+	keyframes.push_back (keyframe);
+    }
+
+    std::ranges::sort (keyframes, {}, &AnimationKeyframe::frame);
+
+    return keyframes;
+}
+} // namespace
+
+AnimationTimeline DynamicValueParser::parseAnimation (const json& data, const glm::vec4& baseValue) {
+    AnimationTimeline timeline;
+    timeline.baseValue = baseValue;
+
+    const auto relativeIt = data.optional ("relative");
+    timeline.relative = relativeIt.has_value () && relativeIt->is_boolean () && relativeIt->get<bool> ();
+
+    const auto optionsIt = data.optional ("options");
+
+    if (optionsIt.has_value () && optionsIt->is_object ()) {
+	const auto fpsIt = optionsIt->optional ("fps");
+	const auto lengthIt = optionsIt->optional ("length");
+	const auto modeIt = optionsIt->optional ("mode");
+
+	timeline.fps = fpsIt.has_value () && fpsIt->is_number () ? fpsIt->get<float> () : 30.0f;
+	timeline.length = lengthIt.has_value () && lengthIt->is_number () ? lengthIt->get<float> () : 0.0f;
+
+	if (modeIt.has_value () && modeIt->is_string ()) {
+	    const std::string mode = modeIt->get<std::string> ();
+
+	    if (mode == "single") {
+		timeline.mode = AnimationMode::Single;
+	    } else if (mode == "loop") {
+		timeline.mode = AnimationMode::Loop;
+	    } else if (mode == "mirror") {
+		timeline.mode = AnimationMode::Mirror;
+	    }
+	}
+    }
+
+    for (int index = 0; index < 4; ++index) {
+	const auto channelIt = data.optional ("c" + std::to_string (index));
+
+	if (!channelIt.has_value () || !channelIt->is_array ()) {
+	    break;
+	}
+
+	timeline.channels.push_back (parseChannel (*channelIt));
+    }
+
+    return timeline;
 }

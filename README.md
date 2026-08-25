@@ -1,343 +1,264 @@
-<p align="center">
-	<a href="https://github.com/Almamu/linux-wallpaperengine/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Almamu/linux-wallpaperengine" /></a>
-    <a href="https://github.com/Almamu/linux-wallpaperengine/actions?query=branch%3Amain"><img src="https://img.shields.io/github/actions/workflow/status/Almamu/linux-wallpaperengine/cmake.yml?branch=main" /></a>
-    <img src="https://img.shields.io/coderabbit/prs/github/Almamu/linux-wallpaperengine?utm_source=oss&utm_medium=github&utm_campaign=Almamu%2Flinux-wallpaperengine&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews" />
-    <a href="https://github.com/Almamu/linux-wallpaperengine/pulse"><img src="https://img.shields.io/endpoint?url=https://ghloc.vercel.app/api/Almamu/linux-wallpaperengine/badge?filter=.cpp$,.h$&style=flat&logoColor=white&label=Lines of Code" /></a>
-	<a href="https://www.codefactor.io/repository/github/almamu/linux-wallpaperengine"><img src="https://img.shields.io/codefactor/grade/github/Almamu/linux-wallpaperengine" /></a>
-	<a href="https://github.com/Almamu/linux-wallpaperengine/graphs/commit-activity"><img src="https://img.shields.io/github/commit-activity/m/Almamu/linux-wallpaperengine" /></a>
-	<a href="https://github.com/Almamu/linux-wallpaperengine/graphs/contributors"><img src="https://img.shields.io/github/contributors/Almamu/linux-wallpaperengine" /></a>
-	<a href="https://github.com/Almamu/linux-wallpaperengine/issues"><img src="https://img.shields.io/github/issues-raw/Almamu/linux-wallpaperengine" /></a>
-	<a href="https://github.com/Almamu/linux-wallpaperengine/issues?q=is%3Aissue+is%3Aopen+label%3A%22help%20wanted%22"><img src="https://img.shields.io/github/issues/Almamu/linux-wallpaperengine/help%20wanted?color=green" alt="help wanted"></a>
-    <a href="https://wpengine.alma.mu/"><img src="https://img.shields.io/badge/showcase_gallery-blue" alt="Showcase gallery" /></a>
-    <a href="https://deepwiki.com/Almamu/linux-wallpaperengine"><img src="https://img.shields.io/badge/Deepwiki-Almamu%2Flinux--wallpaperengine-blue?logo=data%3Aimage%2Fpng%3Bbase64%2CiVBORw0KGgoAAAANSUhEUgAAACwAAAAyCAYAAAAnWDnqAAAAAXNSR0IArs4c6QAAA05JREFUaEPtmUtyEzEQhtWTQyQLHNak2AB7ZnyXZMEjXMGeK%2FAIi%2BQuHrMnbChYY7MIh8g01fJoopFb0uhhEqqcbWTp06%2Fuv1saEDv4O3n3dV60RfP947Mm9%2FSQc0ICFQgzfc4CYZoTPAswgSJCCUJUnAAoRHOAUOcATwbmVLWdGoH%2F%2FPB8mnKqScAhsD0kYP3j%2FYt5LPQe2KvcXmGvRHcDnpxfL2zOYJ1mFwrryWTz0advv1Ut4CJgf5uhDuDj5eUcAUoahrdY%2F56ebRWeraTjMt%2F00Sh3UDtjgHtQNHwcRGOC98BJEAEymycmYcWwOprTgcB6VZ5JK5TAJ%2BfXGLBm3FDAmn6oPPjR4rKCAoJCal2eAiQp2x0vxTPB3ALO2CRkwmDy5WohzBDwSEFKRwPbknEggCPB%2FimwrycgxX2NzoMCHhPkDwqYMr9tRcP5qNrMZHkVnOjRMWwLCcr8ohBVb1OMjxLwGCvjTikrsBOiA6fNyCrm8V1rP93iVPpwaE%2BgO0SsWmPiXB%2Bjikdf6SizrT5qKasx5j8ABbHpFTx%2BvFXp9EnYQmLx02h1QTTrl6eDqxLnGjporxl3NL3agEvXdT0WmEost648sQOYAeJS9Q7bfUVoMGnjo4AZdUMQku50McDcMWcBPvr0SzbTAFDfvJqwLzgxwATnCgnp4wDl6Aa%2BAx283gghmj%2Bvj7feE2KBBRMW3FzOpLOADl0Isb5587h%2FU4gGvkt5v60Z1VLG8BhYjbzRwyQZemwAd6cCR5%2FXFWLYZRIMpX39AR0tjaGGiGzLVyhse5C9RKC6ai42ppWPKiBagOvaYk8lO7DajerabOZP46Lby5wKjw1HCRx7p9sVMOWGzb%2FvA1hwiWc6jm3MvQDTogQkiqIhJV0nBQBTU%2B3okKCFDy9WwferkHjtxib7t3xIUQtHxnIwtx4mpg26%2FHfwVNVDb4oI9RHmx5WGelRVlrtiw43zboCLaxv46AZeB3IlTkwouebTr1y2NjSpHz68WNFjHvupy3q8TFn3Hos2IAk4Ju5dCo8B3wP7VPr%2FFGaKiG%2BT%2Bv%2BTQqIrOqMTL1VdWV1DdmcbO8KXBz6esmYWYKPwDL5b5FA1a0hwapHiom0r%2FcKaoqr%2B27%2FXcrS5UwSMbQAAAABJRU5ErkJggg%3D%3D" alt="DeepWiki documentation" /></a>
-</p>
+# linux-wallpaperengine (extended fork)
 
-# 🖼️ Linux Wallpaper Engine
+A heavily extended fork of [Almamu/linux-wallpaperengine](https://github.com/Almamu/linux-wallpaperengine),
+the open-source engine that runs Wallpaper Engine backgrounds on Linux. This project
+has used AI to assist in various aspects including parity work, engine architecture
+changes, UI development, and documentation. This is also my first attempt on such a
+complex project. There are going to be bugs needing to be fixed and methods needing
+to be changed along the way.
 
-Bring **Wallpaper Engine**-style live wallpapers to Linux! This project allows you to run animated wallpapers from Steam’s Wallpaper Engine right on your desktop.
+The point of publishing is not to compete with upstream, but to act as a proof of
+concept for the community, and to give back to it. Upstream built the foundation that
+makes a project like this possible at all, and anything here that upstream wants is
+theirs for the taking. None of this would exist without Almamu's engine, and my work
+on this project building on upstream's code has given me a great appreciation for the
+incredible effort that it must have taken to build this from scratch.
 
-> ⚠️ This is an educational project that evolved into a functional OpenGL-based wallpaper engine for Linux. Expect some limitations and quirks!
+This fork's goal is a few things: make scene wallpapers render the way they do on
+Windows with full parity, make the engine cheap enough on system resources to leave
+running all day, and to provide the community with code and concept ideas that it can
+take, modify, and use in open-source projects. The parity work here was built and
+verified against the real Windows renderer, wallpaper by wallpaper, over several
+months of side-by-side comparison. It's still nowhere near 100% complete, but most
+scenes run remarkably close.
 
----
+This was built and tested on a system with a 5000 series NVIDIA GPU and a 9000 series
+AMD CPU running CachyOS with Hyprland. Brief verification was done on a VM running
+CachyOS with KDE Plasma. The engine was briefly checked for portability using the AMD
+iGPU successfully.
 
-## 📦 System Requirements
+## What it looks like
 
-To compile and run this, you'll need:
+The library, with the engine live on the desktop behind it. The status strip is
+real: 75 wallpapers indexed, a 4K scene playing at the capped 30 FPS, 364 MB of
+VRAM.
 
-- OpenGL 3.3 support
-- CMake
-- LZ4, Zlib
-- SDL2
-- FFmpeg
-- X11 or Wayland
-- Xrandr (for X11)
-- GLFW3, GLEW, GLUT, GLM
-- MPV
-- PulseAudio
-- FFTW3
+![the library grid](docs/images/library-grid.png)
 
-Install the required dependencies on Ubuntu/Debian-based systems:
+Texture compression at import. The wizard measures the scene and offers the
+real numbers before it touches anything - here, 239 MB of raw textures down to
+59 MB of BC7.
 
-### Ubuntu 22.04
-```bash
-sudo apt-get update
-sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv1 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev
+![the compression wizard](docs/images/compression-wizard.png)
+
+Per-scene editing: the knobs the scene author exposed, per-object exclusion for
+every object in the scene, and the engine's own tuning rail.
+
+![the editor](docs/images/editor.png)
+
+Fourteen themes, defaulting to true-black OLED.
+
+![the theme picker](docs/images/theme-picker.png)
+
+The Quick Panel floats over whatever you are doing - global controls and the
+running scene's own properties without opening the full window. Light themes
+are real, not an afterthought.
+
+![the quick panel on a light theme](docs/images/quick-panel-light.png)
+
+The repository is a pair that ships together:
+
+- the engine (this directory) - the wallpaper renderer and its daemon
+- [`lwe-ui/`](lwe-ui/) - the control panel, a PySide6/QML app split into a small
+  tray process and a full window that starts on demand, driving the engine
+  through its command API
+
+[`ARCHITECTURE.md`](ARCHITECTURE.md) explains the machine: how the pieces fit, why
+the design went this way, and where to start reading.
+[`docs/FORK-MAP.md`](docs/FORK-MAP.md) is the per-capability reference behind it,
+with file and line anchors for every claim, a complete switch and verb map, and a
+guide to which pieces can be lifted on their own.
+
+## What is different from upstream
+
+### Rendering
+- Camera and projection work: orthographic and perspective cameras, parallax, zoom,
+  and script-driven view changes now behave much closer to the Windows renderer.
+- Particles: playback-rate dilation, start times, event-driven children
+  (spawn/death/follow), puppet skeletal animation, animated-texture cycle behavior,
+  instance overrides, and count-override semantics.
+- Scene lighting: light objects, a from-scratch reimplementation of the generated
+  lighting shader module, corrected light-direction conventions, and mesh
+  winding/chirality fixes. 3D model objects render.
+- An HDR bloom ladder (RGBA16F), used when a scene's bloom calls for it.
+- Script engine: the module subsystem works, scripts tick values renderers actually
+  read, object angles use the documented units, and an audio-response API is
+  available to scripts. Per-object sound volume applies as playback gain.
+- Text objects: placement, point sizing, and width-limit truncation.
+
+Parity is judged wallpaper by wallpaper against the Windows client; plenty of scenes
+now look right, and the ones that do not are how the work continues.
+
+### Performance and VRAM
+- Roughly half the VRAM of upstream on typical scenes, and on some scenes
+  considerably more than half saved. The pieces: ingest-time BC7/BC4/BC5 texture
+  compression (visually gated before it was made the default), FBO pooling for layer
+  composites, a mip-residency texture pipeline so VRAM tracks what is actually on
+  screen, and per-scene fixes found by measuring against the Windows client's
+  footprint.
+
+### Architecture
+- Two-service design: the wallpaper engine proper and a separate web-content
+  service. Chromium (CEF) is spawned only when a web wallpaper is actually in use
+  and torn down to zero when it is not.
+- A daemon mode with a Unix-socket command API: switch wallpapers, query status,
+  pause, drive rotation, and change settings live without restarting anything.
+- The daemon owns its own state: current wallpaper, rotation set, and playback
+  settings persist to disk and restore on boot, so a service restart is
+  invisible and no client has to babysit the engine. A crash-loop guard boots
+  it idle instead of restoring into a repeating failure.
+- Live property reload, a fullscreen-app policy handled by the engine itself
+  (it frees the outputs when something goes fullscreen and takes them back the
+  moment it clears), and a running-apps rule: while a listed process is up, for
+  example a local LLM that needs the VRAM, the engine pauses or stands down on
+  its own and comes back when the process exits. A stood-down engine is honest
+  about it: VRAM is freed and resident memory drops to roughly 60 MB until the
+  outputs come back.
+- Console output from a misbehaving wallpaper is rate-limited so it cannot
+  drown the engine's own logs.
+- Hardened parsers for the binary formats a wallpaper package can carry, and hard
+  caps on what a client of the command socket can do.
+
+## The control panel (lwe-ui)
+
+The engine's daemon API is the center of the architecture, and `lwe-ui/` is its
+main client: a control panel that runs as a small tray process plus a full
+window opened on demand, so closing the panel returns its memory while the
+quick actions stay a right-click away. Library browsing,
+rotation playlists, per-wallpaper settings (scaling, fps, color correction,
+animation speed, scene properties), Workshop import with a bench-test wizard,
+theming, and a developer view exposing the engine's debug instruments.
+
+The panel is installed by `install.sh` along with the engine. See
+[`lwe-ui/README.md`](lwe-ui/README.md) for details.
+
+## Installing
+
 ```
-
-### Ubuntu 24.04
-```bash
-sudo apt-get update
-sudo apt-get install build-essential cmake libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev libglew-dev freeglut3-dev libsdl2-dev liblz4-dev libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libxxf86vm-dev libglm-dev libglfw3-dev libmpv-dev mpv libmpv2 libpulse-dev libpulse0 libfftw3-dev libfreetype-dev
-```
-
-### Alt linux
-```bash
-sudo epm update
-sudo epm install gcc-c++ make cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel libGL-devel libGLEW-devel freeglut-devel libSDL2-devel liblz4-devel libavcodec-devel libavformat-devel libavutil-devel libswscale-devel libXxf86vm-devel libglm-devel libglfw3-devel libmpv-devel mpv libpulseaudio-devel libpulseaudio libfftw3-devel libpng-devel libffi-devel libswresample-devel libgmpxx-devel
-```
-
-Install the required dependencies on RHEL/Fedora-based systems:
-
-### Fedora 42
-```bash
-sudo dnf update
-sudo dnf install gcc g++ cmake libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel glew-devel freeglut-devel SDL2-devel lz4-devel ffmpeg ffmpeg-free-devel libXxf86vm-devel glm-devel glfw-devel mpv mpv-devel pulseaudio-libs-devel fftw-devel gmp-devel
-```
-
----
-
-## 🐧 Arch Linux Users
-
-You can install this directly from the AUR using your favorite AUR helper:
-
-```bash
-yay -S linux-wallpaperengine-git
-```
-
-> This installs the latest development version.
-
-**Note:** You’ll still need assets from the official Wallpaper Engine (via Steam). See below for details.
-
----
-
-## 🚀 Getting Started
-
-### 1. Get Wallpaper Engine Assets
-
-You **must own and install Wallpaper Engine** via Steam. This provides the required assets used by many backgrounds.
-
-Right now the application will automatically detect everything for you as long as the official Wallpaper Engine is installed
-in one of these locations:
-
-```
-~/.steam/steam/steamapps/common
-~/.local/share/Steam/steamapps/common
-~/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/common
-~/snap/steam/common/.local/share/Steam/steamapps/common
-```
-
-> ✅ If Wallpaper Engine is installed in one of these paths, the assets will be detected automatically!
-
----
-
-#### ❗ If Assets Aren’t Found Automatically
-
-If the assets are not detected automatically, you'll see a message like this:
-```
-Cannot find a valid assets folder, resolved to 'assets'
-```
-
-You can copy the `assets` folder manually:
-
-1. In Steam, right-click **Wallpaper Engine** → **Manage** → **Browse local files**
-2. Copy the `assets` folder
-3. Paste it into the same folder where the `linux-wallpaperengine` binary is located (build/output if you followed the build instructions)
-
-Another option is to specify the path manually with the `--assets-dir` option, like this:
-```bash
-linux-wallpaperengine --assets-dir /path/to/assets
-```
----
-
-### 2. Build from Source
-
-> ⚠️ If you installed the AUR package mentioned before, you can skip this step.
-
-Clone the repo:
-
-```bash
-git clone --recurse-submodules https://github.com/Almamu/linux-wallpaperengine.git
+git clone https://github.com/portghost-dev/linux-wallpaperengine
 cd linux-wallpaperengine
+bash install.sh
 ```
 
-Build it:
+`install.sh` installs the dependencies through pacman, builds the engine, and
+puts the panel in its own virtualenv. It prints what it is doing at each step and
+lets pacman ask before installing anything.
 
-```bash
-mkdir build && cd build
-cmake -DCMAKE_BUILD_TYPE='Release' ..
-make
+Scope, stated plainly: the project is x86-64 only, and it has been tested on
+CachyOS under Hyprland and KDE Plasma. Other Arch-family systems should work.
+Other distributions have not been tried; the build itself is ordinary cmake, so
+adapt the dependency list from upstream's README and use the manual steps below.
+
+## Uninstalling
+
+If you enabled the engine service from the panel, stop it first:
+
+```
+systemctl --user disable --now lwe-engine.service
+rm -f ~/.config/systemd/user/lwe-engine.service
 ```
 
-Once the build process is finished, this should create a new `output` folder containing the app and all the required
-support files to run.
+Everything else lives under your home directory:
 
----
-
-## 🧪 Usage
-
-Basic syntax:
-
-```bash
-linux-wallpaperengine [options] <background_id or path>
+```
+rm -f ~/.local/bin/linux-wallpaperengine ~/.local/bin/lwe-web-service
+rm -f ~/.local/bin/lwe_bc7enc ~/.local/bin/lwe-ui
+rm -rf ~/.local/lib/lwe-engine ~/.local/share/lwe-ui
+rm -f ~/.local/share/applications/lwe-ui.desktop
+rm -rf ~/.config/lwe ~/.local/state/lwe
 ```
 
-You can use either:
-- A Steam Workshop ID (e.g. `1845706469`)
-- A path to a background folder
+The last line removes your settings, playlists, and the texture cache; keep it
+if you plan to reinstall. The packages pacman installed are ordinary system
+packages and stay; remove them with pacman if nothing else uses them.
 
----
+## Building the engine by hand
 
-### What about a GUI?
-
-Implementing a GUI is out of scope for now.
-There's a few developers that decided to focus on this and created their own.
-If you're one of those developers, feel free to open an issue to get your project included here!
-
-- [simple-linux-wallpaperengine-gui](https://github.com/Maxnights/simple-linux-wallpaperengine-gui) by @Maxnights
-- [linux-wallpaper-engine](https://github.com/jagrat7/linux-wallpaper-engine) by @jagrat7
-- [wallpaperengine-gui](https://github.com/MikiDevLog/wallpaperengine-gui) by @MikiDevLog
-- [linux-wallpaperengine-controllfer for Noctalia Shell](https://noctalia.dev/plugins/linux-wallpaperengine-controller/) by @PaloMiku
-- [waypaper](https://github.com/anufrievroman/waypaper) by @anufrievroman
-
-### 🔧 Common Options
-
-| Option | Description |
-|--------|-------------|
-| `--silent` | Mute background audio |
-| `--volume <val>` | Set audio volume |
-| `--noautomute` | Don't mute when other apps play audio |
-| `--no-audio-processing` | Disable audio reactive features |
-| `--fps <val>` | Limit frame rate |
-| `--window <XxYxWxH>` | Run in windowed mode with custom size/position |
-| `--screen-root <screen>` | Set as background for specific screen |
-| `--screen-span <screen-1>,<screen-2>,...` | Stretch a single wallpaper across multiple screens |
-| `--bg <id/path>` | Assign a background to a specific screen (use after `--screen-root`/`--screen-span`) |
-| `--scaling <mode>` | Wallpaper scaling: `stretch`, `fit`, `fill`, or `default` |
-| `--clamping <mode>` | Set texture clamping: `clamp`, `border`, `repeat` |
-| `--assets-dir <path>` | Set custom path for assets |
-| `--screenshot <file>` | Save screenshot (PNG, JPEG, BMP) |
-| `--list-properties` | Show customizable properties of a wallpaper |
-| `--set-property name=value` | Override a specific property |
-| `--disable-mouse` | Disable mouse interaction |
-| `--disable-parallax` | Disable parallax effect on backgrounds that support it |
-| `--no-fullscreen-pause` | Prevent pausing while fullscreen apps are running |
-| `--fullscreen-pause-only-active` | Wayland only: pause only when a fullscreen window is active |
-| `--fullscreen-pause-ignore-appid <val>` | Wayland only: ignore fullscreen windows whose app_id contains `<val>` (repeatable) |
-
----
-
-### 💡 Examples
-
-#### Run a background by ID
-```bash
-linux-wallpaperengine 1845706469
+```
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+make -C build -j$(nproc)
 ```
 
-#### Run a background from a folder
-```bash
-linux-wallpaperengine ~/backgrounds/1845706469/
+Arch's system Python refuses direct installs, so the panel wants a virtualenv.
+Reusing the system Qt bindings keeps it from downloading a second copy of Qt:
+
+```
+python -m venv --system-site-packages ~/.local/share/lwe-ui/venv
+~/.local/share/lwe-ui/venv/bin/python -m pip install ./lwe-ui
 ```
 
-#### Assign backgrounds to screens with scaling
-```bash
-linux-wallpaperengine \
-  --scaling stretch --screen-root eDP-1 --bg 2667198601 \
-  --scaling fill --screen-root HDMI-1 --bg 2667198602
+The configure step downloads the matching CEF binary distribution (large, one
+time). Dependency list and asset discovery are unchanged from upstream; see their
+README if you are setting up from nothing.
+
+Two notes for source builds:
+
+- CEF's binary distribution ships a stripped `libvulkan.so.1` that can hijack the
+  link when mpv pulls in a Vulkan-enabled libplacebo, surfacing as an undefined
+  `vkCreateXlibSurfaceKHR`. The configure step deletes that copy, so a normal
+  build resolves Vulkan against the system loader and needs no intervention.
+- CEF ships only Release binaries. For a RelWithDebInfo build, symlink
+  `RelWithDebInfo -> Release` inside the extracted CEF directory.
+
+## Driving the engine from a shell
+
+The panel is optional. The daemon speaks one JSON object per line over
+`$XDG_RUNTIME_DIR/lwe/engine.sock`, and anything that can write to a Unix socket
+can drive it:
+
+```
+printf '{"id":1,"cmd":"status"}\n' | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/lwe/engine.sock"
+printf '{"id":2,"cmd":"show","args":{"id":"1311951951"}}\n' | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/lwe/engine.sock"
+printf '{"id":3,"cmd":"next"}\n' | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/lwe/engine.sock"
 ```
 
-#### Stretch one wallpaper across multiple monitors
-```bash
-linux-wallpaperengine \
-  --scaling fill --screen-span HDMI-A-1,DP-2,DP-3 --bg 1845706469
-```
+Replies come back as JSON lines with the same `id`; long commands answer
+`accepted` first and `done` when the swap finishes. Every state-changing command,
+and every scheduled rotation advance, is persisted by the engine itself, so a
+rotation set up from the shell survives crashes and restarts with no client
+running, and comes back on the wallpaper that was actually up. The full verb list with every
+argument and bound is in [`docs/FORK-MAP.md`](docs/FORK-MAP.md) chapters 1 and
+8; the wire schema is documented in `src/WallpaperEngine/Api/CommandDispatcher.h`.
 
-#### Run in a window
-```bash
-linux-wallpaperengine --window 0x0x1280x720 1845706469
-```
+## Troubleshooting
 
-#### Limit FPS to save power
-```bash
-linux-wallpaperengine --fps 30 1845706469
-```
+- On a machine with no usable GPU, CEF falls back to software rendering through
+  `vulkan-swrast`. Web wallpapers still run, but slowly. This is a fallback, not
+  a supported configuration.
+- On KDE Plasma, the Peek at Desktop shortcut (Meta+D by default) hides the
+  wallpaper along with the windows, because the wallpaper is a desktop-layer
+  surface. Press it again to bring it back.
 
-#### Take a screenshot
-```bash
-linux-wallpaperengine --screenshot ~/wallpaper.png 1845706469
-```
+## About this repository
 
-This can be useful as output for pywal or other color systems that use images as basis to generate a set of colors
-to apply to your system.
+This is a snapshot publication: one commit on top of the upstream base it was
+forked from.
 
-#### View and change properties
-```bash
-linux-wallpaperengine --list-properties 2370927443
-```
+Two of the calibration instruments used to bring the renderer to parity ship
+in `tools/instruments/`: a generated HDR-bloom test scene and a generated
+lighting probe, each with its generator, its readout script, a capture, and a
+README explaining how to use it.
 
-The output includes all the relevant information for each of the different properties:
-```
-barcount - slider
-	Description: Bar Count
-	Value: 64
-	Minimum value: 16
-	Maximum value: 64
-	Step: 1
+## Credits
 
-bloom - boolean
-	Description: Bloom
-	Value: 0
-frequency - combolist
-	Description: Frequency
-	Value: 2
-		Posible values:
-		16 -> 1
-		32 -> 2
-		64 -> 3
+- [Almamu](https://github.com/Almamu) and the linux-wallpaperengine contributors.
+  This fork stands entirely on their engine, and it is meant as a thank-you to
+  that work, not a replacement for it.
+- Fixes and ideas were adopted from the parallel forks by
+  [ian-vinson](https://github.com/ian-vinson) and
+  [Haberno](https://github.com/Haberno), including CEF bootstrap fixes, live
+  property reload, audio device handling, config parsing, package lookup behavior,
+  and parts of the shadow and tube-light work that extended this fork's existing
+  lighting system. Their work is credited here rather than inline in the source.
+- Texture compression uses Intel's
+  [ISPC Texture Compressor](https://github.com/GameTechDev/ISPCTextureCompressor),
+  vendored under `src/External/ISPCTextureCompressor/` and used under the MIT
+  license included there.
+- Wallpaper Engine itself is the work of
+  [Kristjan Skutta](https://store.steampowered.com/app/431960/Wallpaper_Engine/).
+  This project renders content you own through your own Steam license; it ships
+  none of Wallpaper Engine's assets.
 
-owl - boolean
-	Description: Owl
-	Value: 0
-rain - boolean
-	Description: Rain
-	Value: 1
-schemecolor - color
-	Description: ui_browse_properties_scheme_color
-	R: 0.14902 G: 0.23137 B: 0.4 A: 1
-visualizer - boolean
-	Description: <hr>Add Visualizer<hr>
-	Value: 1
-visualizercolor - color
-	Description: Bar Color
-	R: 0.12549 G: 0.215686 B: 0.352941 A: 1
-visualizeropacity - slider
-	Description: Bar Opacity
-	Value: 1
-	Minimum value: 0
-	Maximum value: 1
-	Step: 0.1
+## License
 
-visualizerwidth - slider
-	Description: Bar Spacing
-	Value: 0.25
-	Minimum value: 0
-	Maximum value: 0.5
-	Step: 0.01
-```
-
-Any of these values can be modified with the --set-property switch. Say you want to enable the bloom in this background, you would do so like this:
-```
-linux-wallpaperengine --set-property bloom=1 2370927443
-```
-
----
-
-## 🧪 Wayland & X11 Support
-
-- **Wayland**: Works with compositors that support `wlr-layer-shell-unstable`. Uses `xdg-output-unstable-v1` for accurate monitor positioning (required for `--screen-span`).
-- **X11**: Requires XRandr. Use `--screen-root <screen_name>` (as shown in `xrandr`).
-
-> ⚠ For X11 users: Currently doesn't work if a compositor or desktop environment (e.g. GNOME, KDE, Nautilus) is drawing the background.
-
----
-
-## 🌈 Example Backgrounds
-
-![example1](docs/images/example.gif)
-![example2](docs/images/example2.gif)
-
-Want to see more examples of backgrounds that work? Head over to the [project's website](https://wpengine.alma.mu/#showcase)
-
-## 🪲 Common issues
-### Black screen when setting as screen's background
-This can be caused by a few different things depending on your environment and setup.
-
-### X11
-Common symptom of a compositor drawing to the background which prevents Wallpaper Engine from being properly visible.
-The only solution currently is disabling the compositor so Wallpaper Engine can properly draw on the screen
-
-### NVIDIA
-Some users have had issues with GLFW initialization and other OpenGL errors. These are generally something that's
-worth reporting in the issues. Sometimes adding this variable when running Wallpaper Engine helps and/or solves
-the issue:
-```bash
-__GL_THREADED_OPTIMIZATIONS=0 linux-wallpaperengine
-```
-
-We'll be looking at improving this in the future, but for now it can be a useful workaround.
-
----
-
-## 🙏 Special Thanks
-
-- [RePKG](https://github.com/notscuffed/repkg) – for texture flag insights
-- [RenderDoc](https://github.com/baldurk/renderdoc) – the best OpenGL debugger out there!
+GPLv3, same as upstream. See LICENSE.

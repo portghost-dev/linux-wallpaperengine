@@ -17,10 +17,18 @@ extern "C" {
 #undef static
 
 #include <algorithm>
+#include <cerrno>
+#include <poll.h>
 #include <string.h>
 #include <unistd.h>
+#include <vector>
 
 using namespace WallpaperEngine::Render::Drivers;
+
+static bool mouseDbg () {
+    static const bool s_dbg = getenv ("LWE_MOUSEDBG") != nullptr;
+    return s_dbg;
+}
 
 static void handlePointerEnter (
     void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface, wl_fixed_t surface_x,
@@ -29,6 +37,9 @@ static void handlePointerEnter (
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
     const auto viewport = driver->surfaceToViewport (surface);
     driver->viewportInFocus = viewport;
+    if (mouseDbg ()) {
+	sLog.out ("LWE-MOUSEDBG enter viewport=", viewport ? viewport->name : "?");
+    }
     wl_surface_set_buffer_scale (viewport->cursorSurface, viewport->scale);
     wl_surface_attach (viewport->cursorSurface, wl_cursor_image_get_buffer (viewport->pointer->images[0]), 0, 0);
     wl_pointer_set_cursor (
@@ -39,7 +50,12 @@ static void handlePointerEnter (
 }
 
 static void
-handlePointerLeave (void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface) { }
+handlePointerLeave (void* data, struct wl_pointer* wl_pointer, uint32_t serial, struct wl_surface* surface) {
+    const auto driver = static_cast<WaylandOpenGLDriver*> (data);
+    if (driver->viewportInFocus && driver->viewportInFocus->surface == surface) {
+	driver->viewportInFocus = nullptr;
+    }
+}
 
 static void handlePointerAxis (void* data, wl_pointer* wl_pointer, uint32_t time, uint32_t axis, wl_fixed_t value) { }
 
@@ -55,10 +71,6 @@ static void handlePointerMotion (
 	return;
     }
 
-    // Convert from Wayland coordinate system (Y=0 at top) to OpenGL coordinate system (Y=0 at bottom)
-    const double viewportHeight = static_cast<double> (driver->viewportInFocus->size.y);
-    y = viewportHeight - y;
-
     driver->viewportInFocus->mousePos = { x * driver->viewportInFocus->scale, y * driver->viewportInFocus->scale };
 }
 
@@ -66,6 +78,13 @@ static void handlePointerButton (
     void* data, struct wl_pointer* wl_pointer, uint32_t serial, uint32_t time, uint32_t button, uint32_t button_state
 ) {
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
+
+    if (mouseDbg ()) {
+	sLog.out (
+	    "LWE-MOUSEDBG button=", button, " state=", button_state,
+	    " focus=", driver->viewportInFocus ? driver->viewportInFocus->name : "NONE"
+	);
+    }
 
     if (!driver->viewportInFocus) {
 	return;
@@ -111,6 +130,7 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
 	driver->getWaylandContext ()->shm
 	    = static_cast<wl_shm*> (wl_registry_bind (registry, name, &wl_shm_interface, 1));
     } else if (strcmp (interface, wl_output_interface.name) == 0) {
+	sLog.out ("Wayland output global added (registry id ", name, ")");
 	driver->m_screens.emplace_back (
 	    new WallpaperEngine::Render::Drivers::Output::WaylandOutputViewport (driver, name, registry)
 	);
@@ -129,7 +149,15 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
 }
 
 static void handleGlobalRemoved (void* data, struct wl_registry* registry, uint32_t id) {
-    // todo: outputs
+    const auto driver = static_cast<WaylandOpenGLDriver*> (data);
+
+    for (const auto& viewport : driver->m_screens) {
+	if (viewport->waylandName == id) {
+	    sLog.out ("Wayland output global removed (registry id ", id, ", screen '", viewport->name, "')");
+	    driver->onLayerClose (viewport);
+	    return;
+	}
+    }
 }
 
 constexpr struct wl_registry_listener registryListener = {
@@ -184,7 +212,7 @@ void WaylandOpenGLDriver::initEGL () {
 
     EGLint matchedConfigs = 0;
     const EGLint CONFIG_ATTRIBUTES[] = {
-	EGL_SURFACE_TYPE,    EGL_WINDOW_BIT, EGL_RED_SIZE, 1, EGL_GREEN_SIZE, 1, EGL_BLUE_SIZE, 1, EGL_SAMPLES, 4,
+	EGL_SURFACE_TYPE,    EGL_WINDOW_BIT, EGL_RED_SIZE, 1, EGL_GREEN_SIZE, 1, EGL_BLUE_SIZE, 1, EGL_SAMPLES, 0,
 	EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT, EGL_NONE,
     };
 
@@ -197,6 +225,10 @@ void WaylandOpenGLDriver::initEGL () {
 	this->finishEGL ();
 	sLog.exception ("eglChooseConfig failed! (matched 0 configs)");
     }
+
+    EGLint chosenSamples = -1;
+    eglGetConfigAttrib (m_eglContext.display, m_eglContext.config, EGL_SAMPLES, &chosenSamples);
+    sLog.out ("EGL config samples: ", chosenSamples);
 
     if (!eglBindAPI (EGL_OPENGL_API)) {
 	this->finishEGL ();
@@ -234,6 +266,13 @@ void WaylandOpenGLDriver::finishEGL () const {
 void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport) {
     sLog.error ("Compositor closed our LS, freeing data...");
 
+    // on hot-unplug the compositor is not obliged to send pointer-leave before the
+    // surface goes away, so the focus pointer can still name this viewport; clearing
+    // it in the leave handler alone leaves a dangling deref for the next mouse event
+    if (this->viewportInFocus == viewport) {
+	this->viewportInFocus = nullptr;
+    }
+
     if (viewport->eglSurface) {
 	eglDestroySurface (m_eglContext.display, viewport->eglSurface);
     }
@@ -253,6 +292,11 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 
     if (viewport->surface) {
 	wl_surface_destroy (viewport->surface);
+    }
+
+    if (viewport->output) {
+	wl_output_destroy (viewport->output);
+	viewport->output = nullptr;
     }
 
     // remove the output from the list
@@ -303,34 +347,95 @@ void WaylandOpenGLDriver::initWaylandRegistry () {
     }
 }
 
+bool WaylandOpenGLDriver::shouldSetupScreen (const std::string& name) const {
+    if (m_context.settings.general.screenBackgrounds.contains (name)) {
+	return true;
+    }
+
+    for (const auto& spanGroup : m_context.settings.general.spanGroups) {
+	for (const auto& screen : spanGroup.screens) {
+	    if (screen == name) {
+		return true;
+	    }
+	}
+    }
+
+    return false;
+}
+
+bool WaylandOpenGLDriver::releaseOutputSurfaces () {
+    bool any = false;
+
+    for (const auto& viewport : this->m_screens) {
+	if (viewport->layerSurface) {
+	    sLog.out ("Releasing output '", viewport->name, "' (bench standdown)");
+	    viewport->teardownSurfaces ();
+	    any = true;
+	}
+    }
+
+    // surface-less viewports drop out of the render set (updateViewports skips them);
+    // the render loop and keepalive iterate that set, so nothing touches dead surfaces
+    this->getOutput ().reset ();
+    wl_display_flush (this->m_waylandContext.display);
+    return any;
+}
+
+bool WaylandOpenGLDriver::acquireOutputSurfaces () {
+    bool any = false;
+
+    for (const auto& viewport : this->m_screens) {
+	if (viewport->layerSurface || viewport->name.empty () || !this->shouldSetupScreen (viewport->name)) {
+	    continue;
+	}
+
+	sLog.out ("Re-acquiring output '", viewport->name, "'");
+
+	if (m_waylandContext.xdgOutputManager != nullptr && viewport->xdgOutput == nullptr) {
+	    viewport->setupXdgOutput (m_waylandContext.xdgOutputManager);
+	}
+
+	viewport->setupLS ();
+	any = true;
+    }
+
+    this->getOutput ().reset ();
+    return any;
+}
+
+void WaylandOpenGLDriver::onOutputAnnounced (Output::WaylandOutputViewport* viewport) {
+    // startup announcements are handled by setupOutputLayerSurfaces; property-change
+    // bursts also end in `done` and are filtered by the layerSurface check
+    if (!this->m_outputsInitialized || viewport->layerSurface || viewport->name.empty ()
+	|| !this->shouldSetupScreen (viewport->name)) {
+	return;
+    }
+
+    sLog.out ("Output '", viewport->name, "' hotplugged, setting up its layer surface");
+
+    if (m_waylandContext.xdgOutputManager != nullptr && viewport->xdgOutput == nullptr) {
+	viewport->setupXdgOutput (m_waylandContext.xdgOutputManager);
+    }
+
+    viewport->setupLS ();
+    this->getOutput ().reset ();
+    // prime the frame-callback chain for the new surface; the keepalive is the backstop
+    this->getApp ().update (viewport);
+}
+
 void WaylandOpenGLDriver::setupOutputLayerSurfaces () {
     bool any = false;
 
     for (const auto& o : this->m_screens) {
-	bool shouldSetup = m_context.settings.general.screenBackgrounds.contains (o->name);
-
-	// also check if this screen is in any span group
-	if (!shouldSetup) {
-	    for (const auto& spanGroup : m_context.settings.general.spanGroups) {
-		for (const auto& screen : spanGroup.screens) {
-		    if (screen == o->name) {
-			shouldSetup = true;
-			break;
-		    }
-		}
-		if (shouldSetup) {
-		    break;
-		}
-	    }
-	}
-
-	if (!shouldSetup) {
+	if (!this->shouldSetupScreen (o->name)) {
 	    continue;
 	}
 
 	o->setupLS ();
 	any = true;
     }
+
+    this->m_outputsInitialized = true;
 
     if (!any) {
 	sLog.error ("No outputs could be initialized, please check the parameters and try again");
@@ -408,14 +513,84 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
     // TODO: FRAMETIME CONTROL SHOULD GO BACK TO THE CWALLPAPAERAPPLICATION ONCE ACTUAL PARTICLES ARE IMPLEMENTED
     // TODO: AS THOSE, MORE THAN LIKELY, WILL REQUIRE OF A DIFFERENT PROCESSING RATE
 
-    // TODO: WRITE A NON-BLOCKING VERSION OF THIS ONCE PARTICLE SIMULATION STARTS WORKING
-    // TODO: OTHERWISE wl_display_dispatch WILL BLOCK IF NO SURFACES ARE BEING DRAWN
-    static float startTime, endTime, minimumTime = 1.0f / this->m_context.settings.render.maximumFPS;
+    static float startTime, endTime;
+    const float minimumTime = 1.0f / static_cast<float> (std::max (1, this->m_context.settings.render.maximumFPS));
     // get the start time of the frame
     startTime = this->getRenderTime ();
 
-    if (wl_display_dispatch (m_waylandContext.display) == -1) {
+    wl_display* display = m_waylandContext.display;
+
+    // dispatch anything already queued before sleeping on the fd
+    while (wl_display_prepare_read (display) != 0) {
+	if (wl_display_dispatch_pending (display) == -1) {
+	    m_requestedExit = true;
+	    return;
+	}
+    }
+
+    if (wl_display_flush (display) == -1 && errno != EAGAIN) {
+	wl_display_cancel_read (display);
 	m_requestedExit = true;
+	return;
+    }
+
+    const auto apiFds = this->getApp ().getApiWakeFds ();
+    std::vector<pollfd> polled;
+    polled.reserve (apiFds.size () + 1);
+    polled.push_back ({ .fd = wl_display_get_fd (display), .events = POLLIN, .revents = 0 });
+
+    for (const int fd : apiFds) {
+	polled.push_back ({ .fd = fd, .events = POLLIN, .revents = 0 });
+    }
+
+    // The timeout is always bounded so the keepalive below gets a tick even with the API
+    // off and the callback chain dead; 100 ms with the API keeps command latency low.
+    const int ready = poll (polled.data (), polled.size (), apiFds.empty () ? 2000 : 100);
+
+    if (ready < 0 && errno != EINTR) {
+	wl_display_cancel_read (display);
+	m_requestedExit = true;
+	return;
+    }
+
+    // a dead compositor leaves POLLHUP/POLLERR level-triggered on the display fd,
+    // turning every bounded poll into an instant return and the loop into a spin
+    if (ready > 0 && (polled[0].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+	wl_display_cancel_read (display);
+	m_requestedExit = true;
+	return;
+    }
+
+    if (ready > 0 && (polled[0].revents & POLLIN) != 0) {
+	if (wl_display_read_events (display) == -1) {
+	    m_requestedExit = true;
+	    return;
+	}
+    } else {
+	wl_display_cancel_read (display);
+    }
+
+    if (wl_display_dispatch_pending (display) == -1) {
+	m_requestedExit = true;
+    }
+
+    if (!m_requestedExit) {
+	for (const auto& viewport : this->getOutput ().getViewports () | std::views::values) {
+	    auto* wlViewport = dynamic_cast<Output::WaylandOutputViewport*> (viewport);
+
+	    if (wlViewport != nullptr && wlViewport->framePending) {
+		wlViewport->framePending = false;
+		wlViewport->rendering = true;
+		this->getApp ().update (viewport);
+		wlViewport->rendering = false;
+	    }
+	}
+    }
+
+    if (!m_requestedExit && this->getApp ().secondsSinceLastRender () > 2.0) {
+	for (const auto& viewport : this->getOutput ().getViewports () | std::views::values) {
+	    this->getApp ().update (viewport);
+	}
     }
 
     m_frameCounter++;

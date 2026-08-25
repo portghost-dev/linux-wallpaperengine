@@ -28,5 +28,6 @@ struct Project {
     WallpaperUniquePtr wallpaper;
     /** Abstraction over asset loading to provide access to them */
     AssetLocatorUniquePtr assetLocator;
+    bool fromPackage = false;
 };
 };

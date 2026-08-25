@@ -1,5 +1,7 @@
 #include "WaylandFullScreenDetector.h"
 
+#include <set>
+
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
 #include "wlr-foreign-toplevel-management-unstable-v1-protocol.h"
@@ -51,6 +53,14 @@ namespace {
 	std::string appId {};
 	WallpaperEngine::Render::Drivers::Detectors::WaylandFullscreenDetectorCallbackData* const data;
     };
+
+    /**
+     * Every live toplevel. The relevance verdict is cached per toplevel and only
+     * revisited when that window sends an event, so a runtime change to the rules
+     * (the ignore-list) needs to walk all of them and recount - see
+     * recomputeFullscreenCount and FullScreenDetector::recomputeRelevance.
+     */
+    std::set<FullscreenState*> g_liveToplevels;
 
     void toplevelHandleTitle (void*, struct zwlr_foreign_toplevel_handle_v1*, const char*) { }
 
@@ -157,6 +167,7 @@ namespace {
 	    }
 	}
 
+	g_liveToplevels.erase (toplevel);
 	zwlr_foreign_toplevel_handle_v1_destroy (handle);
 	delete toplevel;
     }
@@ -185,6 +196,7 @@ namespace {
 	    .appId = {},
 	    .data = cb,
 	};
+	g_liveToplevels.insert (toplevel);
 	zwlr_foreign_toplevel_handle_v1_add_listener (handle, &toplevelHandleListener, toplevel);
     }
 
@@ -196,6 +208,18 @@ namespace {
 	.toplevel = handleToplevel,
 	.finished = handleFinished,
     };
+
+    void recomputeFullscreenCount (const WallpaperEngine::Render::Drivers::Detectors::WaylandFullscreenDetectorCallbackData* cb) {
+	uint32_t count = 0;
+
+	for (const auto* toplevel : g_liveToplevels) {
+	    if (toplevel->data == cb && isCurrentlyRelevant (*toplevel)) {
+		++count;
+	    }
+	}
+
+	*cb->fullscreenCount = count;
+    }
 
 }; // anonymous namespace
 
@@ -254,6 +278,16 @@ bool WaylandFullScreenDetector::anythingFullscreen () const {
 }
 
 void WaylandFullScreenDetector::reset () { }
+
+void WaylandFullScreenDetector::recomputeRelevance () {
+    if (!m_toplevelManager) {
+	return;
+    }
+
+    // drain anything in flight first so the recount sees the compositor's latest state
+    wl_display_roundtrip (m_display);
+    recomputeFullscreenCount (&m_callbackData);
+}
 
 __attribute__ ((constructor)) void registerWaylandFullscreenDetector () {
     sVideoFactories.registerFullscreenDetector (

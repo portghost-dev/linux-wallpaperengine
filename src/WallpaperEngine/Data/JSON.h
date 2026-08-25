@@ -2,6 +2,8 @@
 
 #include "Builders/ColorBuilder.h"
 
+#include <cmath>
+#include <cstdlib>
 #include <glm/detail/qualifier.hpp>
 #include <glm/detail/type_vec1.hpp>
 #include <nlohmann/json.hpp>
@@ -58,12 +60,40 @@ public:
 
 	return *it;
     }
+    template <typename T> [[nodiscard]] static std::optional<T> coerceNumericString (const base_type& value) {
+	if constexpr (std::is_arithmetic_v<T>) {
+	    if (value.is_string ()) {
+		const auto& s = value.template get_ref<const std::string&> ();
+		if constexpr (std::is_same_v<T, bool>) {
+		    if (s == "true") {
+			return true;
+		    }
+		    if (s == "false") {
+			return false;
+		    }
+		}
+		char* end = nullptr;
+		const double parsed = std::strtod (s.c_str (), &end);
+		// "inf"/"nan" parse successfully; casting them to an integral is UB
+		if (end != s.c_str () && std::isfinite (parsed)) {
+		    return static_cast<T> (parsed);
+		}
+		return std::nullopt;
+	    }
+	}
+	return std::nullopt;
+    }
+
     template <typename T> [[nodiscard]] T require (const std::string& key, const std::string& message) const {
 	auto base = this->base ();
 	const auto it = base.find (key);
 
 	if (it == base.end ()) {
 	    sLog.exception (message, ". Contents: ", base.dump ());
+	}
+
+	if (const auto coerced = coerceNumericString<T> (*it); coerced.has_value ()) {
+	    return *coerced;
 	}
 
 	return (*it);
@@ -79,7 +109,7 @@ public:
 
 	return result;
     }
-    template <typename T> [[nodiscard]] std::optional<T> optional (const std::string& key) const noexcept {
+    template <typename T> [[nodiscard]] std::optional<T> optional (const std::string& key) const {
 	auto base = this->base ();
 	const auto it = base.find (key);
 
@@ -87,9 +117,18 @@ public:
 	    return std::nullopt;
 	}
 
-	return *it;
+	try {
+	    if (const auto coerced = coerceNumericString<T> (*it); coerced.has_value ()) {
+		return *coerced;
+	    }
+
+	    return static_cast<T> (*it);
+	} catch (const std::exception& e) {
+	    sLog.error ("Ignoring optional value '", key, "' of mismatched type: ", e.what ());
+	    return std::nullopt;
+	}
     }
-    template <typename T> [[nodiscard]] T optional (const std::string& key, T defaultValue) const noexcept {
+    template <typename T> [[nodiscard]] T optional (const std::string& key, T defaultValue) const {
 	auto base = this->base ();
 	const auto it = base.find (key);
 
@@ -97,7 +136,18 @@ public:
 	    return defaultValue;
 	}
 
-	return (*it);
+	try {
+	    if constexpr (std::is_arithmetic_v<T>) {
+		if (it->is_string ()) {
+		    return coerceNumericString<T> (*it).value_or (defaultValue);
+		}
+	    }
+
+	    return (*it);
+	} catch (const std::exception& e) {
+	    sLog.error ("Ignoring optional value '", key, "' of mismatched type: ", e.what ());
+	    return defaultValue;
+	}
     }
     [[nodiscard]] UserSettingUniquePtr user (const std::string& key, const Properties& properties) const;
     template <typename T>
@@ -145,5 +195,7 @@ private:
      */
     [[nodiscard]] const base_type& base () const { return *static_cast<const base_type*> (this); }
 };
+
+JSON parseLenient (const std::string& text);
 
 } // namespace WallpaperEngine::Data::JSON

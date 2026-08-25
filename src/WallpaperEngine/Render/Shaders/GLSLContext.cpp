@@ -1,3 +1,4 @@
+#include <sstream>
 #include "GLSLContext.h"
 #include "WallpaperEngine/Logging/Log.h"
 
@@ -160,6 +161,15 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
 
     if (!fragmentShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
 	sLog.error ("GLSL fragment unit parsing Failed: ", fragmentShader.getInfoLog ());
+	// env LWE_SHADERDUMP=1: dump the assembled source with line numbers for diagnosis
+	if (getenv ("LWE_SHADERDUMP") != nullptr) {
+	    std::istringstream src (fragment);
+	    std::string line;
+	    int n = 0;
+	    while (std::getline (src, line)) {
+		sLog.error ("FRAGSRC ", ++n, ": ", line);
+	    }
+	}
 	return { "", "" };
     }
     glslang::TProgram program;

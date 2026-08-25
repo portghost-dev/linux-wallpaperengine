@@ -9,6 +9,9 @@ using namespace WallpaperEngine::Scripting;
 JSValue get_cursor_world_position (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     JSClassID classId;
     auto* input = static_cast<InputObject*> (JS_GetAnyOpaque (this_val, &classId));
+    if (input == nullptr) {
+	return JS_UNDEFINED;
+    }
 
     // TODO: PROPERLY IMPLEMENT THIS
     return input->getScene ().getScriptEngine ().getAdapters ().vec3->instantiate ();
@@ -17,6 +20,9 @@ JSValue get_cursor_world_position (JSContext* ctx, JSValueConst this_val, int ar
 JSValue get_cursor_screen_position (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     JSClassID classId;
     auto* input = static_cast<InputObject*> (JS_GetAnyOpaque (this_val, &classId));
+    if (input == nullptr) {
+	return JS_UNDEFINED;
+    }
     auto position = input->getScene ().getMousePositionNormalized ();
 
     JSValue result = input->getScene ().getScriptEngine ().getAdapters ().vec2->instantiate ();
@@ -32,7 +38,9 @@ JSValue get_cursor_left_down (JSContext* ctx, JSValueConst this_val, int argc, J
     return JS_NewBool (ctx, false);
 }
 
-JSValue input_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
+JSValue input_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    return JS_ThrowTypeError (ctx, "property is read-only");
+}
 
 InputObject::InputObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
     m_scene (scene), m_engine (engine), m_classId (0) {

@@ -43,6 +43,8 @@ public:
     void setMuted ();
     void clearMuted ();
     void setVolume (double volume);
+    /** mpv playback rate; clamped to mpv's own 0.01..100 range */
+    void setSpeed (double speed);
     void setPaused ();
     void clearPaused ();
 
@@ -68,6 +70,7 @@ protected:
     mpv_handle* m_handle = nullptr;
     mpv_render_context* m_renderContext = nullptr;
     double m_volume = 0.0f;
+    double m_speed = 1.0;
     bool m_muted = false;
     bool m_untimed = false;
     bool m_paused = false;

@@ -160,6 +160,7 @@ struct Texture {
     bool isVideoMp4 = false;
     /** The amount of images in the texture file */
     uint32_t imageCount = 0;
+    uint32_t rawGLMipLevels = 0;
     /** List of mipmaps */
     std::map<uint32_t, MipmapList> images {};
     /** List of animation frames */

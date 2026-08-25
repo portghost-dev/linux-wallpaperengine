@@ -17,6 +17,16 @@ public:
      */
     virtual void reset ();
     /**
+     * Re-evaluates which known toplevels count as fullscreen RIGHT NOW.
+     *
+     * Relevance is normally decided when a toplevel event arrives, so the verdict is
+     * cached against whatever the settings said at that moment. Anything that changes
+     * the relevance rules at runtime - the fullscreen ignore-list, live-set through
+     * `set-fullscreen-ignore` - must call this, or the stale verdict stands until the
+     * window itself happens to send another state event.
+     */
+    virtual void recomputeRelevance ();
+    /**
      * @return The application context using this detector
      */
     [[nodiscard]] Application::ApplicationContext& getApplicationContext () const;

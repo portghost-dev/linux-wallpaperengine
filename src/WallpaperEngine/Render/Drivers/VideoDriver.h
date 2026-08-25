@@ -54,6 +54,9 @@ public:
      * Hides the window created by the driver
      */
     virtual void hideWindow () = 0;
+    virtual bool releaseOutputSurfaces () { return false; }
+    /** Recreate the surfaces released above; the caller rebuilds wallpapers after. */
+    virtual bool acquireOutputSurfaces () { return false; }
     /**
      * @return The size of the framebuffer available for the driver
      */

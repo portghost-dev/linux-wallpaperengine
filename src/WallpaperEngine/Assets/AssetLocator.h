@@ -2,6 +2,10 @@
 
 #include "WallpaperEngine/FileSystem/Container.h"
 
+namespace WallpaperEngine::Media {
+class MediaSource;
+}
+
 namespace WallpaperEngine::Assets {
 using namespace WallpaperEngine::FileSystem;
 using namespace WallpaperEngine::Data::Model;
@@ -16,6 +20,9 @@ public:
     std::string readString (const std::filesystem::path& filename) const;
     ReadStreamSharedPtr read (const std::filesystem::path& path) const;
     std::filesystem::path physicalPath (const std::filesystem::path& path) const;
+    /** scene-dependent virtual assets (the HDR bloom ladder's effect file varies
+     *  with bloomhdriterations, so CScene registers it at construction time) */
+    VirtualAdapter& getVFS () const;
 
 private:
     std::string shader (const std::filesystem::path& filename) const;
@@ -24,4 +31,7 @@ private:
 };
 
 using AssetLocatorUniquePtr = std::unique_ptr<AssetLocator>;
+
+AssetLocatorUniquePtr
+setupAssetLocator (const std::string& bg, const std::filesystem::path& assetsPath, Media::MediaSource& mediaSource);
 }

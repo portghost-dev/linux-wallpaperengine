@@ -1,11 +1,14 @@
 #include "CImage.h"
 
+#include "WallpaperEngine/Render/MipResidency.h"
+
 #include "CRenderable.h"
 
 #include <algorithm>
 #include <cstring>
 #include <iterator>
 #include <optional>
+#include <set>
 #include <sstream>
 
 #include <glm/glm.hpp>
@@ -29,6 +32,8 @@ using namespace WallpaperEngine::Render::Objects::Effects;
 using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Builders;
 using namespace WallpaperEngine::Data::Utils;
+
+extern float g_Time;
 
 namespace {
 glm::vec2 rotateVec2 (const glm::vec2& value, float angle) {
@@ -71,41 +76,6 @@ std::optional<glm::vec3> findMagentaCompositeTint (const Image& image, const std
     return std::nullopt;
 }
 
-struct PuppetMeshBlock {
-    size_t headerOffset = 0;
-    uint32_t vertexBytes = 0;
-    uint32_t indexBytes = 0;
-};
-
-std::optional<PuppetMeshBlock> findPuppetMeshBlock (
-    const BinaryReader& reader, size_t markerSize, size_t mdlsOffset, size_t meshHeaderSize, size_t vertexStride
-) {
-    for (size_t offset = markerSize; offset + meshHeaderSize + sizeof (uint32_t) < mdlsOffset; offset++) {
-	reader.base ().seekg (static_cast<std::streamoff> (offset + sizeof (uint32_t)), std::ios::beg);
-	const uint32_t candidateVertexBytes = reader.nextUInt32 ();
-	const size_t verticesOffset = offset + meshHeaderSize;
-	const size_t indexLengthOffset = verticesOffset + candidateVertexBytes;
-
-	if (candidateVertexBytes == 0 || candidateVertexBytes % vertexStride != 0
-	    || indexLengthOffset + sizeof (uint32_t) > mdlsOffset) {
-	    continue;
-	}
-
-	reader.base ().seekg (static_cast<std::streamoff> (indexLengthOffset), std::ios::beg);
-	const uint32_t candidateIndexBytes = reader.nextUInt32 ();
-	const size_t indicesOffset = indexLengthOffset + sizeof (uint32_t);
-	if (candidateIndexBytes == 0 || candidateIndexBytes % (sizeof (uint16_t) * 3) != 0
-	    || indicesOffset + candidateIndexBytes > mdlsOffset) {
-	    continue;
-	}
-
-	return PuppetMeshBlock { .headerOffset = offset,
-				 .vertexBytes = candidateVertexBytes,
-				 .indexBytes = candidateIndexBytes };
-    }
-
-    return std::nullopt;
-}
 }
 
 CImage::ResolvedTransform CImage::localTransform (const Object& object) {
@@ -183,6 +153,9 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->registerProperty ("color", *image.color->value);
     this->registerProperty ("parallaxDepth", *image.parallaxDepth->value);
 
+    this->m_isShape
+	= image.model->material != nullptr && image.model->material->filename == "materials/wpenginelinux_shape.json";
+
     // get scene width and height to calculate positions
     auto scene_width = static_cast<float> (scene.getWidth ());
     auto scene_height = static_cast<float> (scene.getHeight ());
@@ -191,6 +164,18 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     glm::vec3 origin = transform.origin;
     glm::vec2 size = this->getSize ();
     glm::vec3 scale = transform.scale;
+
+    if (this->isCompositionLayer () && scene.hasAuthoredChildren (image.id)) {
+	// must track the scene target's RESOLUTION: this buffer shadows _rt_FullFrameBuffer for the
+	// subtree, so a mismatch would hand the subtree's passes a different-sized "full frame"
+	const glm::vec2 compositionSize
+	    = scene.clampToCap ({ static_cast<float> (scene.getWidth ()), static_cast<float> (scene.getHeight ()) });
+	this->m_compositionFBO = scene.create (
+	    "_rt_compositionLayer_" + std::to_string (image.id), TextureFormat_ARGB8888, TextureFlags_ClampUVs, 1.0f,
+	    compositionSize, compositionSize
+	);
+	this->alias ("_rt_FullFrameBuffer", std::const_pointer_cast<CFBO> (this->m_compositionFBO));
+    }
 
     this->detectTexture ();
 
@@ -233,6 +218,14 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 
     glm::vec2 scaledSize = size * glm::vec2 (scale);
 
+    static const char* s_cropMode = getenv ("LWE_CROPOFF");
+    if (s_cropMode != nullptr && !this->getImage ().model->puppet.has_value ()) {
+	const float sign = (s_cropMode[0] == '2') ? -1.0f : 1.0f;
+	const glm::vec2& c = this->getImage ().model->cropOffset;
+	origin.x += sign * c.x * scale.x;
+	origin.y += sign * c.y * scale.y;
+    }
+
     // calculate the center and shift from there
     this->m_pos.x = origin.x - (scaledSize.x / 2);
     this->m_pos.w = origin.y + (scaledSize.y / 2);
@@ -261,6 +254,15 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->m_pos.z -= scene_width / 2;
     this->m_pos.w = scene_height / 2 - this->m_pos.w;
 
+    static const bool s_imgDump = getenv ("LWE_IMGDUMP") != nullptr;
+    if (s_imgDump) {
+	sLog.out (
+	    "LWE-IMGDUMP obj=", this->getId (), " origin=(", origin.x, ",", origin.y, ",", origin.z, ") size=(", size.x,
+	    ",", size.y, ") scale=(", scale.x, ",", scale.y, ") rect=[", this->m_pos.x, "..", this->m_pos.z, "]x[",
+	    this->m_pos.w, "..", this->m_pos.y, "] scene=", scene_width, "x", scene_height
+	);
+    }
+
     // register both FBOs into the scene
     std::ostringstream nameA, nameB;
 
@@ -268,12 +270,34 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     nameA << "_rt_imageLayerComposite_" << this->getImage ().id << "_a";
     nameB << "_rt_imageLayerComposite_" << this->getImage ().id << "_b";
 
-    this->m_currentMainFBO = this->m_mainFBO = scene.create (
-	nameA.str (), TextureFormat_ARGB8888, this->m_texture->getFlags (), 1, { size.x, size.y }, { size.x, size.y }
-    );
-    this->m_currentSubFBO = this->m_subFBO = scene.create (
-	nameB.str (), TextureFormat_ARGB8888, this->m_texture->getFlags (), 1, { size.x, size.y }, { size.x, size.y }
-    );
+    static const bool s_fboCoverage = getenv ("LWE_NOFBOCOVERAGE") == nullptr;
+    static const bool s_fboCoverageLog = getenv ("LWE_FBOCOVERAGE") != nullptr;
+    glm::vec2 fboBase = { size.x, size.y };
+    if (s_fboCoverage) {
+	const glm::vec2 coverage = glm::abs (glm::vec2 (size) * glm::vec2 (scale));
+	fboBase = glm::max (fboBase, glm::min (coverage, glm::vec2 (scene_width, scene_height)));
+	if (s_fboCoverageLog && fboBase != glm::vec2 (size)) {
+	    sLog.out (
+		"LWE-FBOCOVERAGE obj=", this->getId (), " authored=", size.x, "x", size.y, " -> fbo=", fboBase.x, "x",
+		fboBase.y
+	    );
+	}
+    }
+    const glm::vec2 fboSize = scene.clampToCap (fboBase);
+    const uint32_t fboFlags = this->m_texture->getFlags ();
+    const TextureFormat compositeFormat = scene.isHdrBloom () ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
+    auto [poolA, poolB] = scene.leaseCompositePair (this->getImage ().id, fboSize, fboFlags, compositeFormat);
+    if (poolA != nullptr && poolB != nullptr) {
+	this->m_currentMainFBO = this->m_mainFBO = poolA;
+	this->m_currentSubFBO = this->m_subFBO = poolB;
+    } else {
+	this->m_currentMainFBO = this->m_mainFBO = scene.create (
+	    nameA.str (), compositeFormat, fboFlags, 1, { fboSize.x, fboSize.y }, { fboSize.x, fboSize.y }
+	);
+	this->m_currentSubFBO = this->m_subFBO = scene.create (
+	    nameB.str (), compositeFormat, fboFlags, 1, { fboSize.x, fboSize.y }, { fboSize.x, fboSize.y }
+	);
+    }
 
     // build a list of vertices, these might need some change later (or maybe invert the camera)
     GLfloat sceneSpacePosition[] = { this->m_pos.x, this->m_pos.y, 0.0f, this->m_pos.x, this->m_pos.w, 0.0f,
@@ -340,6 +364,14 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	}
     }
 
+    if (getenv ("LWE_IMGDUMP") != nullptr && this->getTexture () != nullptr) {
+	sLog.out (
+	    "LWE-UVDUMP obj=", this->getId (), " texReal=", this->getTexture ()->getRealWidth (), "x",
+	    this->getTexture ()->getRealHeight (), " texAlloc=", this->getTexture ()->getTextureWidth (0), "x",
+	    this->getTexture ()->getTextureHeight (0), " copyUV=[", x, "..", width, "]x[", y, "..", height, "]"
+	);
+    }
+
     GLfloat texcoordCopy[] = { x, height, x, y, width, height, width, height, x, y, width, y };
 
     GLfloat copySpacePosition[] = { realX,     realHeight, 0.0f, realX, realY, 0.0f, realWidth, realHeight, 0.0f,
@@ -378,8 +410,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
     this->m_sceneCenter
 	= glm::vec3 ((this->m_pos.x + this->m_pos.z) / 2.0f, (this->m_pos.y + this->m_pos.w) / 2.0f, 0.0f);
 
-    this->m_modelViewProjectionScreen
-	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt ();
+    this->m_modelViewProjectionScreen = this->buildScreenViewProjection ();
 
     if (this->getImage ().model->passthrough) {
 	this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
@@ -387,7 +418,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	this->m_modelViewProjectionCopy = glm::ortho<float> (0.0, size.x, 0.0, size.y);
     }
     this->m_modelViewProjectionCopyInverse = glm::inverse (this->m_modelViewProjectionCopy);
-    this->m_modelMatrix = glm::ortho<float> (0.0, size.x, 0.0, size.y);
+    this->m_modelMatrix = glm::mat4 (1.0);
     this->m_viewProjectionMatrix = glm::mat4 (1.0);
 
     // ensure the input texture is marked as used
@@ -431,75 +462,26 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	const auto stream = this->getScene ().getScene ().project.assetLocator->read (*this->getImage ().model->puppet);
 	std::vector<char> data { std::istreambuf_iterator<char> (*stream), std::istreambuf_iterator<char> () };
 
-	constexpr size_t markerSize = 9;
-	constexpr size_t meshHeaderSize = sizeof (uint32_t) * 2;
-	constexpr size_t vertexStride = 80;
-	constexpr size_t positionOffset = 0;
-	constexpr size_t uvOffset = 72;
-
-	const std::string puppetVersion
-	    = data.size () >= markerSize ? std::string (data.data (), strlen ("MDLV0021")) : "";
-	if (puppetVersion != "MDLV0021" && puppetVersion != "MDLV0023") {
-	    sLog.error ("Unsupported puppet model header ", puppetVersion, " in ", *this->getImage ().model->puppet);
+	std::string error;
+	auto parsed = PuppetModel::parse (data, error);
+	if (!parsed.has_value ()) {
+	    sLog.error ("Could not parse puppet ", *this->getImage ().model->puppet, ": ", error);
 	    return false;
 	}
+	this->m_puppetModel = std::move (parsed);
+	const auto& model = *this->m_puppetModel;
 
-	const size_t mdlsOffset = [&data] () -> size_t {
-	    for (size_t offset = markerSize; offset + strlen ("MDLS") < data.size (); offset++) {
-		if (std::memcmp (data.data () + offset, "MDLS", strlen ("MDLS")) == 0) {
-		    return offset;
-		}
-	    }
-	    return data.size ();
-	}();
-
-	auto meshBuffer = std::make_unique<char[]> (data.size ());
-	std::copy (data.begin (), data.end (), meshBuffer.get ());
-	const BinaryReader reader (std::make_shared<MemoryStream> (std::move (meshBuffer), data.size ()));
-	const auto meshBlock = findPuppetMeshBlock (reader, markerSize, mdlsOffset, meshHeaderSize, vertexStride);
-	if (!meshBlock.has_value ()) {
-	    sLog.error ("Could not find a usable MDLV mesh block in ", *this->getImage ().model->puppet);
-	    return false;
-	}
-
-	const size_t vertexCount = meshBlock->vertexBytes / vertexStride;
-	const size_t verticesOffset = meshBlock->headerOffset + meshHeaderSize;
-	const size_t indicesOffset = verticesOffset + meshBlock->vertexBytes + sizeof (uint32_t);
-	const size_t indexCount = meshBlock->indexBytes / sizeof (uint16_t);
-	std::vector<GLfloat> texcoords;
-	std::vector<GLushort> indices;
-
+	const size_t vertexCount = model.positions.size ();
 	this->m_puppetRawPositions.clear ();
 	this->m_puppetRawPositions.reserve (vertexCount * 3);
+	std::vector<GLfloat> texcoords;
 	texcoords.reserve (vertexCount * 2);
-	indices.reserve (indexCount);
-
-	for (size_t index = 0; index < vertexCount; index++) {
-	    const size_t vertexOffset = verticesOffset + index * vertexStride;
-	    reader.base ().seekg (static_cast<std::streamoff> (vertexOffset + positionOffset), std::ios::beg);
-	    const float x = reader.nextFloat ();
-	    const float y = reader.nextFloat ();
-	    const float z = reader.nextFloat ();
-	    reader.base ().seekg (static_cast<std::streamoff> (vertexOffset + uvOffset), std::ios::beg);
-	    const float u = reader.nextFloat ();
-	    const float v = reader.nextFloat ();
-
-	    this->m_puppetRawPositions.push_back (x);
-	    this->m_puppetRawPositions.push_back (y);
-	    this->m_puppetRawPositions.push_back (z);
-	    texcoords.push_back (u);
-	    texcoords.push_back (v);
-	}
-
-	reader.base ().seekg (static_cast<std::streamoff> (indicesOffset), std::ios::beg);
-	for (size_t index = 0; index < indexCount; index++) {
-	    uint16_t value = 0;
-	    reader.next (reinterpret_cast<char*> (&value), sizeof (value));
-	    if (value >= vertexCount) {
-		sLog.error ("Invalid puppet mesh index ", value, " in ", *this->getImage ().model->puppet);
-		return false;
-	    }
-	    indices.push_back (value);
+	for (size_t i = 0; i < vertexCount; i++) {
+	    this->m_puppetRawPositions.push_back (model.positions[i].x);
+	    this->m_puppetRawPositions.push_back (model.positions[i].y);
+	    this->m_puppetRawPositions.push_back (model.positions[i].z);
+	    texcoords.push_back (model.uvs[i].x);
+	    texcoords.push_back (model.uvs[i].y);
 	}
 
 	this->updatePuppetPositionBuffer (size);
@@ -509,13 +491,27 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 	glBufferData (GL_ARRAY_BUFFER, texcoords.size () * sizeof (GLfloat), texcoords.data (), GL_STATIC_DRAW);
 
 	glGenBuffers (1, &this->m_puppetIndices);
-	glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, this->m_puppetIndices);
-	glBufferData (GL_ELEMENT_ARRAY_BUFFER, indices.size () * sizeof (GLushort), indices.data (), GL_STATIC_DRAW);
+	glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetIndices);
+	glBufferData (
+	    GL_ARRAY_BUFFER, model.indices.size () * sizeof (GLushort), model.indices.data (), GL_STATIC_DRAW
+	);
 
-	this->m_puppetIndexCount = static_cast<GLsizei> (indices.size ());
+	this->m_puppetIndexCount = static_cast<GLsizei> (model.indices.size ());
+
+	for (const auto& layer : this->getImage ().animationLayers) {
+	    const auto clipId = static_cast<uint32_t> (layer->animation->value->getInt ());
+	    const auto* clip = model.findClip (clipId);
+	    if (clip == nullptr) {
+		sLog.out ("Puppet ", *this->getImage ().model->puppet, ": no clip with id ", clipId, ", layer ignored");
+		continue;
+	    }
+	    this->m_puppetLayers.push_back (PuppetLayerBinding { .clip = clip, .layer = layer.get () });
+	}
+
 	sLog.out (
-	    "Loaded puppet mesh ", *this->getImage ().model->puppet, " version=", puppetVersion,
-	    " vertices=", vertexCount, " indices=", this->m_puppetIndexCount
+	    "Loaded puppet ", *this->getImage ().model->puppet, " vertices=", vertexCount,
+	    " indices=", this->m_puppetIndexCount, " bones=", model.bones.size (), " clips=", model.clips.size (),
+	    " layers=", this->m_puppetLayers.size ()
 	);
 
 	return true;
@@ -526,16 +522,29 @@ bool CImage::loadPuppetMesh (const glm::vec2& size) {
 }
 
 void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
-    if (this->m_puppetRawPositions.empty ()) {
+    this->uploadPuppetPositions (this->m_puppetRawPositions, size);
+}
+
+void CImage::uploadPuppetPositions (const std::vector<GLfloat>& raw, const glm::vec2& size) {
+    if (raw.empty ()) {
 	return;
     }
 
     std::vector<GLfloat> positions;
-    positions.reserve (this->m_puppetRawPositions.size ());
-    for (size_t index = 0; index + 2 < this->m_puppetRawPositions.size (); index += 3) {
-	positions.push_back (size.x / 2.0f + this->m_puppetRawPositions[index]);
-	positions.push_back (size.y / 2.0f - this->m_puppetRawPositions[index + 1]);
-	positions.push_back (this->m_puppetRawPositions[index + 2]);
+    positions.reserve (raw.size ());
+    for (size_t index = 0; index + 2 < raw.size (); index += 3) {
+	const float localX = size.x / 2.0f + raw[index];
+	const float localY = size.y / 2.0f - raw[index + 1];
+	if (this->m_puppetScreenSpace) {
+	    const float u = localX / size.x;
+	    const float v = localY / size.y;
+	    positions.push_back (this->m_pos.x + u * (this->m_pos.z - this->m_pos.x));
+	    positions.push_back (this->m_pos.w + v * (this->m_pos.y - this->m_pos.w));
+	} else {
+	    positions.push_back (localX);
+	    positions.push_back (localY);
+	}
+	positions.push_back (raw[index + 2]);
     }
 
     if (this->m_puppetSpacePosition == GL_NONE) {
@@ -543,6 +552,41 @@ void CImage::updatePuppetPositionBuffer (const glm::vec2& size) {
     }
     glBindBuffer (GL_ARRAY_BUFFER, this->m_puppetSpacePosition);
     glBufferData (GL_ARRAY_BUFFER, positions.size () * sizeof (GLfloat), positions.data (), GL_DYNAMIC_DRAW);
+}
+
+void CImage::updatePuppetAnimation () {
+    if (!this->m_hasPuppetMesh || !this->m_puppetModel.has_value () || this->m_puppetLayers.empty ()
+	|| !this->m_puppetModel->hasAnimation ()) {
+	return;
+    }
+
+    this->m_puppetActiveScratch.clear ();
+    for (const auto& binding : this->m_puppetLayers) {
+	if (!binding.layer->visible->value->getBool ()) {
+	    continue;
+	}
+	this->m_puppetActiveScratch.push_back (
+	    PuppetModel::ActiveLayer {
+		.clip = binding.clip,
+		.rate = binding.layer->rate->value->getFloat (),
+		.blend = binding.layer->blend->value->getFloat (),
+	    }
+	);
+    }
+
+    this->m_puppetModel->evaluateSkinning (
+	this->m_puppetActiveScratch, static_cast<double> (g_Time), this->m_puppetSkinMatrices
+    );
+    this->m_puppetModel->skinPositions (this->m_puppetSkinMatrices, this->m_puppetSkinnedPositions);
+
+    this->m_puppetSkinnedFlat.resize (this->m_puppetSkinnedPositions.size () * 3);
+    for (size_t i = 0; i < this->m_puppetSkinnedPositions.size (); i++) {
+	this->m_puppetSkinnedFlat[i * 3 + 0] = this->m_puppetSkinnedPositions[i].x;
+	this->m_puppetSkinnedFlat[i * 3 + 1] = this->m_puppetSkinnedPositions[i].y;
+	this->m_puppetSkinnedFlat[i * 3 + 2] = this->m_puppetSkinnedPositions[i].z;
+    }
+
+    this->uploadPuppetPositions (this->m_puppetSkinnedFlat, this->m_size);
 }
 
 void CImage::setupPuppetGeometryCallback (Effects::CPass* pass) const {
@@ -646,76 +690,92 @@ void CImage::setup () {
 		continue;
 	    }
 
-	    const auto fboProvider = std::make_shared<FBOProvider> (this);
+	    const size_t passesBefore = this->m_passes.size ();
+	    const size_t virtualsBefore = this->m_virtualPassess.size ();
 
-	    // create all the fbos for this effect
-	    for (const auto& fbo : cur->effect->fbos) {
-		fboProvider->create (*fbo, this->m_texture->getFlags (), this->getSize ());
-	    }
+	    try {
 
-	    // TODO: MAKE USE OF ZIP OPERATOR IN BOOST? WAY OVERKILL JUST FOR THIS...
+		const auto fboProvider = std::make_shared<FBOProvider> (this);
 
-	    auto curEffect = cur->effect->passes.begin ();
-	    auto endEffect = cur->effect->passes.end ();
-	    auto curOverride = cur->passOverrides.begin ();
-	    auto endOverride = cur->passOverrides.end ();
+		// create all the fbos for this effect
+		for (const auto& fbo : cur->effect->fbos) {
+		    fboProvider->create (
+			*fbo, this->m_texture->getFlags (), this->getScene ().clampToCap (this->getSize ())
+		    );
+		}
 
-	    for (; curEffect != endEffect; ++curEffect) {
-		if (!(*curEffect)->material.has_value ()) {
-		    if (!(*curEffect)->command.has_value ()) {
-			sLog.error ("Pass without material and command not supported");
-			continue;
-		    }
+		// TODO: MAKE USE OF ZIP OPERATOR IN BOOST? WAY OVERKILL JUST FOR THIS...
 
-		    if (!(*curEffect)->source.has_value ()) {
-			sLog.error ("Pass without material and source not supported");
-			continue;
-		    }
+		auto curEffect = cur->effect->passes.begin ();
+		auto endEffect = cur->effect->passes.end ();
+		auto curOverride = cur->passOverrides.begin ();
+		auto endOverride = cur->passOverrides.end ();
 
-		    if (!(*curEffect)->target.has_value ()) {
-			sLog.error ("Pass without material and target not supported");
-			continue;
-		    }
+		for (; curEffect != endEffect; ++curEffect) {
+		    if (!(*curEffect)->material.has_value ()) {
+			if (!(*curEffect)->command.has_value ()) {
+			    sLog.error ("Pass without material and command not supported");
+			    continue;
+			}
 
-		    if ((*curEffect)->command != Command_Copy) {
-			sLog.error ("Only copy command is supported for pass without material");
-			continue;
-		    }
+			if (!(*curEffect)->source.has_value ()) {
+			    sLog.error ("Pass without material and source not supported");
+			    continue;
+			}
 
-		    auto virtualPass
-			= std::make_unique<MaterialPass> (MaterialPass { .blending = BlendingMode_Normal,
-									 .cullmode = CullingMode_Disable,
-									 .depthtest = DepthtestMode_Disabled,
-									 .depthwrite = DepthwriteMode_Disabled,
-									 .shader = "commands/copy",
-									 .textures = { { 0, *(*curEffect)->source } },
-									 .combos = {},
-									 .constants = {} });
+			if (!(*curEffect)->target.has_value ()) {
+			    sLog.error ("Pass without material and target not supported");
+			    continue;
+			}
 
-		    const auto& config = *this->m_virtualPassess.emplace_back (std::move (virtualPass));
+			if ((*curEffect)->command != Command_Copy) {
+			    sLog.error ("Only copy command is supported for pass without material");
+			    continue;
+			}
 
-		    // build a pass for a copy shader
-		    this->m_passes.push_back (new CPass (
-			*this, fboProvider, config, std::nullopt, std::nullopt, (*curEffect)->target.value ()
-		    ));
-		} else {
-		    for (auto& pass : (*curEffect)->material.value ()->passes) {
-			const auto override = curOverride != endOverride
-			    ? **curOverride
-			    : std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
-			const auto target = (*curEffect)->target.has_value ()
-			    ? *(*curEffect)->target
-			    : std::optional<std::reference_wrapper<std::string>> (std::nullopt);
+			auto virtualPass = std::make_unique<MaterialPass> (MaterialPass {
+			    .blending = BlendingMode_Normal,
+			    .cullmode = CullingMode_Disable,
+			    .depthtest = DepthtestMode_Disabled,
+			    .depthwrite = DepthwriteMode_Disabled,
+			    .shader = "commands/copy",
+			    .textures = { { 0, *(*curEffect)->source } },
+			    .combos = {},
+			    .constants = {} });
 
-			this->m_passes.push_back (
-			    new CPass (*this, fboProvider, *pass, override, (*curEffect)->binds, target)
-			);
-		    }
+			const auto& config = *this->m_virtualPassess.emplace_back (std::move (virtualPass));
 
-		    if (curOverride != endOverride) {
-			++curOverride;
+			// build a pass for a copy shader
+			this->m_passes.push_back (new CPass (
+			    *this, fboProvider, config, std::nullopt, std::nullopt, (*curEffect)->target.value ()
+			));
+		    } else {
+			for (auto& pass : (*curEffect)->material.value ()->passes) {
+			    const auto override = curOverride != endOverride
+				? **curOverride
+				: std::optional<std::reference_wrapper<const ImageEffectPassOverride>> (std::nullopt);
+			    const auto target = (*curEffect)->target.has_value ()
+				? *(*curEffect)->target
+				: std::optional<std::reference_wrapper<std::string>> (std::nullopt);
+
+			    this->m_passes.push_back (
+				new CPass (*this, fboProvider, *pass, override, (*curEffect)->binds, target)
+			    );
+			}
+
+			if (curOverride != endOverride) {
+			    ++curOverride;
+			}
 		    }
 		}
+
+	    } catch (const std::exception& e) {
+		for (size_t i = passesBefore; i < this->m_passes.size (); i++) {
+		    delete this->m_passes[i];
+		}
+		this->m_passes.resize (passesBefore);
+		this->m_virtualPassess.resize (virtualsBefore);
+		sLog.error ("Effect '", cur->name, "' failed to build - skipping it: ", e.what ());
 	    }
 	}
     }
@@ -764,6 +824,8 @@ void CImage::setup () {
 	    *this, std::make_shared<FBOProvider> (this), **this->m_materials.colorBlending.material->passes.begin (),
 	    *this->m_materials.colorBlending.override, std::nullopt, std::nullopt
 	));
+	static const glm::vec4 s_identityColor4 (1.0f);
+	this->m_passes.back ()->addUniform ("g_Color4", &s_identityColor4);
     }
 
     // if there's more than one pass the blendmode has to be moved from the beginning to the end
@@ -773,6 +835,10 @@ void CImage::setup () {
 
 	(*last)->setBlendingMode ((*first)->getBlendingMode ());
 	(*first)->setBlendingMode (BlendingMode_Normal);
+    }
+
+    if (this->m_isShape && !this->m_passes.empty ()) {
+	this->m_passes.back ()->setBlendingMode (BlendingMode_Additive);
     }
 
     CRenderable::setup ();
@@ -808,6 +874,13 @@ void CImage::setupPasses () {
 	    = (isFirstPass) ? &this->m_modelViewProjectionCopy : &this->m_modelViewProjectionPass;
 	const glm::mat4* inverseProjection
 	    = (isFirstPass) ? &this->m_modelViewProjectionCopyInverse : &this->m_modelViewProjectionPassInverse;
+	// classic-light frame follows the vertex space chosen above: first passes render
+	// image-LOCAL 0..size verts (copy projection); overridden below if this pass gets
+	// redirected to the screen
+	pass->setClassicLocalFrame (isFirstPass);
+	pass->setScreenViewProjectionMatrix (
+	    isFirstPass ? &this->m_lweScreenVPComposite : &this->m_modelViewProjectionPass
+	);
 	first = false;
 
 	if (isFirstPass && this->m_hasPuppetMesh) {
@@ -816,17 +889,31 @@ void CImage::setupPasses () {
 	}
 
 	pass->setModelMatrix (&this->m_modelMatrix);
-	pass->setViewProjectionMatrix (&this->m_viewProjectionMatrix);
 
 	writesToTarget = this->configurePassTarget (pass, drawTo, asInput, effectInput, inTargetEffectSequence);
 	// determine if it's the last element in the list as this is a screen-copy-like process
 	// TODO: PROPERLY CHECK IF THIS IS ALL THAT'S NEEDED
 	if (!writesToTarget && this->shouldRenderFinalPass (std::next (cur) == end)) {
 	    // TODO: PROPERLY CHECK EFFECT'S VISIBILITY AND TAKE IT INTO ACCOUNT
-	    spacePosition = this->getSceneSpacePosition ();
 	    drawTo = this->getScene ().getFBO ();
-	    projection = &this->m_modelViewProjectionScreen;
-	    inverseProjection = &this->m_modelViewProjectionScreenInverse;
+
+	    if (this->getImage ().model->passthrough && this->getImage ().model->fullscreen) {
+		spacePosition = this->getPassSpacePosition ();
+		projection = &this->m_modelViewProjectionPass;
+		inverseProjection = &this->m_modelViewProjectionPassInverse;
+	    } else {
+		spacePosition = this->getSceneSpacePosition ();
+		projection = &this->m_modelViewProjectionScreen;
+		inverseProjection = &this->m_modelViewProjectionScreenInverse;
+	    }
+
+	    pass->setClassicLocalFrame (false);
+	    pass->setScreenViewProjectionMatrix (projection);
+
+	    if (isFirstPass && this->m_hasPuppetMesh && !this->m_puppetScreenSpace) {
+		this->m_puppetScreenSpace = true;
+		this->updatePuppetPositionBuffer (this->m_size);
+	    }
 	}
 
 	pass->setDestination (drawTo);
@@ -836,6 +923,20 @@ void CImage::setupPasses () {
 	pass->setTexCoord (texcoord);
 	pass->setModelViewProjectionMatrix (projection);
 	pass->setModelViewProjectionMatrixInverse (inverseProjection);
+	pass->setViewProjectionMatrix (projection);
+
+	static const bool s_passDump = getenv ("LWE_IMGDUMP") != nullptr;
+	if (s_passDump) {
+	    const char* projName = (projection == &this->m_modelViewProjectionScreen) ? "SCREEN"
+		: (projection == &this->m_modelViewProjectionCopy)                    ? "COPY"
+										      : "PASS";
+	    sLog.out (
+		"LWE-PASSDUMP obj=", this->getId (), " pass=", static_cast<const void*> (pass), " proj=", projName,
+		" projScale=(", (*projection)[0][0], ",", (*projection)[1][1], ")",
+		" pos=", (spacePosition == this->getSceneSpacePosition ()) ? "SCENE" : "LOCAL",
+		" drawToScene=", (drawTo == this->getScene ().getFBO ()) ? 1 : 0, " writesToTarget=", writesToTarget
+	    );
+	}
 
 	texcoord = this->getTexCoordPass ();
 
@@ -912,7 +1013,8 @@ void CImage::render () {
 	return;
     }
 
-    if (!this->getImage ().visible->value->getBool ()) {
+    const bool imgVisible = this->getImage ().visible->value->getBool ();
+    if (!imgVisible && !this->getScene ().isCompositeShared (this->getImage ().id)) {
 	return;
     }
 
@@ -920,6 +1022,21 @@ void CImage::render () {
 
     // Always update screen transform (handles rotation + parallax dynamically)
     this->updateScreenSpacePosition ();
+
+    if (this->m_texture != nullptr) {
+	const auto animScale = this->getImage ().scale->value->getVec3 ();
+	const auto fbo = this->getScene ().getFBO ();
+	const float projW = static_cast<float> (this->getScene ().getWidth ());
+	const float pxPerUnit
+	    = (fbo != nullptr && projW > 0.0f) ? static_cast<float> (fbo->getRealWidth ()) / projW : 1.0f;
+	MipResidency::maybeExpand (
+	    this->m_texture.get (), std::abs (this->getSize ().x * animScale.x) * pxPerUnit,
+	    std::abs (this->getSize ().y * animScale.y) * pxPerUnit,
+	    MipResidency::largestOutputDimension (this->getScene ().getContext ())
+	);
+    }
+
+    this->updatePuppetAnimation ();
 
 #if !NDEBUG
     std::string str = "Image ";
@@ -937,8 +1054,8 @@ void CImage::render () {
     auto cur = this->m_passes.begin ();
 
     for (const auto end = this->m_passes.end (); cur != end; ++cur) {
-	if (std::next (cur) == end) {
-	    glColorMask (true, true, true, false);
+	if (std::next (cur) == end && imgVisible) {
+	    glColorMask (true, true, true, this->getScene ().isRenderingToComposition () ? GL_TRUE : GL_FALSE);
 	}
 
 	(*cur)->render ();
@@ -957,7 +1074,10 @@ const float& CImage::getAlpha () const { return this->m_image.alpha->value->getF
 
 const glm::vec3& CImage::getColor () const { return this->m_image.color->value->getVec3 (); }
 
-const glm::vec4& CImage::getColor4 () const { return this->m_image.color->value->getVec4 (); }
+glm::vec4 CImage::getColor4 () const {
+    return { this->m_image.color->value->getVec3 () * this->m_image.brightness->value->getFloat (),
+	     this->m_image.alpha->value->getFloat () };
+}
 
 const glm::vec3& CImage::getCompositeColor () const { return this->m_image.color->value->getVec3 (); }
 
@@ -1015,9 +1135,12 @@ void CImage::updateScenePosition (
 }
 
 void CImage::uploadGeometryBuffers (const glm::vec2& size) {
-    GLfloat sceneSpacePosition[] = { this->m_pos.x, this->m_pos.y, 0.0f, this->m_pos.x, this->m_pos.w, 0.0f,
-				     this->m_pos.z, this->m_pos.y, 0.0f, this->m_pos.z, this->m_pos.y, 0.0f,
-				     this->m_pos.x, this->m_pos.w, 0.0f, this->m_pos.z, this->m_pos.w, 0.0f };
+    // perspective:true objects sit at their authored z (e.g. 3D Earth at z=-3000);
+    // everything else renders on the z=0 plane
+    const GLfloat z = this->getImage ().perspective ? this->getImage ().origin->value->getVec3 ().z : 0.0f;
+    GLfloat sceneSpacePosition[]
+	= { this->m_pos.x, this->m_pos.y, z, this->m_pos.x, this->m_pos.w, z, this->m_pos.z, this->m_pos.y, z,
+	    this->m_pos.z, this->m_pos.y, z, this->m_pos.x, this->m_pos.w, z, this->m_pos.z, this->m_pos.w, z };
 
     float width = 1.0f;
     float height = 1.0f;
@@ -1070,7 +1193,7 @@ void CImage::uploadGeometryBuffers (const glm::vec2& size) {
 	? this->m_modelViewProjectionScreen
 	: glm::ortho<float> (0.0, size.x, 0.0, size.y);
     this->m_modelViewProjectionCopyInverse = glm::inverse (this->m_modelViewProjectionCopy);
-    this->m_modelMatrix = glm::ortho<float> (0.0, size.x, 0.0, size.y);
+    this->m_modelMatrix = glm::mat4 (1.0);
 }
 
 CImage::ResolvedTransform CImage::updateGeometryBuffers () {
@@ -1088,15 +1211,160 @@ CImage::ResolvedTransform CImage::updateGeometryBuffers () {
 
     this->updateScenePosition (origin, size, scale, sceneWidth, sceneHeight);
     this->uploadGeometryBuffers (size);
+    if (this->m_isShape) {
+	this->applyShapeGeometry (transform);
+    }
+
+    static const bool s_imgProbe = getenv ("LWE_IMGPROBE") != nullptr;
+    static int s_imgProbeCount = 0;
+    if (s_imgProbe && s_imgProbeCount < 600 && ++s_imgProbeCount > 0) {
+	const auto& cam = this->getScene ().getCamera ();
+	sLog.out (
+	    "LWE-IMGPROBE id=", this->getId (), " scene=", sceneWidth, "x", sceneHeight, " cam=", cam.getWidth (), "x",
+	    cam.getHeight (), " size=", size.x, "x", size.y, " pos=[", this->m_pos.x, ",", this->m_pos.y, "..",
+	    this->m_pos.z, ",", this->m_pos.w, "]"
+	);
+    }
     return transform;
+}
+
+glm::vec3 CImage::toClassicLightSpace (const glm::vec3& litSpacePos) const {
+    const glm::vec4 p = this->m_lweMPosFromWorld * glm::vec4 (litSpacePos, 1.0f);
+    return { p.x, p.y, p.z };
+}
+
+glm::vec3 CImage::toClassicLightSpaceLocal (const glm::vec3& litSpacePos) const {
+    const glm::vec3 world = this->toClassicLightSpace (litSpacePos);
+    const float spanX = this->m_pos.z - this->m_pos.x;
+    const float spanY = this->m_pos.y - this->m_pos.w;
+    if (spanX == 0.0f || spanY == 0.0f) {
+	return world;
+    }
+
+    const float u = (world.x - this->m_pos.x) / spanX;
+    const float v = (world.y - this->m_pos.w) / spanY;
+    const float unitScale = std::sqrt (std::abs ((this->m_size.x / spanX) * (this->m_size.y / spanY)));
+    return { u * this->m_size.x, v * this->m_size.y, world.z * unitScale };
+}
+
+float CImage::classicLocalRadianceScale () const {
+    // local units = world units / layer scale; 1/d^2 in local units runs scale^2 hot.
+    // Compensate with the per-axis unit ratio (abs: mirrored layers have negative spans).
+    const float spanX = this->m_pos.z - this->m_pos.x;
+    const float spanY = this->m_pos.y - this->m_pos.w;
+    if (spanX == 0.0f || spanY == 0.0f || this->m_size.x == 0.0f || this->m_size.y == 0.0f) {
+	return 1.0f;
+    }
+    return std::abs ((this->m_size.x / spanX) * (this->m_size.y / spanY)) * 1.5f;
+}
+
+void CImage::applyShapeGeometry (const ResolvedTransform& transform) {
+    const auto& effects = this->m_image.effects;
+    if (effects.empty () || effects.front ()->passOverrides.empty ()) {
+	return;
+    }
+    const auto& constants = effects.front ()->passOverrides.front ()->constants;
+    glm::vec2 pts[4];
+    for (int i = 0; i < 4; i++) {
+	const auto it = constants.find ("point" + std::to_string (i));
+	if (it == constants.end () || !it->second || !it->second->value) {
+	    return; // non-quad or differently-authored shape: keep default geometry
+	}
+	pts[i] = it->second->value->getVec2 ();
+    }
+
+    const auto sceneW = static_cast<float> (this->getScene ().getWidth ());
+    const auto sceneH = static_cast<float> (this->getScene ().getHeight ());
+    const glm::vec3 origin = transform.origin;
+    const float ca = std::cos (transform.angle);
+    const float sa = std::sin (transform.angle);
+
+    static const bool s_shapeProbe = getenv ("LWE_IMGPROBE") != nullptr;
+    static int s_shapeProbeCount = 0;
+    if (s_shapeProbe && s_shapeProbeCount < 4 && ++s_shapeProbeCount > 0) {
+	sLog.out (
+	    "LWE-SHAPEPROBE id=", this->getId (), " origin=(", origin.x, ",", origin.y, ") angle=", transform.angle,
+	    " canvas=", sceneW, "x", sceneH
+	);
+    }
+
+    glm::vec3 corners[4];
+    for (int i = 0; i < 4; i++) {
+	const glm::vec2 local = sceneH * glm::vec2 (pts[i].x - 0.5f, 0.5f - pts[i].y);
+	const glm::vec2 world
+	    = glm::vec2 (origin) + glm::vec2 (ca * local.x - sa * local.y, sa * local.x + ca * local.y);
+	// authored y-up world -> our centered, y-flipped scene space (same
+	// conversion updateScenePosition applies to rectangular layers)
+	corners[i] = { world.x - sceneW / 2.0f, sceneH / 2.0f - world.y, 0.0f };
+    }
+
+    // reference triangulation (0,2,1)(0,3,2); UVs follow the same order
+    const int order[6] = { 0, 2, 1, 0, 3, 2 };
+    GLfloat positions[18];
+    GLfloat uvs[12];
+    for (int v = 0; v < 6; v++) {
+	positions[v * 3 + 0] = corners[order[v]].x;
+	positions[v * 3 + 1] = corners[order[v]].y;
+	positions[v * 3 + 2] = 0.0f;
+	uvs[v * 2 + 0] = pts[order[v]].x;
+	uvs[v * 2 + 1] = pts[order[v]].y;
+    }
+
+    glBindBuffer (GL_ARRAY_BUFFER, this->m_sceneSpacePosition);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (positions), positions, GL_STATIC_DRAW);
+    glBindBuffer (GL_ARRAY_BUFFER, this->m_texcoordPass);
+    glBufferData (GL_ARRAY_BUFFER, sizeof (uvs), uvs, GL_STATIC_DRAW);
+    glBindBuffer (GL_ARRAY_BUFFER, GL_NONE);
+
+    static const bool s_bufProbe = getenv ("LWE_IMGPROBE") != nullptr;
+    static int s_bufProbeCount = 0;
+    if (s_bufProbe && s_bufProbeCount < 2 && ++s_bufProbeCount > 0) {
+	GLfloat back[18] = {};
+	glBindBuffer (GL_ARRAY_BUFFER, this->m_sceneSpacePosition);
+	glGetBufferSubData (GL_ARRAY_BUFFER, 0, sizeof (back), back);
+	glBindBuffer (GL_ARRAY_BUFFER, GL_NONE);
+	sLog.out (
+	    "LWE-SHAPEBUF pos v0=(", back[0], ",", back[1], ") v1=(", back[3], ",", back[4], ") v2=(", back[6], ",",
+	    back[7], ") v3=(", back[9], ",", back[10], ") v4=(", back[12], ",", back[13], ") v5=(", back[15], ",",
+	    back[16], ")"
+	);
+	const auto& m = this->m_modelViewProjectionScreen;
+	sLog.out (
+	    "LWE-SHAPEMVP col0=(", m[0][0], ",", m[0][1], ") col1=(", m[1][0], ",", m[1][1], ") col3=(", m[3][0], ",",
+	    m[3][1], ")"
+	);
+    }
+}
+
+glm::mat4 CImage::buildScreenViewProjection () const {
+    const auto& cam = this->getScene ().getCamera ();
+    if (!this->getImage ().perspective) {
+	if (this->getImage ().model->fullscreen || this->getImage ().model->passthrough) {
+	    return cam.getScreenProjection ();
+	}
+	// ortho scenes: lookAt is identity here (editor-viewport state, runtime-inert);
+	// perspective scenes: the 3D view belongs to models, never to 2D layers
+	return cam.isOrthogonal () ? cam.getScreenProjection () * cam.getLookAt () : cam.getScreenProjection ();
+    }
+    const float sceneW = cam.getWidth ();
+    const float sceneH = cam.getHeight ();
+    const float sceneFov = glm::radians (cam.getFov ());
+    const float overrideFov = cam.getOverrideFov ();
+    const float projFov = overrideFov > 0.0f ? glm::radians (overrideFov) : sceneFov;
+    const float eyeZ = (sceneH * 0.5f) / std::tan (projFov * 0.5f);
+    const float nearz = std::max (cam.getNearZ (), 1.0f);
+    const float farz = std::max (cam.getFarZ (), eyeZ + 10.0f * sceneH);
+
+    const glm::mat4 proj = glm::perspective (projFov, sceneW / sceneH, nearz, farz);
+    const glm::mat4 view
+	= glm::lookAt (glm::vec3 (0.0f, 0.0f, eyeZ), glm::vec3 (0.0f, 0.0f, 0.0f), glm::vec3 (0.0f, 1.0f, 0.0f));
+    return proj * view;
 }
 
 void CImage::updateScreenSpacePosition () {
     const ResolvedTransform transform = this->updateGeometryBuffers ();
 
-    // Build rotation from angles (already in radians from scene.json — see CParticle.cpp:2119)
-    // Negate X and Z rotations to account for Y-flipped coordinate system (CParticle.cpp:2120)
-    const float angle = transform.angle;
+    const float angle = this->m_isShape ? 0.0f : transform.angle;
     glm::mat4 rotModel = glm::mat4 (1.0f);
     if (angle != 0.0f) {
 	rotModel = glm::translate (rotModel, this->m_sceneCenter);
@@ -1104,37 +1372,80 @@ void CImage::updateScreenSpacePosition () {
 	rotModel = glm::translate (rotModel, -this->m_sceneCenter);
     }
 
-    glm::mat4 mvp
-	= this->getScene ().getCamera ().getProjection () * this->getScene ().getCamera ().getLookAt () * rotModel;
+    glm::mat4 mvp = this->buildScreenViewProjection ();
 
-    // Apply parallax displacement if enabled
+    float lweParX = 0.0f;
+    float lweParY = 0.0f;
     if (this->getScene ().getScene ().camera.parallax.enabled
 	&& !this->getScene ().getContext ().getApp ().getContext ().settings.mouse.disableparallax) {
-	const double parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
+	const float parallaxAmount = this->getScene ().getScene ().camera.parallax.amount->value->getFloat ();
 	const glm::vec2 depth = this->getImage ().parallaxDepth->value->getVec2 ();
 	const glm::vec2* displacement = this->getScene ().getParallaxDisplacement ();
-	const float referenceSize = static_cast<float> (this->getScene ().getWidth ());
-	float x = (depth.x + parallaxAmount) * displacement->x * referenceSize;
-	float y = (depth.y + parallaxAmount) * displacement->y * referenceSize;
+	const float x
+	    = -depth.x * parallaxAmount * displacement->x * static_cast<float> (this->getScene ().getWidth ());
+	const float y
+	    = depth.y * parallaxAmount * displacement->y * static_cast<float> (this->getScene ().getHeight ());
 	mvp = glm::translate (mvp, { x, y, 0.0f });
+	lweParX = x;
+	lweParY = y;
     }
+
+    mvp = mvp * rotModel;
 
     this->m_modelViewProjectionScreen = mvp;
     this->m_modelViewProjectionScreenInverse = glm::inverse (mvp);
+
+    this->m_lweMPosFromWorld = glm::inverse (glm::translate (glm::mat4 (1.0f), { lweParX, lweParY, 0.0f }) * rotModel);
+
+    {
+	const float sx = (this->m_pos.z - this->m_pos.x) / std::max (this->m_size.x, 1.0f);
+	const float sy = (this->m_pos.y - this->m_pos.w) / std::max (this->m_size.y, 1.0f);
+	glm::mat4 localToScene = glm::translate (glm::mat4 (1.0f), { this->m_pos.x, this->m_pos.w, 0.0f });
+	localToScene = glm::scale (localToScene, { sx, sy, 1.0f });
+	this->m_lweScreenVPComposite = mvp * localToScene;
+    }
     if (this->getImage ().model->passthrough) {
 	this->m_modelViewProjectionCopy = this->m_modelViewProjectionScreen;
 	this->m_modelViewProjectionCopyInverse = this->m_modelViewProjectionScreenInverse;
+    }
+
+    static const bool s_mvpDump = getenv ("LWE_IMGDUMP") != nullptr;
+    if (s_mvpDump) {
+	static std::set<int> s_dumped;
+	if (s_dumped.insert (this->getId ()).second) {
+	    const glm::vec4 c0 = mvp * glm::vec4 (this->m_pos.x, this->m_pos.w, 0.0f, 1.0f);
+	    const glm::vec4 c1 = mvp * glm::vec4 (this->m_pos.z, this->m_pos.y, 0.0f, 1.0f);
+	    sLog.out (
+		"LWE-MVPDUMP obj=", this->getId (), " mvp00=", mvp[0][0], " mvp11=", mvp[1][1], " mvp30=", mvp[3][0],
+		" mvp31=", mvp[3][1], " ndc=[", c0.x, "..", c1.x, "]x[", c0.y, "..", c1.y,
+		"] parallaxOn=", this->getScene ().getScene ().camera.parallax.enabled ? 1 : 0
+	    );
+	}
     }
 }
 
 const Image& CImage::getImage () const { return this->m_image; }
 
+bool CImage::isCompositionLayer () const {
+    return this->m_image.model != nullptr && this->m_image.model->filename == "models/util/composelayer.json";
+}
+
+bool CImage::copiesCompositionBackground () const { return this->m_image.copyBackground; }
+
+std::shared_ptr<const CFBO> CImage::getCompositionFBO () const { return this->m_compositionFBO; }
+
 glm::vec2 CImage::getSize () const {
-    if (this->m_texture == nullptr) {
-	return this->getImage ().size;
+    const glm::vec2 authored = this->getImage ().size;
+
+    if (authored.x > 0.0f && authored.y > 0.0f) {
+	return authored;
     }
 
-    return { this->m_texture->getRealWidth (), this->m_texture->getRealHeight () };
+    if (this->m_texture != nullptr) {
+	return { this->m_texture->getRealWidth (), this->m_texture->getRealHeight () };
+    }
+
+    return authored;
 }
 
 GLuint CImage::getSceneSpacePosition () const { return this->m_sceneSpacePosition; }
@@ -1146,3 +1457,40 @@ GLuint CImage::getPassSpacePosition () const { return this->m_passSpacePosition;
 GLuint CImage::getTexCoordCopy () const { return this->m_texcoordCopy; }
 
 GLuint CImage::getTexCoordPass () const { return this->m_texcoordPass; }
+
+std::optional<glm::vec3> CImage::cursorLocalPosition (const glm::vec3& worldPosition) const {
+    if (!this->m_image.visible->value->getBool ()) {
+	return std::nullopt;
+    }
+
+    // m_pos = the screen pass's centered-world quad edges (x/z = X extremes, y/w = Y
+    // extremes; see updateScenePosition). Rotation is applied by the pass matrix about
+    // the quad center, so un-rotate the probe point into the quad's frame first.
+    const glm::vec2 center = { (this->m_pos.x + this->m_pos.z) * 0.5f, (this->m_pos.y + this->m_pos.w) * 0.5f };
+    const glm::vec2 halfExtent
+	= { std::abs (this->m_pos.z - this->m_pos.x) * 0.5f, std::abs (this->m_pos.w - this->m_pos.y) * 0.5f };
+
+    static const bool s_cursorDbg = getenv ("LWE_CURSORDBG") != nullptr;
+    static int s_cursorDbgTick = 0;
+    if (s_cursorDbg && (s_cursorDbgTick++ % 60) == 0) {
+	const auto live = this->resolveTransform (this->getImage ());
+	sLog.out (
+	    "LWE-CURSORDBG quad id=", this->getId (), " center=", center.x, ",", center.y, " half=", halfExtent.x, ",",
+	    halfExtent.y, " liveOrigin=", live.origin.x, ",", live.origin.y, " liveScale=", live.scale.x
+	);
+    }
+
+    glm::vec2 local = glm::vec2 (worldPosition) - center;
+    const float angle = this->m_image.angles->value->getVec3 ().z;
+    if (angle != 0.0f) {
+	const float c = std::cos (-angle);
+	const float s = std::sin (-angle);
+	local = { local.x * c - local.y * s, local.x * s + local.y * c };
+    }
+
+    if (std::abs (local.x) > halfExtent.x || std::abs (local.y) > halfExtent.y) {
+	return std::nullopt;
+    }
+
+    return glm::vec3 (local, 0.0f);
+}

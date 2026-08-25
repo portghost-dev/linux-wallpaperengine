@@ -4,6 +4,7 @@
 #include "ConsoleObject.h"
 #include "EngineObject.h"
 #include "InputObject.h"
+#include "LocalStorageObject.h"
 #include "Modules/ScriptModule.h"
 #include "SceneObject.h"
 
@@ -47,6 +48,15 @@ public:
     struct LoadedModule {
 	DynamicValue& value;
 	JSValue module;
+	// WE script-space object angles are DEGREES; engine-space angles are RADIANS.
+	// For "angles_*" modules this stable mirror carries the degrees view across the
+	// update() call (linked vector args write through to it, and it must outlive the
+	// call because scripts may retain the arg). Null for every other property.
+	std::shared_ptr<DynamicValue> degreesMirror = nullptr;
+	const ScriptableObject* object = nullptr;
+	bool cursorEvents = false;
+	bool cursorInside = false;
+	bool cursorPressedInside = false;
     };
     struct JSObjectAdapters {
 	std::unique_ptr<Adapters::VectorAdapter<4>> vec4;
@@ -74,6 +84,9 @@ public:
      * @return The modified value from update(), or a copy of currentValue on error
      */
     void queueScript (const std::string& key, DynamicValue& currentValue, ScriptableObject& object);
+    void unregisterScriptable (const ScriptableObject* object);
+
+    void notifyUserPropertiesChanged (const std::map<std::string, Data::Model::PropertySharedPtr>& changed);
 
     /**
      * Runs a frame tick in the javascript engine. Dispatches any pending events,
@@ -82,7 +95,7 @@ public:
     void tick ();
 
     // -------------------------------------------------------------------
-    // Layer-script API (Phase 2 — dynamic text)
+    // Layer-script API (Phase 2 - dynamic text)
     // -------------------------------------------------------------------
     //
     // Wallpaper Engine text-object scripts follow a lifecycle pattern that
@@ -90,7 +103,7 @@ public:
     // above. They typically look like:
     //
     //   'use strict';
-    //   export var scriptProperties = createScriptProperties()…finish();
+    //   export var scriptProperties = createScriptProperties()...finish();
     //   export function init()   { /* subscribe to events, cache data    */ }
     //   export function update() { thisLayer.text = computeCurrentText(); }
     //
@@ -148,6 +161,14 @@ private:
     // Installs globalThis.__layers and related helpers. Called lazily.
     void ensureLayerRegistry ();
 
+    void dispatchCursorEvents ();
+    JSValue makeCursorEvent (const glm::vec3& worldPosition, const glm::vec3& localPosition);
+    [[nodiscard]] JSValue
+    buildUserPropertiesObject (const std::map<std::string, Data::Model::PropertySharedPtr>& changed) const;
+
+    bool m_cursorLeftDown = false;
+    std::optional<glm::vec3> m_lastCursorWorldPosition;
+
     JSRuntime* m_runtime = nullptr;
     JSContext* m_context = nullptr;
     JSValue m_globalThis;
@@ -157,6 +178,7 @@ private:
     std::unique_ptr<SceneObject> m_sceneObject;
     std::unique_ptr<ConsoleObject> m_consoleObject;
     std::unique_ptr<ScriptPropertiesObject> m_scriptPropertiesObject;
+    std::unique_ptr<LocalStorageObject> m_localStorageObject;
 
     std::map<std::string, std::unique_ptr<Modules::ScriptModule>> m_modules = {};
     std::map<std::string, LoadedModule> m_scriptModules = {};

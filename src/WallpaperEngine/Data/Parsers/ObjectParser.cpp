@@ -11,6 +11,7 @@
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <cstring>
 #include <glm/gtc/constants.hpp>
 #include <sstream>
 
@@ -25,6 +26,7 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     const auto lightIt = it.find ("light");
     // use shape to refer to VolumeLight
     const auto shapeIt = it.find ("shape");
+    const auto modelIt = it.find ("model");
 
     // Parse base object data
     // Some particle objects have numeric 'name' fields, so handle type mismatches gracefully
@@ -68,15 +70,39 @@ ObjectUniquePtr ObjectParser::parse (const JSON& it, const Project& project) {
     if (imageIt != it.end () && imageIt->is_string ()) {
 	return parseImage (it, project, std::move (basedata), *imageIt);
     } else if (soundIt != it.end () && soundIt->is_array ()) {
-	return parseSound (it, std::move (basedata));
+	return parseSound (it, project, std::move (basedata));
     } else if (particleIt != it.end ()) {
 	return parseParticle (it, project, std::move (basedata));
     } else if (textIt != it.end ()) {
 	return parseText (it, project, std::move (basedata));
-    } else if (lightIt != it.end ()) {
-	sLog.error ("Light objects are not supported yet");
+    } else if (modelIt != it.end () && modelIt->is_string ()) {
+	try {
+	    return parseModelObject (it, project, std::move (basedata), *modelIt);
+	} catch (const std::exception& e) {
+	    sLog.error ("Cannot parse model object: ", e.what ());
+	    const auto idIt = it.find ("id");
+	    basedata = ObjectData {
+		.id = (idIt != it.end () && idIt->is_number ()) ? idIt->get<int> () : -1,
+		.name = "model-parse-failed",
+		.dependencies = parseDependencies (it),
+		.parent = it.optional<int> ("parent"),
+		.origin = it.user ("origin", project.properties, glm::vec3 (0.0f)),
+		.groupScale = it.user ("scale", project.properties, glm::vec3 (1.0f)),
+		.groupAngles = it.user ("angles", project.properties, glm::vec3 (0.0f)),
+		.groupVisible = it.user ("visible", project.properties, true),
+	    };
+	}
+    } else if (lightIt != it.end () && lightIt->is_string ()) {
+	return parseLight (it, project, std::move (basedata));
     } else if (shapeIt != it.end ()) {
-	sLog.error ("VolumeLight objects are not supported yet");
+	static const bool shapesEnabled = [] {
+	    const char* env = std::getenv ("LWE_SHAPES");
+	    return env == nullptr || std::string (env) != "0";
+	}();
+	if (shapesEnabled) {
+	    return parseImage (it, project, std::move (basedata), "models/wpenginelinux_shape.json");
+	}
+	sLog.out ("Shape object ", basedata.id, " skipped (LWE_SHAPES=0)");
     } else {
 	if (!it.optional ("solid", false)) {
 	    // dump the object for now, might want to change later
@@ -99,13 +125,19 @@ std::vector<int> ObjectParser::parseDependencies (const JSON& it) {
     std::vector<int> result = {};
 
     for (const auto& cur : *dependenciesIt) {
-	result.push_back (cur);
+	if (cur.is_number ()) {
+	    result.push_back (cur);
+	} else if (cur.is_object ()) {
+	    if (const auto id = cur.find ("id"); id != cur.end () && id->is_number ()) {
+		result.push_back (*id);
+	    }
+	}
     }
 
     return result;
 }
 
-SoundUniquePtr ObjectParser::parseSound (const JSON& it, ObjectData base) {
+SoundUniquePtr ObjectParser::parseSound (const JSON& it, const Project& project, ObjectData base) {
     const auto soundIt = it.require ("sound", "Object must have a sound");
     std::vector<std::string> sounds = {};
 
@@ -118,6 +150,7 @@ SoundUniquePtr ObjectParser::parseSound (const JSON& it, ObjectData base) {
 	SoundData {
 	    .playbackmode = it.optional<std::string> ("playbackmode"),
 	    .sounds = sounds,
+	    .volume = it.user ("volume", project.properties, 1.0f),
 	}
     );
 }
@@ -137,6 +170,135 @@ TextUniquePtr ObjectParser::parseText (const JSON& it, const Project& project, O
 	    .alignment = it.optional ("horizontalalign", it.optional ("alignment", std::string ("center"))),
 	    .verticalalign = it.optional ("verticalalign", std::string ("center")),
 	    .padding = it.optional ("padding", 0),
+	    .limitwidth = it.optional ("limitwidth", false),
+	    .maxwidth = it.optional ("maxwidth", 0.0f),
+	    .limitrows = it.optional ("limitrows", false),
+	    .maxrows = it.optional ("maxrows", 1),
+	    .limituseellipsis = it.optional ("limituseellipsis", false),
+	}
+    );
+}
+
+ModelObjectUniquePtr
+ObjectParser::parseModelObject (const JSON& it, const Project& project, ObjectData base, const std::string& modelFile) {
+    // The binary .mdl names its own material: MDLV00xx magic (9 bytes), two u32s,
+    // a u32 material count, then null-terminated material paths (Earth.mdl: 1 entry).
+    const auto data = project.assetLocator->readString (modelFile);
+
+    if (data.size () < 32 || data.compare (0, 4, "MDLV") != 0) {
+	sLog.exception ("Not an MDLV model file: ", modelFile);
+    }
+
+    uint32_t submeshCount = 0;
+    std::memcpy (&submeshCount, data.data () + 17, sizeof (submeshCount));
+
+    if (submeshCount == 0 || submeshCount > 16) {
+	sLog.exception ("Unexpected submesh count ", submeshCount, " in model ", modelFile);
+    }
+
+    std::vector<std::string> materialPaths;
+    size_t offset = 21;
+    for (uint32_t i = 0; i < submeshCount; i++) {
+	const size_t nameEnd = data.find ('\0', offset);
+	if (nameEnd == std::string::npos) {
+	    sLog.exception ("Unterminated material name in model ", modelFile);
+	}
+	materialPaths.push_back (data.substr (offset, nameEnd - offset));
+	offset = nameEnd + 1;
+
+	// skip [u32 0][bounds 6f][u32 15] then both data blocks to reach the next record
+	offset += sizeof (uint32_t) + 6 * sizeof (float) + sizeof (uint32_t);
+	if (offset + sizeof (uint32_t) > data.size ()) {
+	    sLog.exception ("Truncated submesh record in model ", modelFile);
+	}
+	uint32_t blockBytes = 0;
+	std::memcpy (&blockBytes, data.data () + offset, sizeof (blockBytes));
+	offset += sizeof (uint32_t) + blockBytes;
+	if (offset + sizeof (uint32_t) > data.size ()) {
+	    sLog.exception ("Truncated submesh vertices in model ", modelFile);
+	}
+	std::memcpy (&blockBytes, data.data () + offset, sizeof (blockBytes));
+	offset += sizeof (uint32_t) + blockBytes;
+	if (offset > data.size ()) {
+	    sLog.exception ("Truncated submesh indices in model ", modelFile);
+	}
+    }
+
+    const auto& properties = project.properties;
+
+    std::unique_ptr<PropertyAnimation> anglesAnimation;
+    if (const auto anglesIt = it.find ("angles"); anglesIt != it.end () && anglesIt->is_object ()) {
+	if (const auto animIt = anglesIt->find ("animation"); animIt != anglesIt->end () && animIt->is_object ()) {
+	    anglesAnimation = std::make_unique<PropertyAnimation> ();
+	    for (int channel = 0; channel < 3; channel++) {
+		const std::string name = "c" + std::to_string (channel);
+		const auto chanIt = animIt->find (name);
+		if (chanIt == animIt->end () || !chanIt->is_array ()) {
+		    continue;
+		}
+		for (const auto& key : *chanIt) {
+		    AnimationKey k {};
+		    k.frame = key.value ("frame", 0.0f);
+		    k.value = key.value ("value", 0.0f);
+		    k.frontX
+			= key.contains ("front") && key["front"].is_object () ? key["front"].value ("x", 1.0f) : 1.0f;
+		    k.backX
+			= key.contains ("back") && key["back"].is_object () ? key["back"].value ("x", -1.0f) : -1.0f;
+		    anglesAnimation->channels[channel].keys.push_back (k);
+		    anglesAnimation->maxFrame = std::max (anglesAnimation->maxFrame, k.frame);
+		}
+	    }
+	}
+    }
+
+    std::vector<MaterialUniquePtr> extraMaterials;
+    for (size_t i = 1; i < materialPaths.size (); i++) {
+	extraMaterials.push_back (MaterialParser::load (project, materialPaths[i]));
+    }
+
+    return std::make_unique<ModelObject> (
+	std::move (base),
+	ModelObjectData {
+	    .scale = it.user ("scale", properties, glm::vec3 (1.0f)),
+	    .angles = it.user ("angles", properties, glm::vec3 (0.0f)),
+	    .visible = it.user ("visible", properties, true),
+	    .alpha = it.user ("alpha", properties, 1.0f),
+	    .color = it.color ("color", properties, Builders::ColorBuilder::White),
+	    .modelFile = modelFile,
+	    .material = MaterialParser::load (project, materialPaths.front ()),
+	    .extraMaterials = std::move (extraMaterials),
+	    .perspective = it.optional ("perspective", false),
+	    .anglesAnimation = std::move (anglesAnimation),
+	}
+    );
+}
+
+LightUniquePtr ObjectParser::parseLight (const JSON& it, const Project& project, ObjectData base) {
+    const auto& properties = project.properties;
+
+    return std::make_unique<Light> (
+	std::move (base),
+	LightData {
+	    .lightType =
+		[&] {
+		    auto type = it.require<std::string> ("light", "Light must have a type");
+		    if (type == "point" || type == "spot" || type == "directional" || type == "tube") {
+			type.insert (0, 1, 'l');
+		    }
+		    return type;
+		}(),
+	    .color = it.color ("color", properties, Builders::ColorBuilder::White),
+	    .intensity = it.user ("intensity", properties, 1.0f),
+	    .radius = it.optional ("radius", 500.0f),
+	    .exponent = it.optional ("exponent", 2.0f),
+	    .innercone = it.optional ("innercone", 45.0f),
+	    .outercone = it.optional ("outercone", 60.0f),
+	    .controlPoint = it.optional ("controlpoint", glm::vec3 (2.0f, 0.0f, 0.0f)),
+	    .cascadeDistances = glm::vec3 (
+		it.optional ("cascadedistance0", 3.0f), it.optional ("cascadedistance1", 10.0f),
+		it.optional ("cascadedistance2", 100.0f)
+	    ),
+	    .castShadow = it.optional ("castshadow", false),
 	}
     );
 }
@@ -160,10 +322,12 @@ ObjectParser::parseImage (const JSON& it, const Project& project, ObjectData bas
 	    .parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (0.0f)),
 	    .colorBlendMode = it.user ("colorBlendMode", properties, 0),
 	    .brightness = it.user ("brightness", properties, 1.0f),
+	    .copyBackground = it.optional ("copybackground", false),
 	    .model = ModelParser::load (project, image),
 	    .effects = effects.has_value () ? parseEffects (*effects, project) : std::vector<ImageEffectUniquePtr> {},
 	    .animationLayers = animationLayers.has_value () ? parseAnimationLayers (*animationLayers, project)
 							    : std::vector<ImageAnimationLayerUniquePtr> {},
+	    .perspective = it.optional ("perspective", false),
 	}
     );
 
@@ -197,7 +361,20 @@ std::vector<ImageEffectUniquePtr> ObjectParser::parseEffects (const JSON& it, co
     std::vector<ImageEffectUniquePtr> result = {};
 
     for (const auto& cur : it) {
-	result.push_back (parseEffect (cur, project));
+	if (!cur.is_object ()) {
+	    continue;
+	}
+
+	const auto filename = cur.find ("file");
+	if (filename == cur.end () || !filename->is_string ()) {
+	    continue;
+	}
+
+	try {
+	    result.push_back (parseEffect (cur, project));
+	} catch (const std::exception& e) {
+	    sLog.error ("Failed loading effect: ", filename->get<std::string> (), " - ", e.what ());
+	}
     }
 
     return result;
@@ -284,6 +461,7 @@ ImageAnimationLayerUniquePtr ObjectParser::parseAnimationLayer (const JSON& it, 
 	.visible = it.user ("visible", properties, false),
 	.blend = it.user ("blend", properties, 1.0f),
 	.animation = it.user ("animation", properties, 0),
+	.additive = it.optional ("additive", true),
     });
 }
 
@@ -339,7 +517,7 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	if (!particleFile.empty ()) {
 	    try {
 		particleJson
-		    = WallpaperEngine::Data::JSON::JSON::parse (project.assetLocator->readString (particleFile));
+		    = WallpaperEngine::Data::JSON::parseLenient (project.assetLocator->readString (particleFile));
 	    } catch (std::runtime_error& e) {
 		sLog.error ("Cannot load particle file: ", particleFile, " - ", e.what ());
 	    }
@@ -347,87 +525,191 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    particleJson = *particleIt;
 	}
 
-	// Parse emitters (note: field is named "emitter" not "emitters")
-	std::vector<ParticleEmitter> emitters;
-	const auto emittersIt = particleJson.find ("emitter");
-	if (emittersIt != particleJson.end () && emittersIt->is_array ()) {
-	    for (const auto& emitter : *emittersIt) {
-		emitters.push_back (parseParticleEmitter (emitter));
+	ParticleData data = parseParticleCore (particleJson, project, 0);
+
+	// Object-level fields come from the scene object entry, not the particle definition
+	data.scale = it.user ("scale", properties, glm::vec3 (1.0f));
+	data.angles = it.user ("angles", properties, glm::vec3 (0.0f));
+	data.visible = it.user ("visible", properties, true);
+	data.parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (0.0f));
+	data.particleFile = particleFile;
+
+	const auto instanceOverrideIt = it.optional ("instanceoverride");
+	if (instanceOverrideIt.has_value ()) {
+	    data.instanceOverride = parseParticleInstanceOverride (*instanceOverrideIt, project.properties);
+	}
+
+	return std::make_unique<Particle> (std::move (base), std::move (data));
+    } catch (nlohmann::json::exception& e) {
+	sLog.error ("Error parsing particle '", base.name, "': ", e.what ());
+	sLog.error ("Particle JSON: ", it.dump ());
+	throw;
+    }
+}
+
+ParticleData ObjectParser::parseParticleCore (const JSON& particleJson, const Project& project, int depth) {
+    // Parse emitters (note: field is named "emitter" not "emitters")
+    std::vector<ParticleEmitter> emitters;
+    const auto emittersIt = particleJson.find ("emitter");
+    if (emittersIt != particleJson.end () && emittersIt->is_array ()) {
+	for (const auto& emitter : *emittersIt) {
+	    emitters.push_back (parseParticleEmitter (emitter));
+	}
+    }
+
+    // Parse initializers (note: field is named "initializer" not "initializers")
+    std::vector<ParticleInitializerUniquePtr> initializers;
+    const auto initializersIt = particleJson.find ("initializer");
+    if (initializersIt != particleJson.end () && initializersIt->is_array ()) {
+	for (const auto& initializer : *initializersIt) {
+	    auto init = parseParticleInitializer (initializer, project.properties);
+	    if (init) {
+		initializers.push_back (std::move (init));
 	    }
 	}
+    }
 
-	// Parse initializers (note: field is named "initializer" not "initializers")
-	std::vector<ParticleInitializerUniquePtr> initializers;
-	const auto initializersIt = particleJson.find ("initializer");
-	if (initializersIt != particleJson.end () && initializersIt->is_array ()) {
-	    for (const auto& initializer : *initializersIt) {
-		auto init = parseParticleInitializer (initializer, project.properties);
-		if (init) {
-		    initializers.push_back (std::move (init));
-		}
+    // Parse operators (note: field is named "operator" not "operators")
+    std::vector<ParticleOperatorUniquePtr> operators;
+    const auto operatorsIt = particleJson.find ("operator");
+    if (operatorsIt != particleJson.end () && operatorsIt->is_array ()) {
+	for (const auto& op : *operatorsIt) {
+	    auto oper = parseParticleOperator (op, project.properties);
+	    if (oper) {
+		operators.push_back (std::move (oper));
 	    }
 	}
+    }
 
-	// Parse operators (note: field is named "operator" not "operators")
-	std::vector<ParticleOperatorUniquePtr> operators;
-	const auto operatorsIt = particleJson.find ("operator");
-	if (operatorsIt != particleJson.end () && operatorsIt->is_array ()) {
-	    for (const auto& op : *operatorsIt) {
-		auto oper = parseParticleOperator (op, project.properties);
-		if (oper) {
-		    operators.push_back (std::move (oper));
-		}
+    // Parse renderers (note: field is named "renderer" not "renderers")
+    std::vector<ParticleRenderer> renderers;
+    const auto renderersIt = particleJson.find ("renderer");
+    if (renderersIt != particleJson.end () && renderersIt->is_array ()) {
+	for (const auto& renderer : *renderersIt) {
+	    renderers.push_back (parseParticleRenderer (renderer));
+	}
+    }
+
+    // Add default sprite renderer if none specified
+    if (renderers.empty ()) {
+	renderers.push_back (
+	    ParticleRenderer {
+		.name = "sprite",
+		.length = 0.05f,
+		.maxLength = 10.0f,
+		.minLength = 0.0f,
+		.subdivision = 1.0f,
+		.segments = 4.0f,
+		.uvScale = 1.0f,
+		.uvScrolling = false,
+		.uvSmoothing = true,
+		.fadeAlpha = false,
+		.fadeSize = false,
 	    }
-	}
+	);
+    }
 
-	// Parse renderers (note: field is named "renderer" not "renderers")
-	std::vector<ParticleRenderer> renderers;
-	const auto renderersIt = particleJson.find ("renderer");
-	if (renderersIt != particleJson.end () && renderersIt->is_array ()) {
-	    for (const auto& renderer : *renderersIt) {
-		renderers.push_back (parseParticleRenderer (renderer));
-	    }
+    // Parse control points (note: field is named "controlpoint" not "controlpoints")
+    std::vector<ParticleControlPoint> controlPoints;
+    const auto controlPointsIt = particleJson.find ("controlpoint");
+    if (controlPointsIt != particleJson.end () && controlPointsIt->is_array ()) {
+	for (const auto& cp : *controlPointsIt) {
+	    controlPoints.push_back (parseParticleControlPoint (cp));
 	}
+    }
 
-	// Add default sprite renderer if none specified
-	if (renderers.empty ()) {
-	    renderers.push_back (
-		ParticleRenderer {
-		    .name = "sprite",
-		    .length = 0.05f,
-		    .maxLength = 10.0f,
-		    .minLength = 0.0f,
-		    .subdivision = 1.0f,
-		    .segments = 4.0f,
-		    .uvScale = 1.0f,
-		    .uvScrolling = false,
-		    .uvSmoothing = true,
-		    .fadeAlpha = false,
-		    .fadeSize = false,
-		}
-	    );
-	}
-
-	// Parse control points (note: field is named "controlpoint" not "controlpoints")
-	std::vector<ParticleControlPoint> controlPoints;
-	const auto controlPointsIt = particleJson.find ("controlpoint");
-	if (controlPointsIt != particleJson.end () && controlPointsIt->is_array ()) {
-	    for (const auto& cp : *controlPointsIt) {
-		controlPoints.push_back (parseParticleControlPoint (cp));
-	    }
-	}
-
-	// Parse children
-	std::vector<ParticleChild> children;
-	const auto childrenIt = particleJson.optional ("children");
-	if (childrenIt.has_value () && childrenIt->is_array ()) {
+    std::vector<ParticleChild> children;
+    const auto childrenIt = particleJson.optional ("children");
+    if (childrenIt.has_value () && childrenIt->is_array ()) {
+	if (depth >= 4) {
+	    sLog.error ("Particle child recursion exceeds depth 4, ignoring deeper children");
+	} else {
 	    for (const auto& child : *childrenIt) {
-		children.push_back (parseParticleChild (child, project));
+		children.push_back (parseParticleChild (child, project, depth));
 	    }
 	}
+    }
 
-	// Parse instance override
-	ParticleInstanceOverride instanceOverride = {
+    // Parse material - particles reference materials directly, not models
+    ModelUniquePtr material = nullptr;
+    const auto materialIt = particleJson.find ("material");
+    if (materialIt != particleJson.end () && materialIt->is_string ()) {
+	try {
+	    std::string materialPath = materialIt->get<std::string> ();
+
+	    // Particle materials are stored as just material definitions, not model files
+	    // So we need to wrap them in a model structure
+	    auto mat = MaterialParser::load (project, materialPath);
+
+	    material = std::make_unique<ModelStruct> (ModelStruct {
+		.filename = materialPath,
+		.material = std::move (mat),
+		.solidlayer = false,
+		.fullscreen = false,
+		.passthrough = false,
+		.autosize = false,
+		.nopadding = false,
+		.width = std::nullopt,
+		.height = std::nullopt,
+		.puppet = std::nullopt,
+	    });
+	} catch (std::runtime_error& e) {
+	    sLog.error ("Cannot load particle material: ", materialIt->get<std::string> (), " - ", e.what ());
+	}
+    }
+
+    // Parse string fields safely
+    std::string animationMode = "sequence";
+    const auto animModeIt = particleJson.find ("animationmode");
+    if (animModeIt != particleJson.end () && animModeIt->is_string ()) {
+	animationMode = animModeIt->get<std::string> ();
+    }
+
+    // Parse numeric fields safely
+    float sequenceMultiplier = 1.0f;
+    uint32_t maxCount = 100;
+    uint32_t startTime = 0;
+    uint32_t flags = 0;
+
+    const auto seqMultIt = particleJson.find ("sequencemultiplier");
+    if (seqMultIt != particleJson.end () && seqMultIt->is_number ()) {
+	sequenceMultiplier = seqMultIt->get<float> ();
+    }
+
+    const auto maxCountIt = particleJson.find ("maxcount");
+    if (maxCountIt != particleJson.end () && maxCountIt->is_number ()) {
+	maxCount = maxCountIt->get<uint32_t> ();
+    }
+
+    const auto startTimeIt = particleJson.find ("starttime");
+    if (startTimeIt != particleJson.end () && startTimeIt->is_number ()) {
+	startTime = startTimeIt->get<uint32_t> ();
+    }
+
+    const auto flagsIt = particleJson.find ("flags");
+    if (flagsIt != particleJson.end () && flagsIt->is_number ()) {
+	flags = flagsIt->get<uint32_t> ();
+    }
+
+    return ParticleData {
+	.scale = Builders::UserSettingBuilder::fromValue (glm::vec3 (1.0f)),
+	.angles = Builders::UserSettingBuilder::fromValue (glm::vec3 (0.0f)),
+	.visible = Builders::UserSettingBuilder::fromValue (true),
+	.parallaxDepth = Builders::UserSettingBuilder::fromValue (glm::vec2 (0.0f)),
+	.particleFile = "",
+	.animationMode = animationMode,
+	.sequenceMultiplier = sequenceMultiplier,
+	.maxCount = maxCount,
+	.startTime = startTime,
+	.flags = flags,
+	.material = std::move (material),
+	.emitters = std::move (emitters),
+	.initializers = std::move (initializers),
+	.operators = std::move (operators),
+	.renderers = std::move (renderers),
+	.controlPoints = std::move (controlPoints),
+	.children = std::move (children),
+	.instanceOverride = {
 	    .enabled = Builders::UserSettingBuilder::fromValue (false),
 	    .alpha = Builders::UserSettingBuilder::fromValue (1.0f),
 	    .size = Builders::UserSettingBuilder::fromValue (1.0f),
@@ -437,101 +719,8 @@ ParticleUniquePtr ObjectParser::parseParticle (const JSON& it, const Project& pr
 	    .count = Builders::UserSettingBuilder::fromValue (1.0f),
 	    .color = Builders::UserSettingBuilder::fromValue (1.0f),
 	    .colorn = Builders::UserSettingBuilder::fromValue (1.0f),
-	};
-	const auto instanceOverrideIt = it.optional ("instanceoverride");
-	if (instanceOverrideIt.has_value ()) {
-	    instanceOverride = parseParticleInstanceOverride (*instanceOverrideIt, project.properties);
-	}
-
-	// Parse material - particles reference materials directly, not models
-	ModelUniquePtr material = nullptr;
-	const auto materialIt = particleJson.find ("material");
-	if (materialIt != particleJson.end () && materialIt->is_string ()) {
-	    try {
-		std::string materialPath = materialIt->get<std::string> ();
-
-		// Particle materials are stored as just material definitions, not model files
-		// So we need to wrap them in a model structure
-		auto mat = MaterialParser::load (project, materialPath);
-
-		material = std::make_unique<ModelStruct> (ModelStruct {
-		    .filename = materialPath,
-		    .material = std::move (mat),
-		    .solidlayer = false,
-		    .fullscreen = false,
-		    .passthrough = false,
-		    .autosize = false,
-		    .nopadding = false,
-		    .width = std::nullopt,
-		    .height = std::nullopt,
-		    .puppet = std::nullopt,
-		});
-	    } catch (std::runtime_error& e) {
-		sLog.error ("Cannot load particle material: ", materialIt->get<std::string> (), " - ", e.what ());
-	    }
-	}
-
-	// Parse string fields safely
-	std::string animationMode = "sequence";
-	const auto animModeIt = particleJson.find ("animationmode");
-	if (animModeIt != particleJson.end () && animModeIt->is_string ()) {
-	    animationMode = animModeIt->get<std::string> ();
-	}
-
-	// Parse numeric fields safely
-	float sequenceMultiplier = 1.0f;
-	uint32_t maxCount = 100;
-	uint32_t startTime = 0;
-	uint32_t flags = 0;
-
-	const auto seqMultIt = particleJson.find ("sequencemultiplier");
-	if (seqMultIt != particleJson.end () && seqMultIt->is_number ()) {
-	    sequenceMultiplier = seqMultIt->get<float> ();
-	}
-
-	const auto maxCountIt = particleJson.find ("maxcount");
-	if (maxCountIt != particleJson.end () && maxCountIt->is_number ()) {
-	    maxCount = maxCountIt->get<uint32_t> ();
-	}
-
-	const auto startTimeIt = particleJson.find ("starttime");
-	if (startTimeIt != particleJson.end () && startTimeIt->is_number ()) {
-	    startTime = startTimeIt->get<uint32_t> ();
-	}
-
-	const auto flagsIt = particleJson.find ("flags");
-	if (flagsIt != particleJson.end () && flagsIt->is_number ()) {
-	    flags = flagsIt->get<uint32_t> ();
-	}
-
-	return std::make_unique<Particle> (
-	    std::move (base),
-	    ParticleData {
-		.scale = it.user ("scale", properties, glm::vec3 (1.0f)),
-		.angles = it.user ("angles", properties, glm::vec3 (0.0f)),
-		.visible = it.user ("visible", properties, true),
-		.parallaxDepth = it.user ("parallaxDepth", properties, glm::vec2 (0.0f)),
-		.particleFile = particleFile,
-		.animationMode = animationMode,
-		.sequenceMultiplier = sequenceMultiplier,
-		.maxCount = maxCount,
-		.startTime = startTime,
-		.flags = flags,
-		.material = std::move (material),
-		.emitters = std::move (emitters),
-		.initializers = std::move (initializers),
-		.operators = std::move (operators),
-		.renderers = std::move (renderers),
-		.controlPoints = std::move (controlPoints),
-		.children = std::move (children),
-		.instanceOverride = std::move (instanceOverride),
-	    }
-	);
-    } catch (nlohmann::json::exception& e) {
-	sLog.error ("Error parsing particle '", base.name, "': ", e.what ());
-	sLog.error ("Particle JSON: ", it.dump ());
-	throw;
-    }
+	},
+    };
 }
 
 ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
@@ -587,19 +776,21 @@ ParticleEmitter ObjectParser::parseParticleEmitter (const JSON& it) {
 	return defaultValue;
     };
 
+    const bool isInstant = (name == "instant");
+
     try {
 	return ParticleEmitter {
 	    .id = it.optional ("id", -1),
 	    .name = name,
 	    .directions = parseVec3 ("directions", glm::vec3 (1.0f, 1.0f, 0.0f)),
 	    .distanceMin = parseVec3 ("distancemin", glm::vec3 (0.0f, 0.0f, 0.0f)),
-	    .distanceMax = parseVec3 ("distancemax", glm::vec3 (256.0f, 256.0f, 0.0f)),
+	    .distanceMax = parseVec3 ("distancemax", isInstant ? glm::vec3 (0.0f) : glm::vec3 (256.0f, 256.0f, 0.0f)),
 	    .origin = parseVec3 ("origin", glm::vec3 (0.0f)),
 	    .sign = parseIVec3 ("sign", glm::ivec3 (0)),
-	    .instantaneous = it.optional ("instantaneous", 0u),
+	    .instantaneous = it.optional ("instantaneous", isInstant ? it.optional ("count", 0u) : 0u),
 	    .speedMin = it.optional ("speedmin", 0.0f),
 	    .speedMax = it.optional ("speedmax", 0.0f),
-	    .rate = it.optional ("rate", 10.0f),
+	    .rate = it.optional ("rate", isInstant ? 0.0f : 10.0f),
 	    .controlPoint = it.optional ("controlpoint", 0),
 	    .flags = it.optional ("flags", 0u),
 	    .cone = it.optional ("cone", 0.0f),
@@ -691,6 +882,17 @@ ParticleOperatorUniquePtr ObjectParser::parseParticleOperator (const JSON& it, c
 	    it.user ("fadeintime", properties, 0.5f), it.user ("fadeouttime", properties, 0.5f)
 	);
     } else if (name == "sizechange") {
+	const auto stIt = it.optional ("starttime");
+	if (stIt.has_value () && stIt->is_number () && !it.optional ("endtime").has_value ()
+	    && !it.optional ("startvalue").has_value () && !it.optional ("endvalue").has_value ()) {
+	    float startTime = stIt->get<float> ();
+	    return std::make_unique<SizeChangeOperator> (
+		Builders::UserSettingBuilder::fromValue<float> (0.0f),
+		Builders::UserSettingBuilder::fromValue<float> (std::max (1.0f - startTime, 1e-3f)),
+		Builders::UserSettingBuilder::fromValue<float> (0.0f),
+		Builders::UserSettingBuilder::fromValue<float> (0.5f)
+	    );
+	}
 	return std::make_unique<SizeChangeOperator> (
 	    it.user ("starttime", properties, 0.0f), it.user ("endtime", properties, 1.0f),
 	    it.user ("startvalue", properties, 1.0f), it.user ("endvalue", properties, 0.0f)
@@ -765,8 +967,7 @@ ParticleRenderer ObjectParser::parseParticleRenderer (const JSON& it) {
 	name = nameIt->get<std::string> ();
     }
 
-    // Renderer-type-specific defaults
-    float subdivisionDefault = (name == "rope") ? 4.0f : 1.0f;
+    float subdivisionDefault = (name == "rope" || name == "ropetrail") ? 4.0f : 1.0f;
     float lengthDefault = (name == "ropetrail") ? 1.0f : 0.05f;
 
     return ParticleRenderer {
@@ -809,26 +1010,56 @@ ParticleControlPoint ObjectParser::parseParticleControlPoint (const JSON& it) {
 	.flags = it.optional ("flags", 0u),
 	.offset = offset,
 	.lockToPointer = it.optional ("locktopointer", false),
+	// Child systems: mirror the parent system's control point at this index
+	// (dripping_water_splash CP0 <- parent CP1; -1 = none)
+	.parentControlPoint = it.optional ("parentcontrolpoint", -1),
     };
 }
 
-ParticleChild ObjectParser::parseParticleChild (const JSON& it, const Project& project) {
-    std::string particleFile = "";
-    const auto particleIt = it.find ("particle");
-    if (particleIt != it.end () && particleIt->is_string ()) {
-	particleFile = particleIt->get<std::string> ();
-    }
-
+ParticleChild ObjectParser::parseParticleChild (const JSON& it, const Project& project, int depth) {
     std::string type = "static";
     const auto typeIt = it.find ("type");
     if (typeIt != it.end () && typeIt->is_string ()) {
 	type = typeIt->get<std::string> ();
     }
 
-    std::string name = "";
+    std::string name;
     const auto nameIt = it.find ("name");
     if (nameIt != it.end () && nameIt->is_string ()) {
 	name = nameIt->get<std::string> ();
+    }
+
+    std::string particleFile;
+    if (name.ends_with (".json")) {
+	particleFile = name;
+    } else {
+	const auto particleIt = it.find ("particle");
+	if (particleIt != it.end () && particleIt->is_string ()) {
+	    particleFile = particleIt->get<std::string> ();
+	}
+    }
+
+    ParticleUniquePtr definition = nullptr;
+    if (!particleFile.empty ()) {
+	try {
+	    const auto childJson
+		= WallpaperEngine::Data::JSON::parseLenient (project.assetLocator->readString (particleFile));
+	    definition = std::make_unique<Particle> (
+		ObjectData {
+		    .id = it.optional ("id", -1),
+		    .name = particleFile,
+		    .dependencies = {},
+		    .parent = std::nullopt,
+		    .origin = Builders::UserSettingBuilder::fromValue (glm::vec3 (0.0f)),
+		    .groupScale = Builders::UserSettingBuilder::fromValue (glm::vec3 (1.0f)),
+		    .groupAngles = Builders::UserSettingBuilder::fromValue (glm::vec3 (0.0f)),
+		    .groupVisible = Builders::UserSettingBuilder::fromValue (true),
+		},
+		parseParticleCore (childJson, project, depth + 1)
+	    );
+	} catch (std::exception& e) {
+	    sLog.error ("Cannot load child particle file: ", particleFile, " - ", e.what ());
+	}
     }
 
     // Helper lambda to parse vec3 fields that might be strings, arrays, single numbers, or missing
@@ -854,13 +1085,14 @@ ParticleChild ObjectParser::parseParticleChild (const JSON& it, const Project& p
     return ParticleChild {
 	.type = type,
 	.name = name,
-	.maxCount = it.optional ("maxcount", 20),
+	.maxCount = it.optional ("maxcount", 10),
 	.controlPointStartIndex = it.optional ("controlpointstartindex", 0),
 	.probability = it.optional ("probability", 1.0f),
 	.angles = parseVec3 ("angles", glm::vec3 (0.0f)),
 	.origin = parseVec3 ("origin", glm::vec3 (0.0f)),
 	.scale = parseVec3 ("scale", glm::vec3 (1.0f)),
 	.particleFile = particleFile,
+	.definition = std::move (definition),
     };
 }
 
@@ -875,5 +1107,6 @@ ParticleInstanceOverride ObjectParser::parseParticleInstanceOverride (const JSON
 	.count = it.user ("count", properties, 1.0f),
 	.color = it.user ("color", properties, glm::vec3 (1.0f)),
 	.colorn = it.user ("colorn", properties, glm::vec3 (1.0f)),
+	.colornAuthored = it.contains ("colorn"),
     };
 }

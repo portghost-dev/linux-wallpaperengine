@@ -11,7 +11,7 @@ using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
 
 ModelUniquePtr ModelParser::load (const Project& project, const std::string& filename) {
-    const auto model = JSON::parse (project.assetLocator->readString (filename));
+    const auto model = WallpaperEngine::Data::JSON::parseLenient (project.assetLocator->readString (filename));
 
     return parse (model, project, filename);
 }
@@ -30,5 +30,7 @@ ModelUniquePtr ModelParser::parse (const JSON& file, const Project& project, con
 	.width = file.optional<int> ("width"),
 	.height = file.optional<int> ("height"),
 	.puppet = file.optional<std::string> ("puppet"),
+	// Puppet crop-rect offset ("22.0 -0.0" string vec2, can be large/negative)
+	.cropOffset = file.optional ("cropoffset", glm::vec2 (0.0f)),
     });
 }

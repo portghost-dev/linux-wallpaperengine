@@ -26,6 +26,7 @@ public:
 
     [[nodiscard]] bool anythingFullscreen () const override;
     void reset () override;
+    void recomputeRelevance () override;
 
 private:
     wl_display* m_display = nullptr;

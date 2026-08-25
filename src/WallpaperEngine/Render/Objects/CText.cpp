@@ -1,6 +1,10 @@
 #include "CText.h"
 
+#include <algorithm>
+#include <cmath>
 #include <filesystem>
+#include <optional>
+#include <ranges>
 #include <vector>
 
 #include <ft2build.h>
@@ -20,7 +24,7 @@
 using namespace WallpaperEngine::Render::Objects;
 
 namespace {
-// TODO: Phase 2 – load font from wallpaper's materials/fonts/ using AssetLocator
+// TODO: Phase 2 - load font from wallpaper's materials/fonts/ using AssetLocator
 // Phase 1 uses a system font instead of the font shipped by the wallpaper.
 // Wallpaper Engine bundles .ttf files in `materials/fonts/`; wiring those in
 // is deferred to Phase 2 along with dynamic/scripted text.
@@ -114,7 +118,7 @@ void CText::setup () {
     const bool scripted = m_text.text->value->getScriptSource ().has_value ();
     const auto& text = m_text.text->value->getString ();
 
-    // Nothing to render and no script to produce text later → bail.
+    // Nothing to render and no script to produce text later -> bail.
     if (text.empty () && !scripted) {
 	return;
     }
@@ -202,14 +206,9 @@ bool CText::loadSystemFont () {
 }
 
 unsigned int CText::computeEffectivePixelSize () const {
-    // WE text objects often come with scale ~0.09 that, combined with a modest
-    // pointsize, would rasterize glyphs to ~2px on screen (invisible). Rasterize
-    // at higher resolution so that after the model scale is applied in render()
-    // the on-screen size matches the intended pointsize.
-    const glm::vec3 initialScale = m_text.scale->value->getVec3 ();
-    const float avgScale = (initialScale.x + initialScale.y) * 0.5f;
-    const float compensate = (avgScale > 0.0f && avgScale < 1.0f) ? std::min (1.0f / avgScale, 32.0f) : 1.0f;
-    return std::max<unsigned int> (1u, static_cast<unsigned int> (m_text.pointSize->value->getFloat () * compensate));
+    const float sceneH = static_cast<float> (this->getScene ().getHeight ());
+    const float px = m_text.pointSize->value->getFloat () * (4.0f / 3.0f) * (sceneH / 1080.0f);
+    return std::max<unsigned int> (1u, static_cast<unsigned int> (std::min (px, 512.0f)));
 }
 
 void CText::initScriptLayer () {
@@ -228,9 +227,78 @@ void CText::initScriptLayer () {
     }
 }
 
+namespace {
+uint32_t nextUtf8Codepoint (const std::string& text, size_t& offset) {
+    const auto lead = static_cast<uint8_t> (text[offset]);
+    int continuations;
+    uint32_t code;
+
+    if (lead < 0x80) {
+	continuations = 0;
+	code = lead;
+    } else if ((lead & 0xE0) == 0xC0) {
+	continuations = 1;
+	code = lead & 0x1Fu;
+    } else if ((lead & 0xF0) == 0xE0) {
+	continuations = 2;
+	code = lead & 0x0Fu;
+    } else if ((lead & 0xF8) == 0xF0) {
+	continuations = 3;
+	code = lead & 0x07u;
+    } else {
+	offset++;
+	return 0xFFFD;
+    }
+
+    if (offset + continuations >= text.size ()) {
+	offset++;
+	return 0xFFFD;
+    }
+
+    for (int i = 1; i <= continuations; i++) {
+	const auto cont = static_cast<uint8_t> (text[offset + i]);
+	if ((cont & 0xC0) != 0x80) {
+	    offset++;
+	    return 0xFFFD;
+	}
+	code = (code << 6) | (cont & 0x3Fu);
+    }
+
+    offset += continuations + 1;
+    return code;
+}
+
+glm::vec2 computeTextAlignmentOffset (
+    const std::string& horizontalAlign, const std::string& verticalAlign, const glm::vec4& glyphBounds,
+    const float ascender, const float descender, const float lineSpacing, const size_t lineCount
+) {
+    const float width = glyphBounds.z - glyphBounds.x;
+    const float boundsCenterY = (glyphBounds.y + glyphBounds.w) * 0.5f;
+    const float followingRows = static_cast<float> (lineCount > 0 ? lineCount - 1 : 0);
+
+    float x = 0.0f;
+    if (horizontalAlign == "left") {
+	x = width * 0.5f;
+    } else if (horizontalAlign == "right") {
+	x = width * -0.5f;
+    }
+
+    float verticalReference;
+    if (verticalAlign == "top") {
+	verticalReference = ascender;
+    } else if (verticalAlign == "bottom") {
+	verticalReference = descender - followingRows * lineSpacing;
+    } else {
+	verticalReference = (ascender - followingRows * lineSpacing) * 0.5f;
+    }
+
+    return { x, boundsCenterY - verticalReference };
+}
+} // namespace
+
 void CText::rebuildTextureFrom (const std::string& text) {
     // Two-pass rasterization: first measure the bounding box, then rasterize
-    // every glyph into a single grayscale bitmap. Phase 1 renders one line —
+    // every glyph into a single grayscale bitmap. Phase 1 renders one line -
     // multi-line wrapping, alignment, and padding come with Phase 2.
     //
     // Safe to call repeatedly: GL handles (texture, VAO, VBO) are reused when
@@ -238,12 +306,48 @@ void CText::rebuildTextureFrom (const std::string& text) {
     // bitmap every time the rendered string changes without leaking.
     FT_GlyphSlot slot = m_ftFace->glyph;
 
+    std::string effectiveText = text;
+    if (m_text.limitwidth && m_text.maxwidth > 0.0f) {
+	const auto advanceOf = [&] (const std::string& s) {
+	    int w = 0;
+	    for (size_t offset = 0; offset < s.size ();) {
+		const auto code = static_cast<FT_ULong> (nextUtf8Codepoint (s, offset));
+		if (FT_Load_Char (m_ftFace, code, FT_LOAD_DEFAULT) == 0) {
+		    w += static_cast<int> (slot->advance.x >> 6);
+		}
+	    }
+	    return w;
+	};
+	const auto maxW = static_cast<int> (m_text.maxwidth);
+	if (advanceOf (text) > maxW) {
+	    const std::string ellipsis = m_text.limituseellipsis ? "..." : "";
+	    const int budget = maxW - advanceOf (ellipsis);
+	    std::string cut;
+	    int cutW = 0;
+	    for (size_t offset = 0; offset < text.size ();) {
+		const size_t sequenceStart = offset;
+		const auto code = static_cast<FT_ULong> (nextUtf8Codepoint (text, offset));
+		if (FT_Load_Char (m_ftFace, code, FT_LOAD_DEFAULT) != 0) {
+		    continue;
+		}
+		const int adv = static_cast<int> (slot->advance.x >> 6);
+		if (cutW + adv > budget) {
+		    break;
+		}
+		cutW += adv;
+		cut.append (text, sequenceStart, offset - sequenceStart);
+	    }
+	    effectiveText = cut + ellipsis;
+	}
+    }
+
     int penX = 0;
     int maxAscent = 0;
     int maxDescent = 0;
 
-    for (unsigned char c : text) {
-	if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
+    for (size_t offset = 0; offset < effectiveText.size ();) {
+	const auto code = static_cast<FT_ULong> (nextUtf8Codepoint (effectiveText, offset));
+	if (FT_Load_Char (m_ftFace, code, FT_LOAD_RENDER) != 0) {
 	    continue;
 	}
 	penX += slot->advance.x >> 6;
@@ -256,8 +360,9 @@ void CText::rebuildTextureFrom (const std::string& text) {
     std::vector<uint8_t> pixels (static_cast<size_t> (width) * height, 0);
 
     penX = 0;
-    for (unsigned char c : text) {
-	if (FT_Load_Char (m_ftFace, static_cast<FT_ULong> (c), FT_LOAD_RENDER) != 0) {
+    for (size_t offset = 0; offset < effectiveText.size ();) {
+	const auto code = static_cast<FT_ULong> (nextUtf8Codepoint (effectiveText, offset));
+	if (FT_Load_Char (m_ftFace, code, FT_LOAD_RENDER) != 0) {
 	    continue;
 	}
 
@@ -296,6 +401,18 @@ void CText::rebuildTextureFrom (const std::string& text) {
     m_textureSize = { width, height };
     m_quadSize = { static_cast<float> (width), static_cast<float> (height) };
     m_lastRenderedText = text;
+
+    {
+	const float ascender = static_cast<float> (m_ftFace->size->metrics.ascender >> 6);
+	const float descender = static_cast<float> (m_ftFace->size->metrics.descender >> 6);
+	const float lineSpacing = static_cast<float> (m_ftFace->size->metrics.height >> 6);
+	const glm::vec4 glyphBounds
+	    = { 0.0f, static_cast<float> (-maxDescent), static_cast<float> (width), static_cast<float> (maxAscent) };
+	const glm::vec2 aligned = computeTextAlignmentOffset (
+	    m_text.alignment, m_text.verticalalign, glyphBounds, ascender, descender, lineSpacing, 1
+	);
+	m_alignOffset = { aligned.x, -aligned.y };
+    }
 
     uploadQuadVertices ();
 }
@@ -343,12 +460,14 @@ void CText::uploadQuadVertices () {
     // matches the current texture dimensions.
     const float hx = m_quadSize.x * 0.5f;
     const float hy = m_quadSize.y * 0.5f;
+    const float ox = m_alignOffset.x;
+    const float oy = m_alignOffset.y;
     // With vflip=true (Wayland/GLFW), GL y- = screen top. So the quad bottom (y=-hy,
-    // lower GL y) appears at screen top. UV.v=0 here = FT glyph top → shows at screen top ✓
+    // lower GL y) appears at screen top. UV.v=0 here = FT glyph top -> shows at screen top
     const float verts[] = {
 	// pos        // uv
-	-hx, -hy, 0.0f, 0.0f, hx, -hy, 1.0f, 0.0f, hx,  hy, 1.0f, 1.0f,
-	-hx, -hy, 0.0f, 0.0f, hx, hy,  1.0f, 1.0f, -hx, hy, 0.0f, 1.0f,
+	-hx + ox, -hy + oy, 0.0f, 0.0f, hx + ox, -hy + oy, 1.0f, 0.0f, hx + ox,  hy + oy, 1.0f, 1.0f,
+	-hx + ox, -hy + oy, 0.0f, 0.0f, hx + ox, hy + oy,  1.0f, 1.0f, -hx + ox, hy + oy, 0.0f, 1.0f,
     };
 
     const bool firstUpload = (m_vao == 0);
@@ -405,26 +524,62 @@ void CText::render () {
     const glm::vec4 color = m_text.color->value->getVec4 ();
     const float alpha = m_text.alpha->value->getFloat ();
     const glm::vec3 scale = m_text.scale->value->getVec3 ();
-    const glm::vec3 origin = m_text.origin->value->getVec3 ();
 
-    // WE uses a Y-down coordinate system (origin at top-left, y increases downward).
-    // The final FBO is presented to screen with vflip=true on Wayland/GLFW, which maps
-    // GL y- to screen top and GL y+ to screen bottom. This effectively inverts Y again,
-    // so we need: gl_y = origin.y - scene_h/2  (not the CImage-style scene_h/2 - origin.y).
-    // CImage pre-compensates for X11 (no vflip) and gets corrected by the Wayland vflip.
-    // CText renders with direct vflip-aware coordinates.
+    glm::vec3 origin = m_text.origin->value->getVec3 ();
+    {
+	std::optional<int> parentId = m_text.parent;
+	for (int depth = 0; parentId.has_value () && depth < 8; depth++) {
+	    const auto parent = std::ranges::find_if (this->getScene ().getScene ().objects, [&] (const auto& o) {
+		return o->id == *parentId;
+	    });
+	    if (parent == this->getScene ().getScene ().objects.end ()) {
+		break;
+	    }
+	    const glm::vec3 pOrigin = (*parent)->origin->value->getVec3 ();
+	    const glm::vec3 pScale = (*parent)->groupScale->value->getVec3 ();
+	    const float pAngle = (*parent)->groupAngles->value->getVec3 ().z;
+	    const float c = std::cos (pAngle), sn = std::sin (pAngle);
+	    const glm::vec2 scaled = { origin.x * pScale.x, origin.y * pScale.y };
+	    origin = { pOrigin.x + scaled.x * c - scaled.y * sn, pOrigin.y + scaled.x * sn + scaled.y * c,
+		       pOrigin.z + origin.z };
+	    parentId = (*parent)->parent;
+	}
+    }
+
+    static const bool s_textDump = getenv ("LWE_LIGHTDUMP") != nullptr;
+    static int s_textDumpCount = 0;
+    if (s_textDump && s_textDumpCount < 8) {
+	s_textDumpCount++;
+	sLog.out (
+	    "LWE-TEXTDUMP id=", this->getId (), " resolvedOrigin=(", origin.x, ",", origin.y, ",", origin.z,
+	    ") parent=", m_text.parent.has_value () ? *m_text.parent : -1, " quadW=", m_quadSize.x,
+	    " maxwidth=", m_text.maxwidth, " limitwidth=", m_text.limitwidth, " text='", m_lastRenderedText, "'"
+	);
+    }
+
     const float scene_w = getScene ().getCamera ().getWidth ();
     const float scene_h = getScene ().getCamera ().getHeight ();
     const glm::vec3 gl_origin = {
 	origin.x - scene_w * 0.5f,
-	origin.y - scene_h * 0.5f,
+	scene_h * 0.5f - origin.y,
 	origin.z,
     };
 
     glm::mat4 model = glm::translate (glm::mat4 (1.0f), gl_origin);
     model = glm::scale (model, scale);
 
-    const glm::mat4 mvp = getScene ().getCamera ().getProjection () * getScene ().getCamera ().getLookAt () * model;
+    const auto& cam = getScene ().getCamera ();
+    const glm::mat4 view = cam.isOrthogonal () ? cam.getLookAt () : glm::mat4 (1.0f);
+    const glm::mat4 mvp = cam.getScreenProjection () * view * model;
+
+    glDisable (GL_DEPTH_TEST);
+    glDisable (GL_CULL_FACE);
+    const auto& sceneFBO = *this->getScene ().getFBO ();
+    glBindFramebuffer (GL_FRAMEBUFFER, sceneFBO.getFramebuffer ());
+    glViewport (
+	0, 0, static_cast<GLsizei> (sceneFBO.getRealWidth ()), static_cast<GLsizei> (sceneFBO.getRealHeight ())
+    );
+    glColorMask (true, true, true, false);
 
     glEnable (GL_BLEND);
     glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);

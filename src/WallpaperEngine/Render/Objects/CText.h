@@ -29,12 +29,12 @@ using namespace WallpaperEngine::Data::Model;
  *
  * Renders static text objects as a single FreeType-rasterized RGBA texture
  * drawn on a textured quad with its own minimal GLSL shader. Does NOT go
- * through CRenderable / materials / passes — Phase 1 does not need effects.
+ * through CRenderable / materials / passes - Phase 1 does not need effects.
  *
  * Phase 2 (scripted/dynamic text, alignment from properties, effect passes)
  * is intentionally not implemented here. When the scene provides a dynamic
  * `text: { script: "..." }` object this class captures the script source in
- * the data model but renders an empty string — the Wallpaper Engine JS
+ * the data model but renders an empty string - the Wallpaper Engine JS
  * runtime required to evaluate it is out of scope for Phase 1.
  */
 class CText final : virtual public CObject, public Scripting::ScriptableObject {
@@ -80,6 +80,7 @@ private:
 
     glm::ivec2 m_textureSize = { 0, 0 };
     glm::vec2 m_quadSize = { 0.0f, 0.0f };
+    glm::vec2 m_alignOffset = { 0.0f, 0.0f };
 
     bool m_valid = false;
 };

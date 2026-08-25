@@ -10,7 +10,11 @@ using namespace WallpaperEngine::Data::Parsers;
 using namespace WallpaperEngine::Data::Model;
 
 MaterialUniquePtr MaterialParser::load (const Project& project, const std::string& filename) {
-    const auto materialJson = JSON::parse (project.assetLocator->readString (filename));
+    const auto content = project.assetLocator->readString (filename);
+    if (content.empty ()) {
+	sLog.exception ("MaterialParser: '", filename, "' read EMPTY - missing asset or VFS lookup miss");
+    }
+    const auto materialJson = WallpaperEngine::Data::JSON::parseLenient (content);
 
     return parse (materialJson, filename, project);
 }

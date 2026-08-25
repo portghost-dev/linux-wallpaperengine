@@ -1,19 +1,16 @@
 #pragma once
 
-#include "WallpaperEngine/Render/Wallpapers/CWeb.h"
 #include "include/cef_browser.h"
+#include "include/cef_render_handler.h"
 
-namespace WallpaperEngine::Render::Wallpapers {
-class CWeb;
+namespace WallpaperEngine::WebHelper::Service {
+class WebInstance;
 }
 
 namespace WallpaperEngine::WebBrowser::CEF {
-// *************************************************************************
-//! \brief Private implementation to handle CEF events to draw the web page.
-// *************************************************************************
 class RenderHandler : public CefRenderHandler {
 public:
-    explicit RenderHandler (WallpaperEngine::Render::Wallpapers::CWeb* webdata);
+    explicit RenderHandler (WallpaperEngine::WebHelper::Service::WebInstance* instance);
 
     //! \brief
     ~RenderHandler () override = default;
@@ -21,8 +18,6 @@ public:
     //! \brief CefRenderHandler interface
     void GetViewRect (CefRefPtr<CefBrowser> browser, CefRect& rect) override;
 
-    //! \brief CefRenderHandler interface
-    //! Update the OpenGL texture.
     void OnPaint (
 	CefRefPtr<CefBrowser> browser, PaintElementType type, const RectList& dirtyRects, const void* buffer, int width,
 	int height
@@ -32,12 +27,6 @@ public:
     IMPLEMENT_REFCOUNTING (RenderHandler);
 
 private:
-    WallpaperEngine::Render::Wallpapers::CWeb* m_webdata = nullptr;
-
-    [[nodiscard]] int getWidth () const;
-    [[nodiscard]] int getHeight () const;
-
-    //! \brief Return the OpenGL texture handle
-    [[nodiscard]] GLuint texture () const;
+    WallpaperEngine::WebHelper::Service::WebInstance* m_instance = nullptr;
 };
 } // namespace WallpaperEngine::WebBrowser::CEF

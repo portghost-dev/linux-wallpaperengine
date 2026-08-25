@@ -67,15 +67,19 @@ void AlbumTexture::decrementUsageCount () const { }
 void AlbumTexture::update () const { }
 
 void AlbumTexture::copyContents (const TextureProvider& other) const noexcept {
-    // fallback to gpu -> cpu -> gpu copy
-    // RGBA8 texture: 4 bytes per pixel
     size_t bufferSize = other.getTextureWidth (0) * other.getTextureHeight (0) * 4;
 
     uint8_t* buffer = new uint8_t[bufferSize];
 
-    // Read the source texture
+    // Read the source texture with glGetTexImage (GL 1.0), NOT glGetnTexImage (GL 4.5): the
+    // engine's baseline is a 3.3 core context and the GLFW/--window driver does not set
+    // glewExperimental, so the 4.5 pointer is NULL there -> a null-jump SIGSEGV on every MPRIS
+    // album-art update. glGetTexImage always resolves and matches the GLFW driver's own
+    // glReadnPixels->glReadPixels baseline fallback. The album thumbnail is always uncompressed
+    // RGBA8 (getFormat() == ARGB8888; never routed through the BC7 texcache), so a plain
+    // readback is correct and format-agnostic.
     glBindTexture (GL_TEXTURE_2D, other.getTextureID (0));
-    glGetnTexImage (GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, bufferSize, buffer);
+    glGetTexImage (GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer);
 
     // Upload into another texture
     glBindTexture (GL_TEXTURE_2D, this->m_textureID);

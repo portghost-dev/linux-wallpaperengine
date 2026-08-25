@@ -1,8 +1,11 @@
 #include "CWallpaper.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Render/OverlayLabel.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
 #include "WallpaperEngine/Render/Wallpapers/CVideo.h"
 #include "WallpaperEngine/Render/Wallpapers/CWeb.h"
+#include <cstdio>
+#include <cstdlib>
 
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
@@ -34,9 +37,16 @@ CWallpaper::CWallpaper (
     glGenBuffers (1, &this->m_positionBuffer);
     glBindBuffer (GL_ARRAY_BUFFER, this->m_positionBuffer);
     glBufferData (GL_ARRAY_BUFFER, sizeof (position), position, GL_STATIC_DRAW);
+
+    if (getenv ("LWE_TEXCACHEDUMP") != nullptr) {
+	sLog.out ("LWE-WPLIFE ctor ", static_cast<const void*> (this));
+    }
 }
 
 CWallpaper::~CWallpaper () {
+    if (getenv ("LWE_TEXCACHEDUMP") != nullptr) {
+	sLog.out ("LWE-WPLIFE dtor ", static_cast<const void*> (this));
+    }
     // destroy shader programs
     GLuint attachedShaders[2];
     GLsizei attachedCount = 0;
@@ -110,10 +120,26 @@ void CWallpaper::setupShaders () {
     sourcePointer = "#version 330\n"
 		    "precision highp float;\n"
 		    "uniform sampler2D g_Texture0;\n"
+		    "uniform vec4 g_CC;\n" // x=brightness y=contrast z=saturation w=hue(radians)
+		    "uniform float g_SrgbOut;\n"
 		    "in vec2 v_TexCoord;\n"
 		    "out vec4 out_FragColor;\n"
 		    "void main () {\n"
-		    "out_FragColor = texture (g_Texture0, v_TexCoord);\n"
+		    "vec4 src = texture (g_Texture0, v_TexCoord);\n"
+		    "vec3 c = src.rgb;\n"
+		    "c *= g_CC.x;\n" // brightness
+		    "c = (c - 0.5) * g_CC.y + 0.5;\n" // contrast around mid-grey
+		    "if (g_CC.w != 0.0) {\n" // hue rotation
+		    "  float s = sin(g_CC.w), co = cos(g_CC.w);\n"
+		    "  mat3 hue = mat3(0.299,0.587,0.114, 0.299,0.587,0.114, 0.299,0.587,0.114)\n"
+		    "           + co * mat3(0.701,-0.587,-0.114, -0.299,0.413,-0.114, -0.299,-0.587,0.886)\n"
+		    "           + s  * mat3(0.168,0.330,-0.497, -0.328,0.035,0.292, 1.250,-1.050,-0.203);\n"
+		    "  c = c * hue;\n"
+		    "}\n"
+		    "float l = dot(c, vec3(0.299,0.587,0.114));\n" // saturation
+		    "c = mix(vec3(l), c, g_CC.z);\n"
+		    "if (g_SrgbOut > 0.5) { c = pow(max(c, vec3(0.0)), vec3(1.0/2.2)); }\n"
+		    "out_FragColor = vec4(clamp(c, 0.0, 1.0), src.a);\n"
 		    "}";
 
     glShaderSource (fragmentShaderID, 1, &sourcePointer, nullptr);
@@ -178,6 +204,8 @@ void CWallpaper::setupShaders () {
     this->g_Texture0 = glGetUniformLocation (this->m_shader, "g_Texture0");
     this->a_Position = glGetAttribLocation (this->m_shader, "a_Position");
     this->a_TexCoord = glGetAttribLocation (this->m_shader, "a_TexCoord");
+    this->g_CC = glGetUniformLocation (this->m_shader, "g_CC");
+    this->g_SrgbOut = glGetUniformLocation (this->m_shader, "g_SrgbOut");
 }
 
 void CWallpaper::setDestinationFramebuffer (GLuint framebuffer) { this->m_destFramebuffer = framebuffer; }
@@ -188,6 +216,10 @@ const CWallpaper::SpanInfo* CWallpaper::getSpanInfo () const {
     return this->m_spanInfo.has_value () ? &this->m_spanInfo.value () : nullptr;
 }
 
+void CWallpaper::setMirrorOwner (const std::string& screen) { this->m_mirrorOwner = screen; }
+
+const std::string& CWallpaper::getMirrorOwner () const { return this->m_mirrorOwner; }
+
 void CWallpaper::updateUVs (const glm::ivec4& viewport, const bool vflip) {
     // update UVs if something has changed, otherwise use old values
     if (this->m_state.hasChanged (viewport, vflip, this->getWidth (), this->getHeight ())) {
@@ -197,11 +229,13 @@ void CWallpaper::updateUVs (const glm::ivec4& viewport, const bool vflip) {
 }
 
 void CWallpaper::render (
-    const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize
+    const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize,
+    const std::string& screenName
 ) {
     // Get current frame counter from the driver to avoid redundant scene renders
     const uint32_t currentFrame = this->getContext ().getDriver ().getFrameCounter ();
-    const bool needsSceneRender = (currentFrame != this->m_lastRenderedFrame);
+    const bool needsSceneRender = this->m_mirrorOwner.empty () ? (currentFrame != this->m_lastRenderedFrame)
+							       : (screenName == this->m_mirrorOwner);
     const glm::ivec4 sceneViewport = this->m_spanInfo.has_value ()
 	? glm::ivec4 { 0, 0, this->m_spanInfo->totalBounds.z, this->m_spanInfo->totalBounds.w }
 	: viewport;
@@ -267,6 +301,14 @@ void CWallpaper::render (
 	uend = uvs.uend;
 	vstart = uvs.vstart;
 	vend = uvs.vend;
+	static const bool s_presentTrace = getenv ("LWE_PRESENTTRACE") != nullptr;
+	if (s_presentTrace && this->m_lastRenderedFrame <= 2) {
+	    sLog.out (
+		"LWE-PRESENT viewport=", viewport.z, "x", viewport.w, " wpRes=", this->getWidth (), "x",
+		this->getHeight (), " mode=", static_cast<int> (this->m_state.getTextureUVsScaling ()), " uv=[", ustart,
+		",", uend, "]x[", vstart, ",", vend, "]"
+	    );
+	}
     }
 
     const GLfloat texCoords[] = {
@@ -282,6 +324,7 @@ void CWallpaper::render (
     glDisable (GL_BLEND);
     glDisable (GL_DEPTH_TEST);
     glDisable (GL_CULL_FACE);
+    glColorMask (true, true, true, true);
     // do not use any shader
     glUseProgram (this->m_shader);
     // activate scene texture
@@ -298,9 +341,39 @@ void CWallpaper::render (
     glVertexAttribPointer (this->a_Position, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
 
     glUniform1i (this->g_Texture0, 0);
+    {
+	const auto cc = this->getContext ().getApp ().getColorCorrection ();
+	glUniform4f (this->g_CC, cc.x, cc.y, cc.z, cc.w);
+	static const float srgbOut
+	    = (getenv ("LWE_SRGBALBEDO") != nullptr || getenv ("LWE_SRGBALL") != nullptr) ? 1.0f : 0.0f;
+	glUniform1f (this->g_SrgbOut, srgbOut);
+    }
     // write the framebuffer as is to the screen
     glBindBuffer (GL_ARRAY_BUFFER, this->m_texCoordBuffer);
     glDrawArrays (GL_TRIANGLES, 0, 6);
+
+    static const bool s_presentProfile = getenv ("LWE_FBPROFILE") != nullptr;
+    if (s_presentProfile) {
+	static int s_presents = 0;
+	if (++s_presents % 450 == 0) {
+	    std::vector<unsigned char> px (static_cast<size_t> (viewport.z) * viewport.w * 4);
+	    glReadPixels (viewport.x, viewport.y, viewport.z, viewport.w, GL_RGBA, GL_UNSIGNED_BYTE, px.data ());
+	    double cols[32] = {};
+	    for (int y = 0; y < viewport.w; y += 4) {
+		for (int x = 0; x < viewport.z; x += 4) {
+		    const size_t o = (static_cast<size_t> (y) * viewport.z + x) * 4;
+		    cols[x * 32 / viewport.z] += 0.299 * px[o] + 0.587 * px[o + 1] + 0.114 * px[o + 2];
+		}
+	    }
+	    std::ostringstream c;
+	    for (int i = 0; i < 32; i++) {
+		c << static_cast<int> (cols[i] / (viewport.w / 4.0 * (viewport.z / 32.0 / 4.0))) << (i < 31 ? "," : "");
+	    }
+	    sLog.out ("LWE-PRESENTPROFILE viewport=", viewport.z, "x", viewport.w, " cols=", c.str ());
+	}
+    }
+
+    OverlayLabel::draw (viewport.z, viewport.w);
 
 #if !NDEBUG
     glPopDebugGroup ();
@@ -309,15 +382,23 @@ void CWallpaper::render (
 
 void CWallpaper::setPause (bool newState) { }
 
+void CWallpaper::setPlaybackSpeed (float speed) { }
+
+void CWallpaper::setAudioVolume (int volume) { }
+
 void CWallpaper::setupFramebuffers () {
-    const uint32_t width = this->getWidth ();
-    const uint32_t height = this->getHeight ();
+    const glm::vec2 capped
+	= this->clampToCap ({ static_cast<float> (this->getWidth ()), static_cast<float> (this->getHeight ()) });
+    const auto width = static_cast<uint32_t> (capped.x);
+    const auto height = static_cast<uint32_t> (capped.y);
     const uint32_t clamp = this->m_state.getClampingMode ();
 
     // create framebuffer for the scene
-    this->m_sceneFBO = this->create (
-	"_rt_FullFrameBuffer", TextureFormat_ARGB8888, clamp, 1.0, { width, height }, { width, height }
-    );
+    this->m_sceneFBO
+	= this->create ("_rt_FullFrameBuffer", this->m_sceneFormat, clamp, 1.0, { width, height }, { width, height });
+    if (this->m_wallpaperData.is<Scene> ()) {
+	this->m_sceneFBO->ensureDepthAttachment ();
+    }
 
     this->alias ("_rt_MipMappedFrameBuffer", "_rt_FullFrameBuffer");
 }
@@ -339,9 +420,8 @@ std::shared_ptr<const CFBO> CWallpaper::findFBO (const std::string& name) const 
 std::shared_ptr<const CFBO> CWallpaper::getFBO () const { return this->m_sceneFBO; }
 
 std::unique_ptr<CWallpaper> CWallpaper::fromWallpaper (
-    const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext,
-    WebBrowser::WebBrowserContext* browserContext, const WallpaperState::TextureUVsScaling& scalingMode,
-    const uint32_t& clampMode
+    const Wallpaper& wallpaper, RenderContext& context, AudioContext& audioContext, WebHelper::HelperClient* webHelper,
+    const WallpaperState::TextureUVsScaling& scalingMode, const uint32_t& clampMode
 ) {
     if (wallpaper.is<Scene> ()) {
 	return std::make_unique<WallpaperEngine::Render::Wallpapers::CScene> (
@@ -357,7 +437,7 @@ std::unique_ptr<CWallpaper> CWallpaper::fromWallpaper (
 
     if (wallpaper.is<Web> ()) {
 	return std::make_unique<WallpaperEngine::Render::Wallpapers::CWeb> (
-	    wallpaper, context, audioContext, *browserContext, scalingMode, clampMode
+	    wallpaper, context, audioContext, *webHelper, scalingMode, clampMode
 	);
     }
 

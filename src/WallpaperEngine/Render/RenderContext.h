@@ -39,7 +39,14 @@ namespace Render {
 
 	void render (Drivers::Output::OutputViewport* viewport);
 	void setWallpaper (const std::string& display, std::shared_ptr<CWallpaper> wallpaper);
+	void clearWallpapers ();
+	/** drop sole-owner texture cache entries; see TextureCache::evictUnused. Needs a current GL context */
+	size_t evictUnusedTextures ();
 	void setPause (bool newState) const;
+	/** fan a playback-speed change to every wallpaper (mpv-backed ones consume it) */
+	void setPlaybackSpeed (float speed) const;
+	/** fan a live volume change (0..128) to every wallpaper (mpv-backed ones consume it) */
+	void setAudioVolume (int volume) const;
 	[[nodiscard]] Input::InputContext& getInputContext () const;
 	[[nodiscard]] const WallpaperApplication& getApp () const;
 	[[nodiscard]] const Drivers::VideoDriver& getDriver () const;

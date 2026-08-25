@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CRenderable.h"
+#include "PuppetModel.h"
 #include "WallpaperEngine/Render/CObject.h"
 #include "WallpaperEngine/Render/Objects/Effects/CPass.h"
 #include "WallpaperEngine/Render/Wallpapers/CScene.h"
@@ -11,6 +12,7 @@
 #include "WallpaperEngine/Scripting/ScriptableObject.h"
 
 #include <glm/vec3.hpp>
+#include <optional>
 #include <vector>
 
 using namespace WallpaperEngine;
@@ -33,6 +35,8 @@ public:
     void render () override;
 
     [[nodiscard]] const Image& getImage () const;
+
+    [[nodiscard]] std::optional<glm::vec3> cursorLocalPosition (const glm::vec3& worldPosition) const;
     [[nodiscard]] glm::vec2 getSize () const;
 
     [[nodiscard]] GLuint getSceneSpacePosition () const;
@@ -45,7 +49,7 @@ public:
     [[nodiscard]] const float& getUserAlpha () const override;
     [[nodiscard]] const float& getAlpha () const override;
     [[nodiscard]] const glm::vec3& getColor () const override;
-    [[nodiscard]] const glm::vec4& getColor4 () const override;
+    [[nodiscard]] glm::vec4 getColor4 () const override;
     [[nodiscard]] const glm::vec3& getCompositeColor () const override;
 
     /**
@@ -56,10 +60,15 @@ public:
      */
     void pinpongFramebuffer (std::shared_ptr<const CFBO>* drawTo, std::shared_ptr<const TextureProvider>* asInput);
 
+    [[nodiscard]] bool isCompositionLayer () const;
+    [[nodiscard]] bool copiesCompositionBackground () const;
+    [[nodiscard]] std::shared_ptr<const CFBO> getCompositionFBO () const;
+
 protected:
     void setupPasses ();
 
     void updateScreenSpacePosition ();
+    [[nodiscard]] glm::mat4 buildScreenViewProjection () const;
 
     struct ResolvedTransform {
 	glm::vec3 origin;
@@ -68,6 +77,10 @@ protected:
     };
 
     [[nodiscard]] ResolvedTransform resolveTransform (const WallpaperEngine::Data::Model::Object& object) const;
+
+    [[nodiscard]] glm::vec3 toClassicLightSpace (const glm::vec3& litSpacePos) const override;
+    [[nodiscard]] glm::vec3 toClassicLightSpaceLocal (const glm::vec3& litSpacePos) const override;
+    [[nodiscard]] float classicLocalRadianceScale () const override;
 
     /**
      * Computes the object's own transform (origin/scale/angle) without walking the
@@ -79,7 +92,10 @@ private:
     bool loadPuppetMesh (const glm::vec2& size);
     void updatePuppetPositionBuffer (const glm::vec2& size);
     void setupPuppetGeometryCallback (Effects::CPass* pass) const;
+    void uploadPuppetPositions (const std::vector<GLfloat>& raw, const glm::vec2& size);
+    void updatePuppetAnimation ();
     ResolvedTransform updateGeometryBuffers ();
+    void applyShapeGeometry (const ResolvedTransform& transform);
     [[nodiscard]] glm::vec2 resolveGeometrySize (float sceneWidth, float sceneHeight, glm::vec3& origin) const;
     void updateScenePosition (
 	const glm::vec3& origin, const glm::vec2& size, const glm::vec3& scale, float sceneWidth, float sceneHeight
@@ -102,11 +118,28 @@ private:
     GLuint m_puppetIndices = GL_NONE;
     GLsizei m_puppetIndexCount = 0;
     bool m_hasPuppetMesh = false;
+    /** Effectless puppet: the first pass IS the screen pass, so puppet verts must be
+     *  uploaded in centered-world quad space (m_pos) instead of texture-local space */
+    bool m_puppetScreenSpace = false;
+    bool m_isShape = false;
     std::vector<GLfloat> m_puppetRawPositions = {};
+
+    std::optional<PuppetModel> m_puppetModel = std::nullopt;
+    struct PuppetLayerBinding {
+	const PuppetModel::Clip* clip;
+	const ImageAnimationLayer* layer;
+    };
+    std::vector<PuppetLayerBinding> m_puppetLayers = {};
+    std::vector<PuppetModel::ActiveLayer> m_puppetActiveScratch = {};
+    std::vector<glm::mat4> m_puppetSkinMatrices = {};
+    std::vector<glm::vec3> m_puppetSkinnedPositions = {};
+    std::vector<GLfloat> m_puppetSkinnedFlat = {};
 
     glm::mat4 m_modelViewProjectionScreen = {};
     glm::mat4 m_modelViewProjectionPass = {};
     glm::mat4 m_modelViewProjectionCopy = {};
+    glm::mat4 m_lweScreenVPComposite = {};
+    glm::mat4 m_lweMPosFromWorld = glm::mat4 (1.0f);
     glm::mat4 m_modelViewProjectionScreenInverse = {};
     glm::mat4 m_modelViewProjectionPassInverse = {};
     glm::mat4 m_modelViewProjectionCopyInverse = {};
@@ -122,6 +155,7 @@ private:
     const Image& m_image;
 
     std::vector<Effects::CPass*> m_passes = {};
+    std::shared_ptr<const CFBO> m_compositionFBO = nullptr;
     std::vector<MaterialPassUniquePtr> m_virtualPassess = {};
 
     glm::vec4 m_pos = {};

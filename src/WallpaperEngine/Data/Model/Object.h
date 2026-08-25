@@ -92,7 +92,10 @@ struct ImageAnimationLayer {
     UserSettingUniquePtr rate;
     UserSettingUniquePtr visible;
     UserSettingUniquePtr blend;
+    /** Clip id inside the puppet .mdl (MDLA animation id) */
     UserSettingUniquePtr animation;
+    /** Layer composes additively over the rest pose (every authored layer sets true) */
+    bool additive;
 };
 
 struct ImageData {
@@ -117,12 +120,14 @@ struct ImageData {
     UserSettingUniquePtr colorBlendMode;
     /** The brightness of the image */
     UserSettingUniquePtr brightness;
+    bool copyBackground;
     /** The material in use for this image */
     ModelUniquePtr model;
     /** The effects applied to this image after the material is rendered */
     std::vector<ImageEffectUniquePtr> effects;
     /** The animation layers used in the puppet warp */
     std::vector<ImageAnimationLayerUniquePtr> animationLayers;
+    bool perspective;
 };
 
 class Image : public Object, public ImageData {
@@ -137,6 +142,7 @@ struct SoundData {
     // TODO: WRITE AN ENUM FOR THIS
     std::optional<std::string> playbackmode;
     std::vector<std::string> sounds;
+    UserSettingUniquePtr volume;
 };
 
 class Sound : public Object, public SoundData {
@@ -154,6 +160,8 @@ struct ParticleControlPoint {
     uint32_t flags;
     glm::vec3 offset;
     bool lockToPointer;
+    /** Mirror the parent system's control point at this index (child systems; -1 = none) */
+    int parentControlPoint;
 };
 
 /**
@@ -513,9 +521,6 @@ struct ParticleRenderer {
     bool fadeSize; // ropetrail: fade size along trail
 };
 
-/**
- * Child particle system
- */
 struct ParticleChild {
     std::string type;
     std::string name;
@@ -526,6 +531,8 @@ struct ParticleChild {
     glm::vec3 origin;
     glm::vec3 scale;
     std::string particleFile;
+    /** Fully parsed child system definition (null when the file failed to resolve) */
+    ParticleUniquePtr definition;
 };
 
 /**
@@ -539,8 +546,9 @@ struct ParticleInstanceOverride {
     UserSettingUniquePtr rate;
     UserSettingUniquePtr speed;
     UserSettingUniquePtr count;
-    UserSettingUniquePtr color; // Replaces particle color
-    UserSettingUniquePtr colorn; // Multiplies particle color
+    UserSettingUniquePtr color;
+    UserSettingUniquePtr colorn;
+    bool colornAuthored { false };
 };
 
 struct ParticleData {
@@ -612,7 +620,13 @@ struct TextData {
     std::string verticalalign;
     /** Padding inside the bounding box */
     int padding;
-    // TODO: PARSE LIMITS TOO!
+    /** Width limit: truncate the text to maxwidth px (canvas/effective-px space) when set */
+    bool limitwidth;
+    /** Max width in pixels (canvas space); 0 = unset */
+    float maxwidth;
+    bool limitrows;
+    int maxrows;
+    bool limituseellipsis;
 };
 
 class Text : public Object, public TextData {
@@ -620,5 +634,75 @@ public:
     explicit Text (ObjectData data, TextData textData) noexcept :
 	Object (std::move (data)), TextData (std::move (textData)) { };
     ~Text () override = default;
+};
+
+struct AnimationKey {
+    float frame;
+    float value;
+    /** bezier handle x components (y ignored until a scene authors nonzero) */
+    float frontX;
+    float backX;
+};
+
+struct AnimationChannel {
+    std::vector<AnimationKey> keys;
+};
+
+/** Keyframe animation over a vec3 property: channels[0..2] = x/y/z. */
+struct PropertyAnimation {
+    AnimationChannel channels[3];
+    float maxFrame = 0.0f;
+    static constexpr float FPS = 30.0f;
+};
+
+struct ModelObjectData {
+    UserSettingUniquePtr scale;
+    UserSettingUniquePtr angles;
+    UserSettingUniquePtr visible;
+    UserSettingUniquePtr alpha;
+    UserSettingUniquePtr color;
+    std::string modelFile;
+    /** Material of the FIRST submesh (also the renderable's material) */
+    MaterialUniquePtr material;
+    /** Materials of submeshes 1..N-1 (multi-submesh .mdl; empty for single-mesh models) */
+    std::vector<MaterialUniquePtr> extraMaterials;
+    bool perspective;
+    /** keyframed angles animation (Starscape statue: 360deg/60s on Y); null = static */
+    std::unique_ptr<PropertyAnimation> anglesAnimation;
+};
+
+class ModelObject : public Object, public ModelObjectData {
+public:
+    explicit ModelObject (ObjectData data, ModelObjectData modelData) noexcept :
+	Object (std::move (data)), ModelObjectData (std::move (modelData)) { };
+    ~ModelObject () override = default;
+};
+
+/**
+ * Scene light source ("light": "lpoint"/"lspot"/"ltube"/"ldirectional").
+ * Position/angles/parent live in the ObjectData base (origin/groupAngles/parent).
+ */
+struct LightData {
+    /** Authored light type string: lpoint, lspot, ltube, ldirectional */
+    std::string lightType;
+    UserSettingUniquePtr color;
+    UserSettingUniquePtr intensity;
+    /** Falloff radius (world units) */
+    float radius;
+    float exponent;
+    /** Spot inner cone (degrees) */
+    float innercone;
+    /** Spot outer cone (degrees) */
+    float outercone;
+    glm::vec3 controlPoint;
+    glm::vec3 cascadeDistances;
+    bool castShadow;
+};
+
+class Light : public Object, public LightData {
+public:
+    explicit Light (ObjectData data, LightData lightData) noexcept :
+	Object (std::move (data)), LightData (std::move (lightData)) { };
+    ~Light () override = default;
 };
 } // namespace WallpaperEngine::Data::Model

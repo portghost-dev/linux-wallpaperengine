@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <functional>
 #include <glm/gtc/type_ptr.hpp>
 #include <utility>
@@ -42,6 +43,8 @@ public:
     void setModelViewProjectionMatrixInverse (const glm::mat4* projection);
     void setModelMatrix (const glm::mat4* model);
     void setViewProjectionMatrix (const glm::mat4* viewProjection);
+    void setScreenViewProjectionMatrix (const glm::mat4* vp) { this->m_lweScreenVP = vp; }
+    void setClassicLocalFrame (bool localFrame) { this->m_classicLocalFrame = localFrame; }
     void setBlendingMode (BlendingMode blendingmode);
     [[nodiscard]] BlendingMode getBlendingMode () const;
     [[nodiscard]] std::shared_ptr<const CFBO> resolveFBO (const std::string& name) const;
@@ -57,12 +60,18 @@ public:
     using GeometryCallback = std::function<void ()>;
     void
     setGeometryCallback (GeometryCallback setupAttribs, GeometryCallback drawGeometry, GeometryCallback cleanupAttribs);
+    /** true when a geometry callback feeds this pass (mesh-driven, no input texture needed) */
+    [[nodiscard]] bool hasGeometryCallback () const { return static_cast<bool> (this->m_drawGeometryCallback); }
 
     // Public uniform setters for external callers (pointer-based, updated per-frame)
     void addUniform (const std::string& name, const float* value, int count = 1);
     void addUniform (const std::string& name, const glm::vec3* value);
+    void addUniform (const std::string& name, const glm::vec3* value, int count);
     void addUniform (const std::string& name, const glm::vec4* value);
+    void addUniform (const std::string& name, const glm::vec4* value, int count);
+    void addUniform (const std::string& name, const glm::mat3* value);
     void addUniform (const std::string& name, const glm::mat4* value);
+    void addUniform (const std::string& name, const glm::mat4* value, int count);
 
 private:
     struct TextureChainEntry {
@@ -122,6 +131,37 @@ private:
 	glm::vec4 rotation = { 0.0f, 0.0f, 0.0f, 0.0f };
     };
 
+    static constexpr int LIGHT_SLOTS = 4;
+    static constexpr int SHADOW_FEATURES = 16;
+    struct LightStageBlock {
+	std::array<glm::vec4, LIGHT_SLOTS> pointPosRad {};
+	std::array<glm::vec4, LIGHT_SLOTS> pointColorExp {};
+	std::array<glm::vec4, LIGHT_SLOTS> spotPosRad {};
+	std::array<glm::vec4, LIGHT_SLOTS> spotColorExp {};
+	std::array<glm::vec4, LIGHT_SLOTS> spotAxisCosIn {};
+	std::array<float, LIGHT_SLOTS> spotCosOut {};
+	std::array<glm::vec4, LIGHT_SLOTS> dirToLight {};
+	std::array<glm::vec4, LIGHT_SLOTS> dirColor {};
+	int pointCount = 0;
+	int spotCount = 0;
+	int dirCount = 0;
+	int tubeCount = 0;
+	std::array<glm::vec4, LIGHT_SLOTS> tubePosRadA {};
+	std::array<glm::vec4, LIGHT_SLOTS> tubeEndExpB {};
+	std::array<glm::vec4, LIGHT_SLOTS> tubeColor {};
+	int shadowFeatureCount = 0;
+	std::array<glm::mat4, SHADOW_FEATURES> shadowMatrix {};
+	std::array<glm::vec4, SHADOW_FEATURES> shadowTransform {};
+	std::array<float, SHADOW_FEATURES> shadowEnabled {};
+	std::array<float, LIGHT_SLOTS> spotShadowFeature {};
+	std::array<glm::vec4, LIGHT_SLOTS> dirShadowFeatures {};
+	std::array<glm::mat4, LIGHT_SLOTS * 6> pointShadowMat {};
+	std::array<glm::vec4, LIGHT_SLOTS> pointShadowXform {};
+	std::array<float, LIGHT_SLOTS> pointShadowEnabled {};
+	std::array<glm::vec3, LIGHT_SLOTS> classicPosition {};
+	std::array<glm::vec4, 3> classicColorPremultiplied {};
+    };
+
     static GLuint compileShader (const char* shader, GLuint type);
     void setupShaders ();
     void setupShaderVariables ();
@@ -142,7 +182,6 @@ private:
     void addUniform (const std::string& name, const int* value, int count = 1);
     void addUniform (const std::string& name, const double* value, int count = 1);
     void addUniform (const std::string& name, const glm::vec2* value);
-    void addUniform (const std::string& name, const glm::mat3* value);
     void addUniform (const std::string& name, const int** value);
     void addUniform (const std::string& name, const double** value);
     void addUniform (const std::string& name, const float** value);
@@ -155,6 +194,9 @@ private:
     template <typename T> void addUniform (const std::string& name, UniformType type, T* value, int count = 1);
     template <typename T> void addUniform (const std::string& name, UniformType type, T** value);
 
+    /** Repacks the scene's per-frame neutral light snapshot into m_lightStage (clamped to LIGHT_SLOTS per type) */
+    void refreshLightStage ();
+
     void setupRenderFramebuffer () const;
     void setupRenderTexture ();
     [[nodiscard]] std::shared_ptr<const TextureProvider> resolveTexture0 ();
@@ -164,6 +206,7 @@ private:
     void bindTextureOverrides (uint32_t currentTexture, std::shared_ptr<const TextureProvider>& texture0) const;
     void setupRenderUniforms ();
     void setupRenderReferenceUniforms ();
+    void setupRenderableUniforms () const;
     void setupRenderAttributes () const;
     void renderGeometry () const;
     void cleanupRenderSetup ();
@@ -201,12 +244,25 @@ private:
     std::shared_ptr<const TextureProvider> m_input = nullptr;
     std::shared_ptr<const TextureProvider> m_previousInput = nullptr;
     glm::vec4 m_texture0Resolution = {};
+    std::shared_ptr<const CFBO> m_resolvedDrawTo = nullptr;
+    float m_frameTime = 0.0f;
+    // LightingV1 staging block + whether this pass's program actually consumes it
+    LightStageBlock m_lightStage = {};
+    bool m_usesSceneLights = false;
+    bool m_classicLocalFrame = false;
+    const glm::mat4* m_lweScreenVP = nullptr;
 
     GLuint m_programID;
 
     // shader variables used temporary
     GLint g_Texture0Rotation;
     GLint g_Texture0Translation;
+    GLint g_AlphaLocation = -1;
+    GLint g_ColorLocation = -1;
+    GLint g_Color4Location = -1;
+    GLint g_BrightnessLocation = -1;
+    GLint g_UserAlphaLocation = -1;
+    bool m_foldBrightness = false;
     GLuint a_TexCoord;
     GLuint a_Position;
     GLuint m_vao;

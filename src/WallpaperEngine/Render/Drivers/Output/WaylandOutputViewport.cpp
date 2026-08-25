@@ -60,7 +60,14 @@ static void mode (void* data, wl_output* output, uint32_t flags, int32_t width, 
     }
 }
 
-static void done (void* data, wl_output* wl_output) { static_cast<WaylandOutputViewport*> (data)->initialized = true; }
+static void done (void* data, wl_output* wl_output) {
+    const auto viewport = static_cast<WaylandOutputViewport*> (data);
+
+    viewport->initialized = true;
+
+    // runtime hotplug hook: a no-op during startup and for property-change bursts
+    viewport->getDriver ()->onOutputAnnounced (viewport);
+}
 
 static void scale (void* data, wl_output* wl_output, int32_t scale) {
     const auto viewport = static_cast<WaylandOutputViewport*> (data);
@@ -97,9 +104,7 @@ static void surfaceFrameCallback (void* data, struct wl_callback* cb, uint32_t t
     wl_callback_destroy (cb);
 
     viewport->frameCallback = nullptr;
-    viewport->rendering = true;
-    viewport->getDriver ()->getApp ().update (viewport);
-    viewport->rendering = false;
+    viewport->framePending = true;
 }
 
 constexpr struct wl_callback_listener frameListener = { .done = surfaceFrameCallback };
@@ -158,6 +163,38 @@ WaylandOutputViewport::WaylandOutputViewport (
 void WaylandOutputViewport::setupXdgOutput (zxdg_output_manager_v1* manager) {
     this->xdgOutput = zxdg_output_manager_v1_get_xdg_output (manager, this->output);
     zxdg_output_v1_add_listener (this->xdgOutput, &xdgOutputListener, this);
+}
+
+void WaylandOutputViewport::teardownSurfaces () {
+    if (this->frameCallback) {
+	wl_callback_destroy (this->frameCallback);
+	this->frameCallback = nullptr;
+    }
+
+    if (this->eglSurface) {
+	eglDestroySurface (m_driver->getEGLContext ()->display, this->eglSurface);
+	this->eglSurface = nullptr;
+    }
+
+    if (this->eglWindow) {
+	wl_egl_window_destroy (this->eglWindow);
+	this->eglWindow = nullptr;
+    }
+
+    if (this->layerSurface) {
+	zwlr_layer_surface_v1_destroy (this->layerSurface);
+	this->layerSurface = nullptr;
+    }
+
+    if (this->surface) {
+	wl_surface_destroy (this->surface);
+	this->surface = nullptr;
+    }
+
+    this->framePending = false;
+    this->callbackInitialized = false;
+    this->swapIntervalConfigured = false;
+    this->rendering = false;
 }
 
 void WaylandOutputViewport::setupLS () {
@@ -257,6 +294,16 @@ void WaylandOutputViewport::makeCurrent () {
 
     if (result == EGL_FALSE) {
 	sLog.error ("Couldn't make egl current");
+	return;
+    }
+
+    // Swap interval 0: never let eglSwapBuffers block. Pacing comes from frame
+    // callbacks (plus the FPS cap), never from swap throttling - and a blocking swap on
+    // a DPMS-off output wedges the whole single-threaded loop, taking the command
+    // socket down with it. EGL defaults to 1; set once per surface after it is current.
+    if (!this->swapIntervalConfigured) {
+	eglSwapInterval (m_driver->getEGLContext ()->display, 0);
+	this->swapIntervalConfigured = true;
     }
 }
 
@@ -264,6 +311,21 @@ void WaylandOutputViewport::swapOutput () {
     this->callbackInitialized = true;
 
     this->makeCurrent ();
+
+    if (getenv ("LWE_EGLDEBUG") != nullptr) {
+	static int dbgN = 0;
+	if (dbgN++ < 4) {
+	    EGLint sw = 0, sh = 0;
+	    eglQuerySurface (m_driver->getEGLContext ()->display, this->eglSurface, EGL_WIDTH, &sw);
+	    eglQuerySurface (m_driver->getEGLContext ()->display, this->eglSurface, EGL_HEIGHT, &sh);
+	    GLint vp[4] = { 0, 0, 0, 0 };
+	    glGetIntegerv (GL_VIEWPORT, vp);
+	    sLog.error (
+		"LWE-EGLSURF ", this->name, " eglSurface=", sw, "x", sh, " viewport.size=", size.x, "x", size.y,
+		" scale=", scale, " glViewport=", vp[2], "x", vp[3]
+	    );
+	}
+    }
     frameCallback = wl_surface_frame (surface);
     wl_callback_add_listener (frameCallback, &frameListener, this);
     eglSwapBuffers (m_driver->getEGLContext ()->display, this->eglSurface);

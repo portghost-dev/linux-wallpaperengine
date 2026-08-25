@@ -11,6 +11,7 @@ AudioDriver::AudioDriver (
 }
 
 void AudioDriver::update () {
+    this->m_recorder.enabled = this->m_applicationContext.settings.audio.audioprocessing;
     this->m_recorder.update ();
     this->m_detector.update ();
 }

@@ -18,7 +18,7 @@ void CRenderable::detectTexture () {
 	std::string textureName = textures->begin ()->second;
 
 	if (textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0) {
-	    this->m_texture = this->getScene ().findFBO (textureName);
+	    this->m_texture = this->find (textureName);
 	} else {
 	    this->m_texture = this->getContext ().resolveTexture (textureName);
 	}
@@ -31,7 +31,12 @@ void CRenderable::setup () {
     // calculate full animation time (if any)
     this->m_animationTime = 0.0f;
 
-    for (const auto& cur : this->getTexture ()->getFrames ()) {
+    const auto texture = this->getTexture ();
+    if (texture == nullptr) {
+	return;
+    }
+
+    for (const auto& cur : texture->getFrames ()) {
 	this->m_animationTime += cur->frametime;
     }
 }
@@ -39,3 +44,37 @@ void CRenderable::setup () {
 std::shared_ptr<const TextureProvider> CRenderable::getTexture () const { return this->m_texture; }
 
 double CRenderable::getAnimationTime () const { return this->m_animationTime; }
+extern float g_Time;
+
+bool CRenderable::hasTextureAnimation () const { return this->m_texture != nullptr && this->m_texture->isAnimated (); }
+
+size_t CRenderable::getTextureAnimationFrameCount () const {
+    return this->m_texture != nullptr ? this->m_texture->getFrames ().size () : 0;
+}
+
+void CRenderable::pauseTextureAnimation () {
+    if (!this->m_textureAnimationPlayback.controlled || this->m_textureAnimationPlayback.playing) {
+	// freeze the clock where it is (frame stays wherever the free-run left it)
+	this->m_textureAnimationPlayback.baseTime = static_cast<double> (g_Time);
+    }
+    this->m_textureAnimationPlayback.controlled = true;
+    this->m_textureAnimationPlayback.playing = false;
+}
+
+void CRenderable::playTextureAnimation () { this->m_textureAnimationPlayback = {}; }
+
+bool CRenderable::isTextureAnimationPlaying () const {
+    return !this->m_textureAnimationPlayback.controlled || this->m_textureAnimationPlayback.playing;
+}
+
+void CRenderable::setTextureAnimationFrame (const size_t frame) {
+    this->m_textureAnimationPlayback.controlled = true;
+    this->m_textureAnimationPlayback.playing = false;
+    this->m_textureAnimationPlayback.frameOverride = static_cast<int> (frame);
+}
+
+size_t CRenderable::getTextureAnimationFrame () const {
+    return this->m_textureAnimationPlayback.frameOverride >= 0
+	? static_cast<size_t> (this->m_textureAnimationPlayback.frameOverride)
+	: 0;
+}

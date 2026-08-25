@@ -13,6 +13,78 @@ SceneObject* get_opaque (JSValueConst this_val) {
     return static_cast<SceneObject*> (JS_GetAnyOpaque (this_val, &classId));
 }
 
+namespace {
+JSValue makeVec3 (JSContext* ctx, const glm::vec3& v) {
+    // construct a REAL builtins Vec3 (scripts call .subtract/.add on these)
+    JSValue global = JS_GetGlobalObject (ctx);
+    JSValue ctor = JS_GetPropertyStr (ctx, global, "Vec3");
+    JSValue args[3] = { JS_NewFloat64 (ctx, v.x), JS_NewFloat64 (ctx, v.y), JS_NewFloat64 (ctx, v.z) };
+    JSValue out = JS_CallConstructor (ctx, ctor, 3, args);
+    for (auto& a : args) {
+	JS_FreeValue (ctx, a);
+    }
+    JS_FreeValue (ctx, ctor);
+    JS_FreeValue (ctx, global);
+    return out;
+}
+
+glm::vec3 readVec3 (JSContext* ctx, JSValueConst obj, const char* name, const glm::vec3& fallback) {
+    JSValue v = JS_GetPropertyStr (ctx, obj, name);
+    glm::vec3 out = fallback;
+    if (JS_IsObject (v)) {
+	double c = 0.0;
+	JSValue x = JS_GetPropertyStr (ctx, v, "x");
+	if (!JS_ToFloat64 (ctx, &c, x)) {
+	    out.x = static_cast<float> (c);
+	}
+	JS_FreeValue (ctx, x);
+	JSValue y = JS_GetPropertyStr (ctx, v, "y");
+	if (!JS_ToFloat64 (ctx, &c, y)) {
+	    out.y = static_cast<float> (c);
+	}
+	JS_FreeValue (ctx, y);
+	JSValue z = JS_GetPropertyStr (ctx, v, "z");
+	if (!JS_ToFloat64 (ctx, &c, z)) {
+	    out.z = static_cast<float> (c);
+	}
+	JS_FreeValue (ctx, z);
+    }
+    JS_FreeValue (ctx, v);
+    return out;
+}
+} // namespace
+
+JSValue scene_get_camera_transforms (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* container = get_opaque (this_val);
+    const auto& camera = container->getScene ().getCamera ();
+
+    static const bool s_getProbe = getenv ("LWE_CAMPROBE") != nullptr;
+    static int s_getProbeCount = 0;
+    if (s_getProbe && s_getProbeCount < 10 && ++s_getProbeCount > 0) {
+	const auto& e = camera.getEye ();
+	const auto& c = camera.getCenter ();
+	sLog.out ("LWE-CAMPROBE-GET eye=(", e.x, ",", e.y, ",", e.z, ") center=(", c.x, ",", c.y, ",", c.z, ")");
+    }
+
+    JSValue out = JS_NewObject (ctx);
+    JS_SetPropertyStr (ctx, out, "eye", makeVec3 (ctx, camera.getEye ()));
+    JS_SetPropertyStr (ctx, out, "center", makeVec3 (ctx, camera.getCenter ()));
+    return out;
+}
+
+JSValue scene_set_camera_transforms (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject (argv[0])) {
+	return JS_UNDEFINED;
+    }
+    auto* container = get_opaque (this_val);
+    auto& camera = container->getScene ().getCamera ();
+
+    const glm::vec3 eye = readVec3 (ctx, argv[0], "eye", camera.getEye ());
+    const glm::vec3 center = readVec3 (ctx, argv[0], "center", camera.getCenter ());
+    camera.setScriptedView (eye, center);
+    return JS_UNDEFINED;
+}
+
 JSValue get_bloom (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* container = get_opaque (this_val);
 
@@ -135,7 +207,7 @@ JSValue get_cameraparallaxmouseinfluence (JSContext* ctx, JSValueConst this_val,
 
 JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc != 1) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "invalid arguments");
     }
 
     auto* container = get_opaque (this_val);
@@ -184,10 +256,12 @@ JSValue get_layer (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 	}
     }
 
-    return JS_EXCEPTION;
+    return JS_ThrowTypeError (ctx, "layer not found");
 }
 
-JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) { return JS_EXCEPTION; }
+JSValue scene_set_value (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    return JS_ThrowTypeError (ctx, "property is read-only");
+}
 
 SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
     m_scene (scene), m_engine (engine), m_classId (0) {
@@ -303,6 +377,16 @@ SceneObject::SceneObject (ScriptEngine& engine, Render::Wallpapers::CScene& scen
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_instance, "getLayer",
 	JS_NewCFunction (this->m_engine.getContext (), get_layer, "getLayer", 1), JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "getCameraTransforms",
+	JS_NewCFunction (this->m_engine.getContext (), scene_get_camera_transforms, "getCameraTransforms", 0),
+	JS_PROP_ENUMERABLE
+    );
+    JS_DefinePropertyValueStr (
+	this->m_engine.getContext (), this->m_instance, "setCameraTransforms",
+	JS_NewCFunction (this->m_engine.getContext (), scene_set_camera_transforms, "setCameraTransforms", 1),
+	JS_PROP_ENUMERABLE
     );
     // TODO: ADD REST OF THE METHODS
 }

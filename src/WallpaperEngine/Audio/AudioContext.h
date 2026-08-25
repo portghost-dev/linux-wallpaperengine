@@ -66,9 +66,11 @@ namespace Audio {
 	 */
 	[[nodiscard]] Drivers::AudioDriver& getDriver () const;
 
+	void setDriver (Drivers::AudioDriver& driver);
+
     private:
-	/** The audio driver in use */
-	Drivers::AudioDriver& m_driver;
+	/** The audio driver in use. Pointer rather than reference so it can be rebound. */
+	Drivers::AudioDriver* m_driver;
     };
 } // namespace Audio
 } // namespace WallpaperEngine

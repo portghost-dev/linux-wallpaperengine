@@ -19,12 +19,13 @@ static constexpr int InvalidVectorInstanceId = 0;
 #define VEC_MAGIC_CHECK_EXCEPTION(container, components)                                                               \
     do {                                                                                                               \
 	if (!container || container->magic != (int)(VEC_OPAQUE_MAGIC + components)) {                                  \
-	    return JS_EXCEPTION;                                                                                       \
+	    return JS_ThrowTypeError (ctx, "invalid vector object");                                                   \
 	}                                                                                                              \
     } while (0)
 #define VEC_MAGIC_CHECK_ERROR(container, components)                                                                   \
     do {                                                                                                               \
 	if (!container || container->magic != (int)(VEC_OPAQUE_MAGIC + components)) {                                  \
+	    JS_ThrowTypeError (ctx, "invalid vector object");                                                          \
 	    return -1;                                                                                                 \
 	}                                                                                                              \
     } while (0)
@@ -36,6 +37,7 @@ template <int components> struct VectorOpaqueContainer {
     VectorAdapter<components>& adapter;
     DynamicValue& value;
     uint32_t id;
+    uint32_t adapterInstanceId;
 };
 
 template <int components> auto vector_new () -> decltype (auto) {
@@ -190,7 +192,7 @@ JSValue vector_property_get (JSContext* ctx, JSValueConst obj_val, JSAtom atom, 
 	}
     }
 
-    return JS_EXCEPTION;
+    return JS_UNDEFINED;
 }
 
 template JSValue vector_property_get<2> (JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst receiver);
@@ -209,6 +211,7 @@ int vector_property_set (
     int tag = JS_VALUE_GET_TAG (val);
 
     if (tag != JS_TAG_INT && !JS_TAG_IS_FLOAT64 (tag)) {
+	JS_ThrowTypeError (ctx, "vector components accept numbers only");
 	return -1;
     }
 
@@ -259,6 +262,7 @@ int vector_property_set (
     }
 
     if (into == nullptr) {
+	JS_ThrowTypeError (ctx, "vector has no component '%s'", name);
 	return -1;
     }
 
@@ -371,13 +375,13 @@ template JSValue vector_length<4> (JSContext* ctx, JSValueConst this_val, int ar
 template <int components>
 JSValue vector_constructor (JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv, int magic) {
     if (argc == 0) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "invalid arguments");
     }
 
     auto it = vectorAdapterInstances<components>.find (magic);
 
     if (it == vectorAdapterInstances<components>.end ()) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "invalid object");
     }
 
     JSValue result = it->second.instantiate ();
@@ -403,8 +407,9 @@ template <int components> void vector_finalizer (JSRuntime* rt, JSValueConst val
 	return;
     }
 
-    // free container and the associated DynamicValue if temporal
-    if (container->id != InvalidVectorInstanceId) {
+    if (container->id != InvalidVectorInstanceId
+	&& vectorAdapterInstances<components>.find (container->adapterInstanceId)
+	    != vectorAdapterInstances<components>.end ()) {
 	container->adapter.free (container->id);
     }
 
@@ -601,11 +606,11 @@ template JSValue vector_cross<3> (JSContext* ctx, JSValueConst this_val, int arg
 
 template <int components> JSValue vector_mix (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (argc != 2) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "invalid arguments");
     }
 
     if (!JS_IsNumber (argv[1])) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "invalid arguments");
     }
 
     double amount = 0.0f;
@@ -946,6 +951,7 @@ template <int components> JSValue VectorAdapter<components>::instantiate (Dynami
 	    .adapter = *this,
 	    .value = value,
 	    .id = InvalidVectorInstanceId,
+	    .adapterInstanceId = this->m_instanceId,
 	}
     );
 
@@ -963,6 +969,7 @@ template <int components> JSValue VectorAdapter<components>::instantiate (Dynami
 	    .adapter = *this,
 	    .value = *value,
 	    .id = id,
+	    .adapterInstanceId = this->m_instanceId,
 	}
     );
 
@@ -982,6 +989,7 @@ template <int components> JSValue VectorAdapter<components>::instantiate () {
 	    .adapter = *this,
 	    .value = *value,
 	    .id = id,
+	    .adapterInstanceId = this->m_instanceId,
 	}
     );
 

@@ -76,7 +76,9 @@ std::optional<JSON> ApplicationContext::parseConfigJson (const std::filesystem::
     }
 
     try {
-	return JSON::parse (configFile);
+	std::ostringstream contents;
+	contents << configFile.rdbuf ();
+	return WallpaperEngine::Data::JSON::parseLenient (contents.str ());
     } catch (const std::exception& e) {
 	sLog.error ("Failed parsing wallpaper engine config.json: ", e.what ());
 	return std::nullopt;
@@ -496,7 +498,10 @@ void ApplicationContext::loadSettingsFromArgv () {
     performanceGroup.add_argument ("--no-fullscreen-pause")
 	.help ("Prevents the background pausing when an app is fullscreen")
 	.flag ()
-	.action ([this] (const std::string& value) -> void { this->settings.render.pauseOnFullscreen = false; });
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.render.pauseOnFullscreen = false;
+	    this->settings.render.fullscreenBehavior = FullscreenBehavior::Off;
+	});
 
     performanceGroup.add_argument ("--fullscreen-pause-only-active")
 	.help ("Wayland only: pause only when a fullscreen window is active (activated)")
@@ -537,6 +542,25 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.audio.audioprocessing = false; });
 
+    auto& apiGroup = program.add_group ("Daemon API");
+
+    apiGroup.add_argument ("--api-socket")
+	.help ("Listen for commands on the unix socket ($LWE_SOCKET or $XDG_RUNTIME_DIR/lwe/engine.sock)")
+	.flag ()
+	.action ([this] (const std::string& value) -> void { this->settings.general.apiSocket = true; });
+
+    apiGroup.add_argument ("--daemon")
+	.help ("Idle-daemon mode: boot with no background (pass --screen-root per output, no --bg) and await `show`")
+	.flag ()
+	.action ([this] (const std::string& value) -> void {
+	    this->settings.general.daemonMode = true;
+	    this->settings.general.apiSocket = true;
+	    // Stop, not Off: the engine releases outputs itself when something goes
+	    // fullscreen (41ms release / 105ms re-acquire, measured) and needs no
+	    // outside watcher. Persisted state and client verbs both override this.
+	    this->settings.render.fullscreenBehavior = FullscreenBehavior::Stop;
+	});
+
     auto& screenshotGroup = program.add_group ("Screenshot options");
 
     screenshotGroup.add_argument ("--screenshot")
@@ -558,6 +582,11 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.help ("Folder where the assets are stored")
 	.default_value ("")
 	.action ([this] (const std::string& value) -> void { this->settings.general.assets = value; });
+
+    contentGroup.add_argument ("--properties-file")
+	.help ("JSON file ({screen: {property: value}}) re-read on SIGUSR1 for live property reload")
+	.default_value ("")
+	.action ([this] (const std::string& value) -> void { this->settings.general.propertiesFile = value; });
 
     auto& configurationGroup = program.add_group ("Wallpaper configuration options");
 
@@ -656,9 +685,14 @@ void ApplicationContext::loadSettingsFromArgv () {
     );
 
     try {
-	program.parse_known_args (this->m_argc, this->m_argv);
+	const auto unknownArguments = program.parse_known_args (this->m_argc, this->m_argv);
 
-	if (this->settings.general.defaultBackground.empty ()) {
+	for (const auto& argument : unknownArguments) {
+	    sLog.error ("Ignoring unrecognized command line argument: ", argument);
+	}
+
+	// idle-daemon mode boots with NO backgrounds and awaits `show` over the socket
+	if (this->settings.general.defaultBackground.empty () && !this->settings.general.daemonMode) {
 	    throw std::runtime_error ("At least one background ID must be specified");
 	}
 
@@ -694,6 +728,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	this->settings.render.maximumFPS = 30;
 	this->settings.screenshot.take = false;
 	this->settings.render.pauseOnFullscreen = false;
+	this->settings.render.fullscreenBehavior = FullscreenBehavior::Off;
 #endif /* DEMOMODE */
     } catch (const std::runtime_error& e) {
 	throw std::runtime_error (

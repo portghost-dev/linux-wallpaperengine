@@ -59,6 +59,13 @@ WallpaperEngine::Data::Builders::ColorBuilder::parse (const std::string& value, 
 	const auto final = vectorSize == 3 ? glm::ivec4 (VectorBuilder::parse<glm::ivec3> (copy), alpha * 255)
 					   : VectorBuilder::parse<glm::ivec4> (copy);
 
+	if (final.r <= 1 && final.g <= 1 && final.b <= 1 && (vectorSize == 3 || final.a <= 1)) {
+	    return WallpaperEngine::Data::Model::Color (
+		static_cast<float> (final.r), static_cast<float> (final.g), static_cast<float> (final.b),
+		vectorSize == 3 ? alpha : static_cast<float> (final.a)
+	    );
+	}
+
 	return { final.r / 255.0f, final.g / 255.0f, final.b / 255.0f, final.a / 255.0f };
     }
 

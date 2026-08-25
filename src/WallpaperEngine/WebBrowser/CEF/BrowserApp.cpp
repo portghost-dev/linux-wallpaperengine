@@ -1,19 +1,77 @@
 #include "BrowserApp.h"
+#include "SchemeName.h"
 #include "WallpaperEngine/Logging/Log.h"
+
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <unistd.h>
 
 using namespace WallpaperEngine::WebBrowser::CEF;
 
-BrowserApp::BrowserApp (WallpaperEngine::Application::WallpaperApplication& application) :
-    SubprocessApp (application) { }
+namespace {
+/**
+ * Deadline for the next CefDoMessageLoopWork call, steady-clock ms. Zero means "due now" -
+ * that is also the safe initial state, so the first loop iteration always pumps. CEF's
+ * contract for OnScheduleMessagePumpWork is REPLACE, not minimum: a new request cancels
+ * any pending one.
+ */
+std::atomic<int64_t> s_nextPumpDueMs { 0 };
+
+std::atomic<int> s_pumpWakeFd { -1 };
+
+int64_t steadyNowMs () {
+    return std::chrono::duration_cast<std::chrono::milliseconds> (std::chrono::steady_clock::now ().time_since_epoch ())
+	.count ();
+}
+} // namespace
+
+void BrowserApp::OnScheduleMessagePumpWork (const int64_t delay_ms) {
+    s_nextPumpDueMs.store (steadyNowMs () + std::max<int64_t> (delay_ms, 0), std::memory_order_relaxed);
+
+    if (const int fd = s_pumpWakeFd.load (std::memory_order_relaxed); fd >= 0) {
+	const uint64_t one = 1;
+	[[maybe_unused]] const auto ignored = write (fd, &one, sizeof (one));
+    }
+}
+
+int64_t BrowserApp::nextPumpDueMs () { return s_nextPumpDueMs.load (std::memory_order_relaxed); }
+
+void BrowserApp::setPumpWakeFd (const int fd) { s_pumpWakeFd.store (fd, std::memory_order_relaxed); }
+
+namespace {
+std::vector<std::string> collectWorkshopIds (const WallpaperEngine::WebHelper::SpawnConfig& config) {
+    std::vector<std::string> ids {};
+
+    for (const auto& scheme : config.schemes) {
+	if (std::ranges::find (ids, scheme.workshopId) == ids.end ()) {
+	    ids.push_back (scheme.workshopId);
+	}
+    }
+
+    return ids;
+}
+} // namespace
+
+BrowserApp::BrowserApp (
+    const WallpaperEngine::WebHelper::SpawnConfig& config, WallpaperEngine::Media::MediaSource& mediaSource
+) : SubprocessApp (collectWorkshopIds (config)) {
+    for (const auto& scheme : config.schemes) {
+	this->m_handlerFactories[scheme.workshopId]
+	    = new WPSchemeHandlerFactory (scheme.workshopId, scheme.path, config.assetsDir, mediaSource);
+    }
+}
 
 CefRefPtr<CefBrowserProcessHandler> BrowserApp::GetBrowserProcessHandler () { return this; }
+
+const std::map<std::string, WPSchemeHandlerFactory*>& BrowserApp::getHandlerFactories () const {
+    return this->m_handlerFactories;
+}
 
 void BrowserApp::OnContextInitialized () {
     // register all the needed schemes, "wp" + the background id is going to be our scheme
     for (const auto& [workshopId, factory] : this->getHandlerFactories ()) {
-	CefRegisterSchemeHandlerFactory (
-	    WPSchemeHandlerFactory::generateSchemeName (workshopId), static_cast<const char*> (nullptr), factory
-	);
+	CefRegisterSchemeHandlerFactory (generateSchemeName (workshopId), static_cast<const char*> (nullptr), factory);
     }
 }
 
@@ -47,8 +105,15 @@ if (process_type.empty()) {
 }
 
 void BrowserApp::OnBeforeChildProcessLaunch (CefRefPtr<CefCommandLine> command_line) {
-    // add back any parameters we had before so the new process can load up everything needed
-    for (int i = 1; i < this->getApplication ().getContext ().getArgc (); i++) {
-	command_line->AppendArgument (this->getApplication ().getContext ().getArgv ()[i]);
+    std::string joined {};
+
+    for (const auto& workshopId : this->getWorkshopIds ()) {
+	if (!joined.empty ()) {
+	    joined += ',';
+	}
+
+	joined += workshopId;
     }
+
+    command_line->AppendSwitchWithValue ("lwe-schemes", joined);
 }

@@ -22,11 +22,12 @@ WallpaperUniquePtr WallpaperParser::parse (const JSON& file, Project& project) {
 }
 
 SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) {
-    const auto scene = JSON::parse (project.assetLocator->readString (file));
+    const auto scene = WallpaperEngine::Data::JSON::parseLenient (project.assetLocator->readString (file));
     const auto camera = scene.require ("camera", "Scenes must have a camera section");
     const auto general = scene.require ("general", "Scenes must have a general section");
     const auto projection
 	= general.require ("orthogonalprojection", "General section must have orthogonal projection info");
+    const bool isPerspectiveScene = projection.is_null ();
     const auto objects = scene.require ("objects", "Scenes must have an objects section");
     const auto& properties = project.properties;
 
@@ -39,9 +40,27 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
             .project = project
         }, SceneData {
             .colors = {
-                .ambient  = general.user ("ambientcolor", properties, glm::vec3 (0.0f)),
-                .skylight = general.user ("skylightcolor", properties, glm::vec3 (0.0f)),
+                .ambient  = general.user ("ambientcolor", properties, glm::vec3 (0.3f)),
+                .skylight = general.user ("skylightcolor", properties, glm::vec3 (0.3f)),
                 .clear = general.user ("clearcolor", properties, glm::vec3 (1.0f)),
+            },
+            .fog = {
+                .distance = {
+                    .enabled = general.user ("fogdistance", properties, false),
+                    .color = general.user ("fogdistancecolor", properties, glm::vec3 (0.0f)),
+                    .start = general.user ("fogdistancestart", properties, 0.0f),
+                    .end = general.user ("fogdistanceend", properties, 1.0f),
+                    .startDensity = general.user ("fogdistancestartdensity", properties, 0.0f),
+                    .endDensity = general.user ("fogdistanceenddensity", properties, 1.0f),
+                },
+                .height = {
+                    .enabled = general.user ("fogheight", properties, false),
+                    .color = general.user ("fogheightcolor", properties, glm::vec3 (0.0f)),
+                    .start = general.user ("fogheightstart", properties, 0.0f),
+                    .end = general.user ("fogheightend", properties, 1.0f),
+                    .startDensity = general.user ("fogheightstartdensity", properties, 0.0f),
+                    .endDensity = general.user ("fogheightenddensity", properties, 1.0f),
+                },
             },
             .camera = {
                 .fade = general.user ("camerafade", properties, false),
@@ -50,6 +69,13 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                     .enabled = general.user ("bloom", properties, false),
                     .strength = general.user ("bloomstrength", properties, 0.0f),
                     .threshold = general.user ("bloomthreshold", properties, 0.0f),
+                    .tint = general.user ("bloomtint", properties, glm::vec3 (1.0f)),
+                    .hdr = general.optional ("hdr", false),
+                    .hdrIterations = general.optional ("bloomhdriterations", 8),
+                    .hdrScatter = general.optional ("bloomhdrscatter", 1.619f),
+                    .hdrFeather = general.optional ("bloomhdrfeather", 0.1f),
+                    .hdrStrength = general.user ("bloomhdrstrength", properties, 2.0f),
+                    .hdrThreshold = general.optional ("bloomhdrthreshold", 1.0f),
                 },
                 .parallax = {
                     .enabled = general.user ("cameraparallax", properties, false),
@@ -69,14 +95,23 @@ SceneUniquePtr WallpaperParser::parseScene (const JSON& file, Project& project) 
                     .up = camera.require <glm::vec3> ("up", "Camera must have an up position"),
                 },
                 .projection = {
-                    .width  = projection.optional ("auto", false) ? 0 : projection.require <int> ("width",  "Projection must have a width"),
-                    .height = projection.optional ("auto", false) ? 0 : projection.require <int> ("height", "Projection must have a height"),
-                    .isAuto = projection.optional ("auto", false),
-                    .nearz = camera.user ("nearz", properties, 0.0f),
-                    .farz = camera.user ("farz", properties, 1000.0f),
-                    .fov = camera.user ("fov", properties, 50.0f)
+                    .width  = isPerspectiveScene || projection.optional ("auto", false)
+                        ? 0 : projection.require <int> ("width",  "Projection must have a width"),
+                    .height = isPerspectiveScene || projection.optional ("auto", false)
+                        ? 0 : projection.require <int> ("height", "Projection must have a height"),
+                    .isAuto = !isPerspectiveScene && projection.optional ("auto", false),
+                    .isPerspective = isPerspectiveScene,
+                    .nearz = general.find ("nearz") != general.end () ? general.user ("nearz", properties, 0.0f)
+                                                                      : camera.user ("nearz", properties, 0.0f),
+                    .farz = general.find ("farz") != general.end () ? general.user ("farz", properties, 1000.0f)
+                                                                    : camera.user ("farz", properties, 1000.0f),
+                    .fov = general.find ("fov") != general.end () ? general.user ("fov", properties, 50.0f)
+                                                                  : camera.user ("fov", properties, 50.0f),
+                    .overrideFov = general.user ("perspectiveoverridefov", properties, 0.0f),
+                    .zoom = general.user ("zoom", properties, 1.0f)
                 }
             },
+            .transparentSorting = general.optional ("transparentsorting", false),
             .objects = parseObjects (objects, project),
         }
     );

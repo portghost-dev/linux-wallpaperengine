@@ -2,12 +2,39 @@
 
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
 #include <mpv/render_gl.h>
 #include <mpv/stream_cb.h>
+#include <thread>
 
 using namespace WallpaperEngine::VideoPlayback::MPV;
 
-void* get_proc_address (void* ctx, const char* name) {
+// LWE_MPV_REALSYNC restores mpv's real ARB_sync entry points and direct rendering
+static bool useRealMpvSync () {
+    const char* mode = getenv ("LWE_MPV_REALSYNC");
+    return mode != nullptr && *mode != '\0';
+}
+
+// nothing in mpv's render-API backend ever reaps its per-frame fences, so real sync
+// objects accumulate for the life of this GL context; the stubs allocate nothing
+static GLsync stubFenceSync (GLenum, GLbitfield) { return nullptr; }
+static GLenum stubClientWaitSync (GLsync, GLbitfield, GLuint64) { return GL_ALREADY_SIGNALED; }
+static void stubDeleteSync (GLsync) { }
+
+static void* get_proc_address (void* ctx, const char* name) {
+    if (!useRealMpvSync ()) {
+	if (strcmp (name, "glFenceSync") == 0) {
+	    return reinterpret_cast<void*> (&stubFenceSync);
+	}
+	if (strcmp (name, "glClientWaitSync") == 0) {
+	    return reinterpret_cast<void*> (&stubClientWaitSync);
+	}
+	if (strcmp (name, "glDeleteSync") == 0) {
+	    return reinterpret_cast<void*> (&stubDeleteSync);
+	}
+    }
     return static_cast<GLPlayer*> (ctx)->getContext ().getDriver ().getProcAddress (name);
 }
 
@@ -104,6 +131,14 @@ void GLPlayer::setVolume (double volume) {
     }
 }
 
+void GLPlayer::setSpeed (const double speed) {
+    // mpv's own documented range; 0 is not a valid rate - pausing is a separate fact
+    this->m_speed = std::clamp (speed, 0.01, 100.0);
+    if (this->m_handle != nullptr) {
+	mpv_set_property (this->m_handle, "speed", MPV_FORMAT_DOUBLE, &this->m_speed);
+    }
+}
+
 void GLPlayer::setPaused () {
     this->m_paused = true;
 
@@ -172,6 +207,7 @@ void GLPlayer::render () const {
 				  { MPV_RENDER_PARAM_FLIP_Y, &flip_y },
 				  { MPV_RENDER_PARAM_INVALID, nullptr } };
 
+    glColorMask (true, true, true, true);
     mpv_render_context_render (this->m_renderContext, params);
 }
 
@@ -197,8 +233,12 @@ void GLPlayer::prepareGL () {
 	sLog.exception ("Framebuffers are not properly set");
     }
 
-    // clear the framebuffer
+    glColorMask (true, true, true, true);
+    GLfloat previousClearColor[4] = {};
+    glGetFloatv (GL_COLOR_CLEAR_VALUE, previousClearColor);
+    glClearColor (0.0f, 0.0f, 0.0f, 0.0f);
     glClear (GL_COLOR_BUFFER_BIT);
+    glClearColor (previousClearColor[0], previousClearColor[1], previousClearColor[2], previousClearColor[3]);
 }
 
 void GLPlayer::init () {
@@ -222,15 +262,46 @@ void GLPlayer::init () {
     mpv_set_option_string (this->m_handle, "vo", "libmpv");
     mpv_set_option_string (this->m_handle, "profile", "fast");
     mpv_set_option_string (this->m_handle, "untimed", this->m_untimed ? "yes" : "no");
+    // looping local files need no deep read-ahead; the default ~200MB demuxer cache
+    // is pure RAM cost and heap churn here. Override with LWE_MPV_DEMUX_MB.
+    const char* demuxMode = getenv ("LWE_MPV_DEMUX_MB");
+    int demuxMB = 48;
+    if (demuxMode != nullptr && *demuxMode != '\0') {
+	const int parsed = atoi (demuxMode);
+	if (parsed > 0) {
+	    demuxMB = parsed;
+	} else {
+	    sLog.error ("LWE_MPV_DEMUX_MB is not a positive number, using ", demuxMB);
+	}
+    }
+    const std::string demuxMax = std::to_string (demuxMB) + "MiB";
+    mpv_set_option_string (this->m_handle, "demuxer-max-bytes", demuxMax.c_str ());
+    mpv_set_option_string (this->m_handle, "demuxer-max-back-bytes", "16MiB");
+    // lavc thread pool defaults to core count; each thread holds in-flight frames.
+    // Override with LWE_MPV_THREADS.
+    const char* thrMode = getenv ("LWE_MPV_THREADS");
+    const unsigned cores = std::thread::hardware_concurrency ();
+    const unsigned defThreads = std::max (1u, std::min (4u, cores > 0 ? cores : 4u));
+    const std::string threads = (thrMode && *thrMode) ? thrMode : std::to_string (defThreads);
+    mpv_set_option_string (this->m_handle, "vd-lavc-threads", threads.c_str ());
+    // stubbed fences cannot pace host-mapped PBO reuse, so direct rendering must stay
+    // off whenever the stubs are active; both flip together on LWE_MPV_REALSYNC
+    mpv_set_option_string (this->m_handle, "vd-lavc-dr", useRealMpvSync () ? "auto" : "no");
 
     if (mpv_initialize (this->m_handle) < 0) {
 	sLog.exception ("Could not initialize mpv context");
     }
 
-    // ensure video is muted and plays in a loop
-    mpv_set_property_string (this->m_handle, "hwdec", "auto");
+    const char* hwdecMode = getenv ("LWE_HWDEC");
+    mpv_set_property_string (this->m_handle, "hwdec", (hwdecMode && *hwdecMode) ? hwdecMode : "no");
+    // LWE: cap the NVDEC decode-ahead pool (libmpv default 6 -> 2) to trim ~160MB of hw-decode VRAM;
+    // ignored under software decode. Override with LWE_MPV_EXTRA_FRAMES.
+    const char* efMode = getenv ("LWE_MPV_EXTRA_FRAMES");
+    mpv_set_property_string (this->m_handle, "hwdec-extra-frames", (efMode && *efMode) ? efMode : "2");
     mpv_set_property_string (this->m_handle, "loop", "inf");
     mpv_set_property (this->m_handle, "volume", MPV_FORMAT_DOUBLE, &this->m_volume);
+    // playback rate set before init (a set-speed may have landed pre-creation)
+    mpv_set_property (this->m_handle, "speed", MPV_FORMAT_DOUBLE, &this->m_speed);
 
     // initialize gl context for mpv
     mpv_opengl_init_params gl_init_params { get_proc_address, this };

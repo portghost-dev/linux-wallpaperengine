@@ -25,9 +25,12 @@ public:
     ShaderUnit (
 	const GLSLContext::UnitType type, std::string file, std::string content, const AssetLocator& assetLocator,
 	const ShaderConstantMap& constants, const TextureMap& passTextures, const TextureMap& overrideTextures,
-	const ComboMap& combos, const ComboMap& overrideCombos
+	const ComboMap& combos, const ComboMap& overrideCombos, const ShaderConstantMap& materialConstants
     );
-    ~ShaderUnit () = default;
+    ~ShaderUnit ();
+    // m_parameters is owned here and freed in the destructor; copying would double-free
+    ShaderUnit (const ShaderUnit&) = delete;
+    ShaderUnit& operator= (const ShaderUnit&) = delete;
 
     /**
      * Links this shader unit with another unit so they're treated as one
@@ -53,6 +56,7 @@ public:
      * @return The textures this shader unit requires
      */
     [[nodiscard]] const TextureMap& getTextures () const;
+    [[nodiscard]] const std::map<int, glm::vec4>& getPaintDefaultColors () const;
     /**
      * @return The combos set for this shader unit by the configuration
      */
@@ -75,6 +79,8 @@ private:
      * Parses the input shader looking for possible combo values that are required for it to properly work
      */
     void preprocessVariables ();
+    /** demotes global consts initialized from uniforms to #define macros (GLSL legality) */
+    void preprocessGlobalConsts ();
     /**
      * Parses the input shader looking for include directives to extract the full list of included files
      */
@@ -100,6 +106,7 @@ private:
      * Adjusts vertex varyings when a workshop shader declares a narrower vertex type than its fragment peer.
      */
     [[nodiscard]] std::string applyLinkedVaryingCompatibility (std::string source) const;
+    [[nodiscard]] std::string applyTextureResolutionSwizzleCompatibility (std::string source) const;
     /**
      * Adjusts fragment shaders that use wide texture coordinates as vec2 values in Wallpaper Engine effects.
      */
@@ -168,12 +175,14 @@ private:
      * The constants defined for this unit
      */
     const ShaderConstantMap& m_constants;
+    const ShaderConstantMap& m_materialConstants;
     /** The textures that are already applied to this shader */
     const TextureMap& m_passTextures;
     /** The textures that are being overridden */
     const TextureMap& m_overrideTextures;
     /** The default textures to use when a texture is not applied in a given slot */
     TextureMap m_defaultTextures = {};
+    std::map<int, glm::vec4> m_paintDefaultColors = {};
     /**
      * The shader unit this unit is linked to
      */

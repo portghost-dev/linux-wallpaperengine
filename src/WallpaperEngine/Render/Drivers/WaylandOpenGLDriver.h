@@ -74,6 +74,17 @@ public:
     [[nodiscard]] void* getProcAddress (const char* name) const override;
 
     void onLayerClose (Output::WaylandOutputViewport*);
+    bool releaseOutputSurfaces () override;
+    bool acquireOutputSurfaces () override;
+    /**
+     * Called from the wl_output `done` event. When outputs are already initialized and
+     * this viewport is a configured screen with no layer surface yet, it is a runtime
+     * hotplug (output re-enabled, DP link re-trained): give it its layer surface and a
+     * render kick. Idempotent for the property-change bursts `done` also terminates.
+     */
+    void onOutputAnnounced (Output::WaylandOutputViewport*);
+    /** true when this screen name is configured for a background or a span group */
+    [[nodiscard]] bool shouldSetupScreen (const std::string& name) const;
     Output::WaylandOutputViewport* surfaceToViewport (const wl_surface*) const;
 
     Output::WaylandOutputViewport* viewportInFocus = nullptr;
@@ -83,6 +94,8 @@ public:
 
     /** List of available screens */
     std::vector<Output::WaylandOutputViewport*> m_screens = {};
+    /** set once startup layer surfaces exist; wl_output events after this are hotplug */
+    bool m_outputsInitialized = false;
 
 private:
     /** The output used by the driver */

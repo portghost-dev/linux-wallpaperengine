@@ -14,6 +14,9 @@ ReadStreamSharedPtr VirtualAdapter::open (const std::filesystem::path& path) con
 	throw std::filesystem::filesystem_error ("Cannot find file", path, std::error_code ());
     }
 
+    file->second->clear ();
+    file->second->seekg (0, std::ios_base::beg);
+
     return file->second;
 }
 

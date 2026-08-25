@@ -13,3 +13,6 @@ Application::ApplicationContext& FullScreenDetector::getApplicationContext () co
 bool FullScreenDetector::anythingFullscreen () const { return false; }
 
 void FullScreenDetector::reset () { }
+
+// the stub detector never counts anything as fullscreen, so there is nothing to redo
+void FullScreenDetector::recomputeRelevance () { }

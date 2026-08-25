@@ -1,5 +1,6 @@
 #pragma once
 
+#include <glm/vec2.hpp>
 #include <optional>
 #include <string>
 
@@ -28,5 +29,7 @@ struct ModelStruct {
     std::optional<int> height;
     /** Model file for puppet */
     std::optional<std::string> puppet;
+    /** Puppet crop-rect offset within the original texture space (can be negative) */
+    glm::vec2 cropOffset { 0.0f };
 };
 } // namespace WallpaperEngine::Data::Model

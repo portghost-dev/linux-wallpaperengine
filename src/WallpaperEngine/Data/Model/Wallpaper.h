@@ -43,6 +43,18 @@ struct SceneData {
 	UserSettingUniquePtr skylight;
 	UserSettingUniquePtr clear;
     } colors;
+    struct Fog {
+	struct Layer {
+	    UserSettingUniquePtr enabled;
+	    UserSettingUniquePtr color;
+	    UserSettingUniquePtr start;
+	    UserSettingUniquePtr end;
+	    UserSettingUniquePtr startDensity;
+	    UserSettingUniquePtr endDensity;
+	};
+	Layer distance;
+	Layer height;
+    } fog;
     /**
      * Camera configuration
      */
@@ -62,6 +74,15 @@ struct SceneData {
 	    UserSettingUniquePtr strength;
 	    /** Bloom's threshold to pass onto the shader */
 	    UserSettingUniquePtr threshold;
+	    /** Bloom's tint color (g_BloomTint in the downsample shaders) */
+	    UserSettingUniquePtr tint;
+	    bool hdr;
+	    /** bloomhdr* knobs (defaults = the editor's untouched values) */
+	    int hdrIterations;
+	    float hdrScatter;
+	    float hdrFeather;
+	    UserSettingUniquePtr hdrStrength;
+	    float hdrThreshold;
 	} bloom;
 	/**
 	 * Parallax effect configuration
@@ -99,11 +120,19 @@ struct SceneData {
 	    int width;
 	    int height;
 	    bool isAuto;
+	    /** general.orthogonalprojection == null: a true perspective-camera scene
+	     *  (fov-driven; e.g. 3047596375 "Blue Thinker"). Canvas dims fall back to
+	     *  the output like isAuto; the camera path decides projection separately. */
+	    bool isPerspective;
 	    UserSettingUniquePtr nearz;
 	    UserSettingUniquePtr farz;
 	    UserSettingUniquePtr fov;
+	    UserSettingUniquePtr overrideFov;
+	    UserSettingUniquePtr zoom;
 	} projection;
     } camera;
+
+    bool transparentSorting = false;
 
     ObjectList objects;
 };

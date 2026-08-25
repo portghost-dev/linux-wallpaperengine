@@ -10,5 +10,8 @@ using namespace WallpaperEngine::Data::Model;
 class DynamicValueParser {
 public:
     static Model::DynamicValueUniquePtr parse (const json& data, const Properties& properties, bool expectColor);
+
+private:
+    static Model::AnimationTimeline parseAnimation (const json& data, const glm::vec4& baseValue);
 };
 }

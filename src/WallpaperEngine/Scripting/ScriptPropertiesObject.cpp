@@ -37,33 +37,51 @@ JSValue scriptproperties_property_get (JSContext* ctx, JSValueConst obj_val, JSA
 	auto& properties = container->value.getProperties ();
 	const auto it = properties.find (name);
 
+	static const bool s_propTrace = getenv ("LWE_LIGHTDUMP") != nullptr;
+	static int s_propTraceCount = 0;
+	if (s_propTrace && s_propTraceCount < 24) {
+	    s_propTraceCount++;
+	    if (it == properties.end ()) {
+		sLog.out (
+		    "LWE-PROPTRACE value=", &container->value, " ", name, " -> UNDEFINED (map size ",
+		    properties.size (), ")"
+		);
+	    } else {
+		sLog.out (
+		    "LWE-PROPTRACE value=", &container->value, " ", name, " -> float=", it->second->value->getFloat ()
+		);
+	    }
+	}
+
 	if (it == properties.end ()) {
 	    return JS_UNDEFINED;
 	}
 
 	return container->object.getEngine ().dynamicToJs (*it->second->value);
     } catch (const std::exception& e) {
-	return JS_EXCEPTION;
+	return JS_ThrowTypeError (ctx, "scriptProperties.%s: %s", name, e.what ());
     }
 }
 
 int scriptproperties_property_set (
     JSContext* ctx, JSValueConst obj_val, JSAtom atom, JSValueConst val, JSValueConst receiver, int flags
 ) {
-    // do not support setting properties
+    // setting is unsupported; -1 signals an exception, so one must actually be
+    // pending or the failure prints as "[uninitialized]"
+    JS_ThrowTypeError (ctx, "scriptProperties is read-only");
     return -1;
 }
 
 JSValue scriptpropertiescreator_add (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    // no need to do anything, any add call should just return itself
-    // we'll set them either way as what comes in the DynamicValue
-    // TODO: PROPERLY IMPLEMENT THIS CHAIN AT SOME POINT
-    return this_val;
+    return JS_DupValue (ctx, this_val);
 }
 
 JSValue scriptpropertiescreator_finish (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     JSClassID classId = 0;
     const auto container = static_cast<OpaqueScriptProperties*> (JS_GetAnyOpaque (this_val, &classId));
+    if (container == nullptr) {
+	return JS_UNDEFINED;
+    }
 
     // get all the properties and set the right values
     const auto* module = container->object.getEngine ().getRunningModule ();
@@ -169,8 +187,8 @@ ScriptPropertiesObject::ScriptPropertiesObject (ScriptEngine& engine, Render::Wa
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), this->m_engine.getGlobalThis (), "createScriptProperties",
 	JS_NewCFunctionMagic (
-	    this->m_engine.getContext (), scriptpropertiescreator_create, "createScriptProperties", 0, JS_CFUNC_generic,
-	    m_instanceId
+	    this->m_engine.getContext (), scriptpropertiescreator_create, "createScriptProperties", 0,
+	    JS_CFUNC_generic_magic, m_instanceId
 	),
 	JS_PROP_ENUMERABLE
     );

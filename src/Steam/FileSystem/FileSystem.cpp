@@ -67,3 +67,17 @@ std::filesystem::path Steam::FileSystem::appDirectory (const std::string& appDir
 
     sLog.exception ("Cannot find directory for steam app ", appDirectory, ": ", path);
 }
+std::vector<std::filesystem::path> Steam::FileSystem::workshopContentRoots (const int appID) {
+    std::vector<std::filesystem::path> result;
+    const auto homepath = detectHomepath ();
+
+    for (const auto& current : workshopDirectoryPaths) {
+	auto candidate = homepath / current / std::to_string (appID);
+
+	if (std::filesystem::is_directory (candidate)) {
+	    result.push_back (std::move (candidate));
+	}
+    }
+
+    return result;
+}

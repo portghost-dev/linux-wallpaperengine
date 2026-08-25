@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AnimationTimeline.h"
 #include "Color.h"
 #include "Types.h"
 
@@ -46,6 +47,7 @@ public:
 	Initialization = 0,
 	Script = 1,
 	User = 2,
+	Animation = 3,
     };
 
     DynamicValue () = default;
@@ -128,6 +130,8 @@ public:
      * @return The current script source associated with this dynamic value
      */
     [[nodiscard]] const std::optional<std::string>& getScriptSource () const;
+    void setAnimation (AnimationTimeline animation);
+    [[nodiscard]] const std::optional<AnimationTimeline>& getAnimation () const;
     /**
      * @return The script properties associated with this dynamic value (if any)
      */
@@ -147,6 +151,7 @@ private:
     std::list<std::function<void (const DynamicValue&, UpdateSource)>> m_listeners = {};
     std::vector<std::function<void ()>> m_connections = {};
     std::optional<std::string> m_scriptSource = std::nullopt;
+    std::optional<AnimationTimeline> m_animation = std::nullopt;
 
     glm::vec4 m_vec4 = {};
     glm::vec3 m_vec3 = {};
