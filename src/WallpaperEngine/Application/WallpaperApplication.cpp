@@ -2813,6 +2813,9 @@ bool WallpaperApplication::apiAcquireOutputs (std::string& error) {
     }
 
     this->m_releaseReason = ReleaseReason::Live;
+    // no frame has landed since the hold began, so seed the render clock here or the
+    // dead-man reads it as a dead client and releases the outputs it just restored
+    this->m_lastRender.store (std::chrono::steady_clock::now ().time_since_epoch ().count ());
 
     try {
 	this->rebuildForCurrentBackgrounds ();
