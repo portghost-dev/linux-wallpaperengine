@@ -3,10 +3,10 @@
 **Audience.** A developer who knows upstream linux-wallpaperengine (or C++ graphics
 code generally) and wants to understand this fork: what it does differently, why those
 choices were made, how the pieces fit, and where the code is. Read top to bottom once;
-after that, use `FORK-MAP.md` (the companion document) as the per-capability reference
-with file:line anchors.
+after that, use `docs/FORK-MAP.md` (the companion document) as the per-capability reference
+with `file::token` anchors.
 
-**Conventions.** Paths are relative to the repository root. Line numbers refer to this
+**Conventions.** Paths are relative to the repository root. Anchors (`File.ext::token`) refer to this
 tree as published. "Upstream" is Almamu/linux-wallpaperengine at `b016d7d`, the base
 this fork sits on. Everything stated here was verified against the code; anything that
 rests on measurement rather than code says so.
@@ -24,7 +24,7 @@ This fork turns that into a small system of cooperating processes:
                         ┌─────────────────────────────────────────┐
                         │  lwe-ui  (control panel, PySide6/QML)   │
                         │  small tray process + on-demand window; │
-                        │  manages systemd units                  │
+                        │  manages its systemd unit                │
                         └───────────────┬─────────────────────────┘
                                         │ JSON lines over Unix socket
                                         │ ($XDG_RUNTIME_DIR/lwe/engine.sock)
@@ -71,10 +71,10 @@ The design drivers, in the order they shaped the system:
    fullscreen or listed app needs the machine - releases its outputs entirely (VRAM
    freed, socket still answering) and takes them back on its own the moment the
    claim clears. A release also evicts the process's clean library pages, so a
-   released engine reads ~60 MB in a process monitor, not hundreds. Both policies
+   released engine reads ~60 MB in a process monitor (measured), not hundreds. Both policies
    live in the engine itself; no outside watcher is involved.
 4. **Parity with the Windows renderer is the point.** Scene lighting, 3D models,
-   skeletal puppets, particle child systems, text objects, perspective cameras, fog -
+   skeletal puppets, particle child systems, perspective cameras, fog -
    the things upstream stubs or drops are implemented, measured wallpaper by wallpaper.
 
 ---
@@ -87,7 +87,7 @@ Upstream's Wayland loop is `wl_display_dispatch(display)`, which blocks until Wa
 traffic arrives, with rendering driven by frame callbacks. The fork replaces it with
 the textbook non-blocking Wayland integration in
 `src/WallpaperEngine/Render/Drivers/WaylandOpenGLDriver.cpp` (`dispatchEventQueue`,
-:502-604):
+WaylandOpenGLDriver.cpp::dispatchEventQueue):
 
 ```
 prepare_read → flush → poll(fds, timeout) → read_events/cancel_read → dispatch_pending
@@ -96,31 +96,31 @@ prepare_read → flush → poll(fds, timeout) → read_events/cancel_read → di
 Three properties matter:
 
 - **The poll set is the Wayland fd plus every command-API fd**
-  (`getApiWakeFds`, :537-544). A socket command wakes the loop even when the compositor
+  (`getApiWakeFds`, WaylandOpenGLDriver.cpp::dispatchEventQueue). A socket command wakes the loop even when the compositor
   is completely silent.
-- **The timeout is always bounded**: 100 ms with the API up, 2000 ms without (:548).
+- **The timeout is always bounded**: 100 ms with the API up, 2000 ms without (WaylandOpenGLDriver.cpp::dispatchEventQueue).
   Nothing ever sleeps forever.
-- **`POLLERR|POLLHUP|POLLNVAL` on the display fd requests exit** (:558-562) instead of
+- **`POLLERR|POLLHUP|POLLNVAL` on the display fd requests exit** (WaylandOpenGLDriver.cpp::dispatchEventQueue) instead of
   spinning on a dead compositor.
 
 Frame callbacks no longer render inline from the listener. The callback only sets
-`framePending` (`Render/Drivers/Output/WaylandOutputViewport.cpp:101-108`); the loop then renders each
-signaled viewport once per pass (:577-588). Two further protections keep the loop
+`framePending` (`Render/Drivers/Output/WaylandOutputViewport.cpp::framePending`); the loop then renders each
+signaled viewport once per pass (WaylandOpenGLDriver.cpp::framePending). Two further protections keep the loop
 alive in adversarial conditions: if no frame has rendered for 2 seconds, every viewport
-is re-kicked (keepalive, :590-594 with the app-side stamp at
-`WallpaperApplication.cpp:2925-2950`) - this restarts the callback chain after
+is re-kicked (keepalive, WaylandOpenGLDriver.cpp::secondsSinceLastRender with the app-side stamp at
+`WallpaperApplication.cpp::m_lastRender`) - this restarts the callback chain after
 DPMS-on or hotplug - and `eglSwapInterval(0)` is forced per surface
-(`Render/Drivers/Output/WaylandOutputViewport.cpp:300-307`) so a DPMS-off output can never wedge the swap.
+(`Render/Drivers/Output/WaylandOutputViewport.cpp::makeCurrent`) so a DPMS-off output can never wedge the swap.
 
 At the top of every loop pass, before rendering, the app services its control surface
-(`WallpaperApplication::show()` at :2900-2920): pending socket commands, the rotation
+(`WallpaperApplication::show()` at WallpaperApplication.cpp::show): the property-reload check, pending socket commands, the rotation
 tick, the deadman tick, the fullscreen-gate tick, the running-apps poll, and the
 crash-guard's survived mark. **Commands are answered even while paused, released, or
 parked** - that is the whole point of the architecture.
 
 The same discipline applies to replies: `CommandServer::respond()` waits for a wedged
 client in bounded slices (500 ms total) and then drops it
-(`Api/CommandServer.cpp:281-317`). A slow reader loses its connection, never the
+(`Api/CommandServer.cpp::respond`). A slow reader loses its connection, never the
 engine.
 
 ### 2.2 The command API
@@ -130,29 +130,29 @@ New directory `src/WallpaperEngine/Api/`, two classes:
 - **`CommandServer`** - transport. Non-blocking AF_UNIX socket, line-framed. Security
   is hard-coded in three layers: the runtime directory is created 0700 (only when the
   server created it), the socket is 0600, and every accepted peer must pass a
-  `SO_PEERCRED` same-uid check (:164-181). A client that never terminates a line is
+  `SO_PEERCRED` same-uid check (CommandServer.cpp::authenticatePeer). A client that never terminates a line is
   dropped at 64 KiB buffered; at most 8 clients. The listen path doubles as a
-  single-instance guard with probe-before-unlink semantics (:112-120).
+  single-instance guard with probe-before-unlink semantics (CommandServer.cpp::someoneIsListening).
 - **`CommandDispatcher`** - validation. One JSON object per line,
   `{"id": int, "cmd": verb, "args": {...}}`. Every verb and argument is validated
-  before any handler runs (`CommandDispatcher.cpp:185-443`); nesting depth is pre-capped
-  to stop parser stack exhaustion (:188-209); wallpaper ids must match
-  `[A-Za-z0-9_-]{1,64}`, so no wire input can be path-shaped (:175-183). The 25 verbs
-  and their full argument contracts are tabulated in FORK-MAP.md chapter 8.
+  before any handler runs (`Api/CommandDispatcher.cpp::parse`); nesting depth is pre-capped
+  to stop parser stack exhaustion (Api/CommandDispatcher.cpp::parse); wallpaper ids must match
+  `[A-Za-z0-9_-]{1,64}`, so no wire input can be path-shaped (Api/CommandDispatcher.cpp::validBackgroundId). The 25 verbs
+  and their argument contracts are tabulated in docs/FORK-MAP.md chapters 1 and 8.
 
 Replies follow an **accepted-then-done** pattern: long commands (`show`, `next`,
 `prev`) ack immediately and send `done`/`failure` with the same id when the
 multi-second work finishes, so a client can tell "never heard you" from "working on
-it" (schema comment, `CommandDispatcher.h:16-20`).
+it" (schema comment, `CommandDispatcher.h::Command::Api`).
 
-The handlers live in `WallpaperApplication.cpp` (`handleApiCommand`, :1302-1683) and
+The handlers live in `WallpaperApplication.cpp` (`handleApiCommand`, WallpaperApplication.cpp::handleApiCommand) and
 are deliberately the thick part: the Api/ classes stay pure transport+validation, the
 app owns all state changes. This is the fork's single largest body of new code and the
-main porting cost (see the cherry-pick guide in FORK-MAP.md).
+main porting cost (see the cherry-pick guide in docs/FORK-MAP.md).
 
 ### 2.3 Daemon mode and the boot sequence
 
-`--daemon` (`ApplicationContext.cpp:552-563`) implies the API socket, defaults the
+`--daemon` (`ApplicationContext.cpp::loadSettingsFromArgv`) implies the API socket, defaults the
 fullscreen policy to Stop (the engine handles it itself; persisted state and client
 verbs both override), and exempts the launch from the "at least one background"
 requirement. A daemon boot registers every screen's layer surface with an **empty
@@ -163,7 +163,7 @@ scheduled rotation advance - persists the durable state (current show with args,
 the rotation set, pause, fps, volume, toggles, policies) to
 `$XDG_STATE_HOME/lwe/engine-state.json` via temp+rename, and an idle daemon boot
 replays it through the same core paths a client `show` takes
-(`persistRuntimeState` :2297, `restoreRuntimeState` :2345). A crash or restart
+(`persistRuntimeState` WallpaperApplication.cpp::persistRuntimeState, `restoreRuntimeState` WallpaperApplication.cpp::restoreRuntimeState). A crash or restart
 therefore comes back on the wallpaper that was actually on screen. A restart is invisible
 without any client connected. A crash-loop guard tracks boot survival in
 `boot-history.json`: when the last two boots died within 60 seconds of starting,
@@ -174,18 +174,19 @@ systemd starts the engine at graphical-session; no client needs to exist.
 
 ### 2.4 `show`: the hot swap
 
-`show` is the heart of the system. `applyShowCore`
-(`WallpaperApplication.cpp:1969-2156`):
+`show` is the heart of the system. Every caller resolves the id and preflights the
+project first, then invokes `applyShowCore`
+(`WallpaperApplication.cpp::applyShowCore`):
 
 1. Resolve the id against the lwe library roots, then the Steam workshop - never a raw
-   path (`resolveLibraryBackground`, :1816-1842). Preflight-parse the project.
+   path (`resolveLibraryBackground`, WallpaperApplication.cpp::resolveLibraryBackground). Preflight-parse the project.
 2. Apply per-show args (color correction, speed, properties, volume, scaling, clamp,
    skip sets, fullscreen policy) - scaling/clamp are written **before** the rebuild
-   because they key the mirror groups (:2017-2059).
+   because they key the mirror groups (WallpaperApplication.cpp::applyShowCore).
 3. Rebuild everything: tear down scenes, evict sole-owner cache textures, reload,
-   rebuild (`rebuildForCurrentBackgrounds`, :1844-1868).
+   rebuild (`rebuildForCurrentBackgrounds`, WallpaperApplication.cpp::rebuildForCurrentBackgrounds).
 4. On any exception, restore the 12 snapshotted previous settings and rebuild the old
-   set (:2073-2098). A failed show never leaves a half-applied state.
+   set (WallpaperApplication.cpp::applyShowCore). A failed show never leaves a half-applied state.
 5. On success, push the previous show onto a 20-deep history deque (this is what
    `prev` pops) and stamp the current show with the client's opaque `ui_id`, which
    survives engine-driven advances so the panel can tell "the tile the user clicked"
@@ -199,40 +200,40 @@ permutation before reshuffle) / random, and `avoid_repeat` re-rolls against the
 current display id. Disabling freezes the countdown: re-pushing an unchanged disabled
 set preserves the remaining time (a changed set freezes at the full interval), and
 re-enabling the same set resumes where it froze via a backdated clock
-(`apiRotateSet`, :2123-2187; the transition logic at :2166-2176; tick at
-:2416-2440). The next pick is pre-drawn so `status` can name it. A manual `show`
+(`apiRotateSet`, WallpaperApplication.cpp::apiRotateSet; the transition logic at WallpaperApplication.cpp::applyRotateSet; tick at
+WallpaperApplication.cpp::tickApiRotation). The next pick is pre-drawn so `status` can name it. A manual `show`
 restarts the countdown. One scheduler, always: the panel pushes sets but never
 schedules.
 
 ### 2.6 Output lifecycle: release / acquire / deadman / fullscreen-stop / app rule
 
-Outputs are a state machine with a reason stack (`ReleaseReason { Live, Verb, Deadman,
-Fullscreen, AppCondition }`, `WallpaperApplication.h:220`):
+Outputs are a state machine with a single release reason (`ReleaseReason { Live, Verb, Deadman,
+Fullscreen, AppCondition }`, `WallpaperApplication.h::ReleaseReason`):
 
 - **`release-outputs` / `acquire-outputs` verbs** - explicit control. Release tears
   down GL first (while a context is still current) and then the layer surfaces;
   acquire rebuilds. Idempotent; a Verb hold cannot be downgraded by other sources
-  (:2664-2738).
+  (WallpaperApplication.cpp::apiReleaseOutputs).
 - **Deadman switch** - after the first `ping` is ever seen, if both pings and renders
   stop for `LWE_DEADMAN` seconds (default 300), outputs release themselves: the orphan
-  reflex for "the panel died, don't burn GPU forever" (`tickDeadman`, :2740-2763).
+  reflex for "the panel died, don't burn GPU forever" (`tickDeadman`, WallpaperApplication.cpp::tickDeadman).
   A ping under a Deadman hold re-acquires; under a Verb hold it does not.
 - **Fullscreen stop** - when the live policy is `stop` and a relevant fullscreen app
   appears, outputs shed; they re-acquire the moment it clears (`tickFullscreenGate`,
-  :2845-2875).
+  WallpaperApplication.cpp::tickFullscreenGate).
 - **Running-apps rule** - `set-app-conditions` gives the engine a list of process
   names and a behavior (off/pause/stop). A 3-second poll of `/proc/PID/comm` -
   process existence is the only honest signal for a windowless CLI process like a
   local LLM - drives it: pause is the master-pause fact (timescale 0, prior speed
   restored on release), stop releases the outputs with reason `app` and re-acquires
-  when no listed process remains (`tickAppCondition`, :2795-2843). Each mechanism
+  when no listed process remains (`tickAppCondition`, WallpaperApplication.cpp::tickAppCondition). Each mechanism
   only ever undoes what it engaged; holds owned by a bench, the deadman, or the
   fullscreen gate are never stolen.
 
 The fullscreen policy itself is now tri-state - Off / Pause / Stop
-(`FullscreenBehavior`, `ApplicationContext.h:31-38`) - live-settable via
+(`FullscreenBehavior`, `ApplicationContext.h::FullscreenBehavior`) - live-settable via
 `set-fullscreen`, with a live-editable app-id ignore list (`set-fullscreen-ignore`
-triggers an immediate detector recount, `Render/Drivers/Detectors/WaylandFullScreenDetector.cpp:282-289`).
+triggers an immediate detector recount, `Render/Drivers/Detectors/WaylandFullScreenDetector.cpp::recomputeRelevance`).
 Pause means freeze (rendering halts, allocations stay);
 Stop means release the outputs entirely.
 
@@ -241,15 +242,17 @@ Stop means release the outputs entirely.
 The shipped answer to VRAM cost is steady-state, not pause-time: composite FBOs are
 leased from a per-scene ping-pong pool instead of dedicated per layer (`LWE_FBOPOOL=0`
 disables), sized to on-screen coverage and clamped to output size x `LWE_SSFACTOR`
-(canvas/view split, `CScene.cpp:1411-1448`), and mip residency can cap uploads to the
+(canvas/view split, `CScene.cpp::largestOutputSize`), and mip residency can cap uploads to the
 largest live output dimension with per-frame demand expansion (on by default,
 `LWE_TEXDETAIL=full` opts out;
 `MipResidency.cpp`). Offline BC7/BC4/BC5 compression is ingested from a disk cache
-keyed by sha256 of the decoded mip0 (`uploadFromTexcache`, `CTexture.cpp:203-311`;
+keyed by sha256 of the stored mip0 bytes, after the container's LZ4 wrapping is
+reversed and before any image decode (`uploadFromTexcache`, `CTexture.cpp::uploadFromTexcache`;
 the encoder shim is `tools/texcomp/lwe_bc7enc.cpp`, x86-64 only via ispc; the cache
 producer is the panel's import wizard). And the full-reclaim path is not pause at all:
-it is `stop` - the fullscreen/app-condition policies that release the outputs or stop
-the engine service outright (section 2.6, section 4).
+it is `stop` - the fullscreen/app-condition policies release the outputs (section 2.6),
+and the panel's master switch stops the engine service outright
+(`lwe-ui/src/lwe_ui/models.py::setMaster`, section 4).
 
 ---
 
@@ -258,15 +261,14 @@ the engine service outright (section 2.6, section 4).
 Upstream created `WebBrowserContext` inside the engine and linked libcef into it. The
 fork moves CEF out of the engine process entirely (the engine lib no longer compiles
 or links any CEF code; the `WebBrowser/` classes build into the two web binaries)
-and replaces it with three processes:
+and replaces it with two processes:
 
 - **`lwe-web-service`** (`src/web-service-main.cpp`) owns `CefInitialize`, the scheme
   handlers, and the browser instances. It is spawned by the engine only when a web
   wallpaper is actually created (`CWeb`'s ctor -> `HelperClient::create` ->
-  `ensureHelper` -> `spawnService`, `WebHelper/HelperClient.cpp:609-613, 251-303,
-  122-142`), and it **exits when
+  `ensureHelper` -> `spawnService`, `WebHelper/HelperClient.cpp::ensureHelper` and `WebHelper/HelperClient.cpp::spawnService`), and it **exits when
   the last web wallpaper goes away** (default 1 s grace, `LWE_WEB_IDLE_EXIT_MS`;
-  `Service/HelperServer.cpp:19-58`) or immediately when the engine disconnects.
+  `Service/HelperServer.cpp::LWE_WEB_IDLE_EXIT_MS`) or immediately when the engine disconnects.
 - **`lwe-web-helper`** (`src/web-helper-main.cpp`) is an 11-line binary set as CEF's
   `browser_subprocess_path`, so CEF's renderer/zygote children exec something tiny
   instead of the service.
@@ -288,7 +290,7 @@ closes fds >= 3 in the child (`SpawnGate.cpp`); an unexpected death SIGKILLs the
 unlinks orphaned shm, replays every instance and its properties into a respawned
 helper, with doubling backoff and a crash-loop cooldown (`LWE_WEB_CRASHGUARD`). A
 Catch2 test proves a non-web session never spawns anything
-(`Testing/Cases/WebHelperStartupCost.cpp`), and a 1700-line integration probe
+(`Testing/Cases/WebHelperStartupCost.cpp`), and a ~1700-line integration probe
 (`tools/web-frame-probe.cpp`) measures frame transport, respawn fidelity, and orphan
 hygiene.
 
@@ -300,7 +302,8 @@ that were in the library when it started.
 
 ## 4. The control panel
 
-`lwe-ui/` is entirely fork-new (upstream has no UI). A PySide6/QML tray app whose job
+`lwe-ui/` is entirely fork-new (upstream has no UI). A PySide6 control panel, a
+QML-free resident tray process plus an on-demand QML window, whose job
 is to be the daemon API's reference client and the system's owner:
 
 - It **generates and manages** `~/.config/systemd/user/lwe-engine.service` and the
@@ -314,8 +317,9 @@ is to be the daemon API's reference client and the system's owner:
 - It **owns the library workflow**: browse/search, playlists, per-wallpaper editor
   (autosaving, presence-as-setness conf model), a bench that test-renders new workshop
   items on a throwaway engine while the desktop engine stands down
-  (`release-outputs`), and an import wizard that requires a human verdict before
-  anything enters rotation.
+  (`release-outputs`), and an import wizard that by default requires a human verdict
+  before an item becomes rotation-eligible; turning off `REVIEW_REQUIRED`
+  (`lwe-ui/src/lwe_ui/constants.py::REVIEW_REQUIRED`) lands items automatically.
 - Display policy lives in the engine, not the panel: the fullscreen gate and the
   running-apps condition are both engine-side detectors (see section 2), configured by
   the panel via `set-fullscreen`, `set-fullscreen-ignore`, and `set-app-conditions`.
@@ -323,7 +327,7 @@ is to be the daemon API's reference client and the system's owner:
 
 Its durable settings/playlist/per-wallpaper state is shell-sourceable KEY=value files
 under `~/.config/lwe/` (Tier A); the same directory also carries JSON state (meta,
-discover, theme) and `tags.csv`. The full layout is in FORK-MAP.md chapter 9.
+discover, theme) and `tags.csv`. The full layout is in docs/FORK-MAP.md chapter 9.
 
 ---
 
@@ -367,7 +371,7 @@ freezes and keeps its allocations. The outermost option is the panel stopping
 | `src/WallpaperEngine/Data/` | parsers, models, BinaryReader/MemoryStream; **new**: AnimationTimeline, Sha256 |
 | `src/WallpaperEngine/Scripting/` | QuickJS engine, modules, builtins.js; **new**: LocalStorageObject, VectorModule |
 | `src/WallpaperEngine/Audio/`, `Input/`, `VideoPlayback/` | drivers; **new**: NullAudioDriver, PointerMoveGate |
-| `src/WallpaperEngine/Logging/` | **new** - InstrumentRegistry (runtime-toggleable log gates) |
+| `src/WallpaperEngine/Logging/` | logging base (`Log.h`/`.cpp`); **new**: InstrumentRegistry (runtime-toggleable log gates) |
 | `src/WallpaperEngine/Testing/Cases/` | Catch2 suite (run `build/output/tests`; ctest is not wired) |
 | `src/web-service-main.cpp`, `src/web-helper-main.cpp` | **new** - binaries owning CEF |
 | `tools/texcomp/`, `tools/web-frame-probe.cpp` | **new** - BC7 encoder shim; web-stack integration probe |
@@ -380,8 +384,9 @@ freezes and keeps its allocations. The outermost option is the panel stopping
 These are the rules the system depends on; breaking any of them is a bug even if it
 compiles:
 
-1. **One thread owns the loop.** Rendering, command execution, and all state changes
-   happen on the main thread. Nothing in the command path may block it: poll timeouts
+1. **One thread owns the loop.** Rendering, command execution, and all engine-state
+   changes happen on the main thread. The inherited SDL audio callback is the one
+   exception and is separately mutex-guarded. Nothing in the command path may block it: poll timeouts
    are bounded, replies are budgeted, respawns are one-attempt-per-pass.
 2. **Wire input is never trusted.** Ids are charset-validated before resolution; JSON
    depth and size are capped; every handler-side read is preceded by dispatcher
@@ -397,7 +402,7 @@ compiles:
    `LWE_FBOPOOL=0`, `LWE_NOBLOOM`) default to the shipped behavior and exist to
    isolate regressions. Plain configuration dials (socket paths, `LWE_DEADMAN`,
    mpv cache/thread caps, `LWE_SSFACTOR`) tune the system. Debug instruments
-   (`LWE_*DUMP`, `LWE_*PROBE`) are development logging; the three meant for runtime
+   (for example `LWE_*DUMP`, `LWE_*PROBE`, `LWE_*STATS`) are development logging; the three meant for runtime
    toggling go through `InstrumentRegistry`, which refuses launch-time-only gates.
    One caveat when adding one: the panel writes several of these into the engine
    env file, so the value in force at runtime may have been decided in
@@ -406,25 +411,26 @@ compiles:
    the panel pushes sets but never schedules. Output holds stack by reason; a Verb
    hold cannot be downgraded.
 6. **The panel and engine agree through the socket, not through files** - except the
-   documented config handoffs (`~/.config/lwe/`, the engine-env file). If you add
+   documented config and cache handoffs (`~/.config/lwe/`, the engine-env file, and
+   the texture cache described in section 2.7). If you add
    state, decide which side owns it and say so in the verb's contract.
 
 ## 8. Where to start reading
 
 1. `src/WallpaperEngine/Api/CommandDispatcher.h` - the wire contract, 55 lines.
-2. `WaylandOpenGLDriver.cpp:502-604` - the loop.
-3. `WallpaperApplication.cpp:2900-2920` - what happens every pass; then
-   `handleApiCommand` (:1315) and `applyShowCore` (:1969).
+2. `WaylandOpenGLDriver.cpp::dispatchEventQueue` - the loop.
+3. `WallpaperApplication.cpp::show` - what happens every pass; then
+   `handleApiCommand` (WallpaperApplication.cpp::handleApiCommand) and `applyShowCore` (WallpaperApplication.cpp::applyShowCore).
 4. `WebHelper/Protocol.h` and `FrameContract.h` - the web stack's two contracts.
-5. `CScene.cpp` ctor (:42-353; the assembly body starts at :102) - how a scene comes
+5. `CScene.cpp` ctor (CScene.cpp::LWE_NOBLOOM; the assembly body starts at CScene.cpp::CScene) - how a scene comes
    together (bloom ladder, lights, clamping); then `renderFrame`.
 6. `lwe-ui/src/lwe_ui/api_client.py` - the client side of the socket, small and
    readable; then `models.py` for how the panel thinks.
 
-After that, FORK-MAP.md gets you from any capability name to its code.
+After that, docs/FORK-MAP.md gets you from any capability name to its code.
 
 ---
 
-*Companion document: `FORK-MAP.md` - the per-capability reference with full switch,
+*Companion document: `docs/FORK-MAP.md` - the per-capability reference with full switch,
 verb, and env-var tables and the cherry-pick guide. If this narrative and the code
 ever disagree, the code is right; the anchors are where to check.*

@@ -51,7 +51,7 @@ Fourteen themes, defaulting to true-black OLED.
 ![the theme picker](docs/images/theme-picker.png)
 
 The Quick Panel floats over whatever you are doing - global controls and the
-running scene's own properties without opening the full window. Light themes
+running scene's own properties, one click away from anywhere in the window. Light themes
 are real, not an afterthought.
 
 ![the quick panel on a light theme](docs/images/quick-panel-light.png)
@@ -66,7 +66,7 @@ The repository is a pair that ships together:
 [`ARCHITECTURE.md`](ARCHITECTURE.md) explains the machine: how the pieces fit, why
 the design went this way, and where to start reading.
 [`docs/FORK-MAP.md`](docs/FORK-MAP.md) is the per-capability reference behind it,
-with file and line anchors for every claim, a complete switch and verb map, and a
+with `file::token` anchors for every claim, a complete switch and verb map, and a
 guide to which pieces can be lifted on their own.
 
 ## What is different from upstream
@@ -75,15 +75,17 @@ guide to which pieces can be lifted on their own.
 - Camera and projection work: orthographic and perspective cameras, parallax, zoom,
   and script-driven view changes now behave much closer to the Windows renderer.
 - Particles: playback-rate dilation, start times, event-driven children
-  (spawn/death/follow), puppet skeletal animation, animated-texture cycle behavior,
+  (spawn/death/follow), animated-texture cycle behavior,
   instance overrides, and count-override semantics.
+- Puppet skeletal animation for rigged scene objects.
 - Scene lighting: light objects, a from-scratch reimplementation of the generated
   lighting shader module, corrected light-direction conventions, and mesh
   winding/chirality fixes. 3D model objects render.
 - An HDR bloom ladder (RGBA16F), used when a scene's bloom calls for it.
 - Script engine: the module subsystem works, scripts tick values renderers actually
   read, object angles use the documented units, and an audio-response API is
-  available to scripts. Per-object sound volume applies as playback gain.
+  available to scripts.
+- Per-object sound volume applies as playback gain.
 - Text objects: placement, point sizing, and width-limit truncation.
 
 Parity is judged wallpaper by wallpaper against the Windows client; plenty of scenes
@@ -125,8 +127,8 @@ The engine's daemon API is the center of the architecture, and `lwe-ui/` is its
 main client: a control panel that runs as a small tray process plus a full
 window opened on demand, so closing the panel returns its memory while the
 quick actions stay a right-click away. Library browsing,
-rotation playlists, per-wallpaper settings (scaling, fps, color correction,
-animation speed, scene properties), Workshop import with a bench-test wizard,
+rotation playlists, per-wallpaper settings (scaling, color correction,
+animation speed, scene properties), a global frame-rate cap, Workshop import with a bench-test wizard,
 theming, and a developer view exposing the engine's debug instruments.
 
 The panel is installed by `install.sh` along with the engine. See
@@ -165,7 +167,8 @@ rm -f ~/.local/bin/linux-wallpaperengine ~/.local/bin/lwe-web-service
 rm -f ~/.local/bin/lwe_bc7enc ~/.local/bin/lwe-ui
 rm -rf ~/.local/lib/lwe-engine ~/.local/share/lwe-ui
 rm -f ~/.local/share/applications/lwe-ui.desktop
-rm -rf ~/.config/lwe ~/.local/state/lwe
+rm -rf ~/.config/lwe ~/.local/state/lwe ~/.local/share/lwe
+rm -f ~/.config/autostart/lwe-ui.desktop
 ```
 
 The last line removes your settings, playlists, and the texture cache; keep it
@@ -188,7 +191,8 @@ python -m venv --system-site-packages ~/.local/share/lwe-ui/venv
 ```
 
 The configure step downloads the matching CEF binary distribution (large, one
-time). Dependency list and asset discovery are unchanged from upstream; see their
+time). Asset discovery is unchanged from upstream, and so is the dependency list
+apart from ispc, which builds the BC7 texture-compression tool; see their
 README if you are setting up from nothing.
 
 Two notes for source builds:
@@ -207,13 +211,15 @@ The panel is optional. The daemon speaks one JSON object per line over
 can drive it:
 
 ```
-printf '{"id":1,"cmd":"status"}\n' | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/lwe/engine.sock"
-printf '{"id":2,"cmd":"show","args":{"id":"1311951951"}}\n' | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/lwe/engine.sock"
-printf '{"id":3,"cmd":"next"}\n' | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/lwe/engine.sock"
+{ printf '{"id":1,"cmd":"status"}\n'; sleep 1; } | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/lwe/engine.sock"
+{ printf '{"id":2,"cmd":"show","args":{"id":"1311951951"}}\n'; sleep 5; } | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/lwe/engine.sock"
+{ printf '{"id":3,"cmd":"next"}\n'; sleep 1; } | socat - "UNIX-CONNECT:$XDG_RUNTIME_DIR/lwe/engine.sock"
 ```
 
 Replies come back as JSON lines with the same `id`; long commands answer
-`accepted` first and `done` when the swap finishes. Every state-changing command,
+`accepted` first and `done` when the swap finishes. Hold the connection open
+until the reply arrives: the engine drops a client as soon as it closes its
+write half, so a bare `printf | socat` runs the command but reads nothing back. Every state-changing command,
 and every scheduled rotation advance, is persisted by the engine itself, so a
 rotation set up from the shell survives crashes and restarts with no client
 running, and comes back on the wallpaper that was actually up. The full verb list with every
@@ -231,8 +237,8 @@ argument and bound is in [`docs/FORK-MAP.md`](docs/FORK-MAP.md) chapters 1 and
 
 ## About this repository
 
-This is a snapshot publication: one commit on top of the upstream base it was
-forked from.
+This repository began as a snapshot publication, a single commit on top of the
+upstream base it was forked from. Development has continued here since.
 
 Two of the calibration instruments used to bring the renderer to parity ship
 in `tools/instruments/`: a generated HDR-bloom test scene and a generated
@@ -261,4 +267,5 @@ README explaining how to use it.
 
 ## License
 
-GPLv3, same as upstream. See LICENSE.
+GPLv3, same as upstream. See LICENSE. The `lwe-ui/` control panel is separately
+MIT-licensed; see `lwe-ui/pyproject.toml`.
