@@ -20,6 +20,8 @@ float movetowards (float current, float target, float maxDelta) {
 namespace WallpaperEngine::Audio::Drivers::Recorders {
 constexpr auto STARVATION_TIMEOUT = std::chrono::milliseconds (1000);
 constexpr auto RETRY_DELAY_MAX = std::chrono::milliseconds (30000);
+constexpr size_t CAPTURE_LATENCY_MS = 10;
+constexpr size_t CAPTURE_BUFFER_MS = 750;
 
 void releaseCaptureStream (PulseAudioPlaybackRecorder::PulseAudioData* recorder) {
     if (recorder->captureStream == nullptr) {
@@ -175,10 +177,9 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
     // setup latency
     pa_buffer_attr attr {};
 
-    // 10 = latency msecs, 750 = max msecs to store
     size_t bytesPerSec = pa_bytes_per_second (&spec);
-    attr.fragsize = bytesPerSec * 10 / 100;
-    attr.maxlength = attr.fragsize + bytesPerSec * 750 / 100;
+    attr.fragsize = bytesPerSec * CAPTURE_LATENCY_MS / 1000;
+    attr.maxlength = attr.fragsize + bytesPerSec * CAPTURE_BUFFER_MS / 1000;
 
     if (pa_stream_connect_record (recorder->captureStream, monitor_name.c_str (), &attr, PA_STREAM_ADJUST_LATENCY)
 	!= 0) {
@@ -278,7 +279,10 @@ PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
 }
 
 void PulseAudioPlaybackRecorder::update () {
-    pa_mainloop_iterate (this->m_mainloop, 0, nullptr);
+    // fragments arrive faster than frames, and the read callback keeps only the newest
+    // window, so anything still queued is stale by definition. draining fully is what
+    // keeps a short fragsize from building a backlog instead of reducing latency
+    while (pa_mainloop_iterate (this->m_mainloop, 0, nullptr) > 0) { }
 
     const auto now = std::chrono::steady_clock::now ();
 
