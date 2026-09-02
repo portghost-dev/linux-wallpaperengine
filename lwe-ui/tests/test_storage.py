@@ -164,6 +164,36 @@ def check_wp(S):
     assert wp.load(wid)["FULLSCREEN_PAUSE"] is True
 
 
+def check_wp_unreadable(S):
+    """An unreadable conf must never be rewritten as if it were empty."""
+    wp, paths = S["wp"], S["paths"]
+    if os.geteuid() == 0:
+        return  # root reads through chmod 000, the probe cannot run
+    wid = "2234567890"
+    wp.update_set(wid, {"BG": wid, "TYPE": "scene", "SCALING": "fill"})
+    path = paths.wp_file(wid)
+    before = path.read_text(encoding="utf-8")
+    os.chmod(path, 0)
+    try:
+        raised = False
+        try:
+            wp.update_set(wid, {"SCALING": "fit"})
+        except OSError:
+            raised = True
+        assert raised, "update_set must refuse to rewrite an unreadable conf"
+        raised = False
+        try:
+            wp.load_set(wid)
+        except OSError:
+            raised = True
+        assert raised, "load_set must report an unreadable conf"
+        assert wp.load(wid)["SCALING"] == "default", "load() degrades to defaults"
+    finally:
+        os.chmod(path, 0o644)
+    assert path.read_text(encoding="utf-8") == before, "the conf must be untouched"
+    assert wp.load_set(wid)["SCALING"] == "fill"
+
+
 def check_tags(S):
     tags, paths = S["tags"], S["paths"]
     assert tags.load() == []
@@ -293,6 +323,7 @@ _CHECKS = (
     ("tier_a", check_tier_a),
     ("settings", check_settings),
     ("wp", check_wp),
+    ("wp_unreadable", check_wp_unreadable),
     ("tags", check_tags),
     ("meta", check_meta),
     ("discover", check_discover),

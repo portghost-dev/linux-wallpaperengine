@@ -7,6 +7,7 @@ on save so the file stays minimal and consumers can distinguish "unset" from "se
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 from typing import Any
 
 from .. import constants as C
@@ -14,6 +15,15 @@ from . import atomic, paths, tier_a
 
 # Keys whose empty value means "unset / inherit" and must NOT be written.
 _OMIT_IF_EMPTY = ("FPS", "CLAMPING", "FULLSCREEN_PAUSE", "SKIP", "CC_MODE")
+
+
+def _read_raw(path) -> str:
+    """The conf text, or "" when there is no file. A file that exists but cannot be read
+    raises, so no caller mistakes an unreadable conf for an empty one."""
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
 
 
 def _coerce(spec: dict, raw: str) -> Any:
@@ -52,17 +62,13 @@ def load_path(path) -> dict[str, Any]:
 
     Missing file or unreadable -> schema defaults. This is the path-based core; load(wid) is a
     thin wrapper over it, so the serialization is defined in exactly one place and any other
-    conf path reuses it verbatim.
+    conf path reuses it verbatim. An unreadable file reads as defaults here; the editing
+    readers below raise instead.
     """
-    from pathlib import Path
-
-    text = ""
-    p = Path(path)
-    if p.exists():
-        try:
-            text = p.read_text(encoding="utf-8")
-        except OSError:
-            text = ""
+    try:
+        text = _read_raw(path)
+    except OSError:
+        text = ""
     raw = tier_a.parse(text)
     out: dict[str, Any] = {}
     for key, spec in C.WP_SCHEMA.items():
@@ -92,17 +98,9 @@ def load_set_path(path) -> dict[str, Any]:
 
     load() is untouched and remains the reader for every resolve/launch path; this is a
     second view over the same file for surfaces that must tell set from inherited.
+    Raises when the file exists but cannot be read.
     """
-    from pathlib import Path
-
-    text = ""
-    p = Path(path)
-    if p.exists():
-        try:
-            text = p.read_text(encoding="utf-8")
-        except OSError:
-            text = ""
-    raw = tier_a.parse(text)
+    raw = tier_a.parse(_read_raw(path))
     out: dict[str, Any] = {}
     for key, spec in C.WP_SCHEMA.items():
         if key in raw:
@@ -136,16 +134,11 @@ def update_set_path(path, changes: dict[str, Any]) -> None:
 
     A PROP_ key that is not a shell identifier is refused rather than raising, matching
     save_path's discipline: one bad property name must not lose the whole file.
-    """
-    from pathlib import Path
 
-    text = ""
-    if Path(path).exists():
-        try:
-            text = Path(path).read_text(encoding="utf-8")
-        except OSError:
-            text = ""
-    flat = tier_a.parse(text)
+    Raises when the file exists but cannot be read: a rewrite from nothing plus the
+    changes would drop every other key, so the edit must fail instead.
+    """
+    flat = tier_a.parse(_read_raw(path))
     for key, val in changes.items():
         if not tier_a.is_valid_key(key):
             warnings.warn(f"wp: {key!r} is not a shell identifier; skipping it")

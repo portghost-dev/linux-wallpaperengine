@@ -35,7 +35,7 @@ from PySide6.QtCore import QObject, QUrl, Signal, Slot
 from . import api_client
 from . import constants as C
 from .engine import daemon_unit
-from .storage import paths, settings, tags
+from .storage import atomic, paths, settings, tags
 
 _CLASS_NEXT_SHOW = ("ENGINE_SCALING", "ENGINE_CLAMP", "AUTOMUTE_DEFAULT")
 _CLASS_SERVICE_RESTART = ("ENGINE_LAYER", "ENGINE_HWDEC", "ENGINE_TEXCOMP", "TEXTURE_DETAIL", "ASSETS_DIR")
@@ -420,7 +420,7 @@ class SettingsBridge(QObject):
         path = paths.config_dir() / "pause-blacklist.txt"
         header = "# fullscreen app_ids exempt from pause, one per line; e.g. steam\n"
         try:
-            path.write_text(header + "".join(e + "\n" for e in entries), encoding="utf-8")
+            atomic.atomic_write_text(path, header + "".join(e + "\n" for e in entries))
         except OSError:
             return False
         try:
@@ -468,8 +468,8 @@ class SettingsBridge(QObject):
     def _write_app_list(self, entries: list[str]) -> bool:
         header = "# processes that trigger the running-apps rule, one comm name per line\n"
         try:
-            (paths.config_dir() / "app-condition.txt").write_text(
-                header + "".join(e + "\n" for e in entries), encoding="utf-8")
+            atomic.atomic_write_text(
+                paths.config_dir() / "app-condition.txt", header + "".join(e + "\n" for e in entries))
         except OSError:
             return False
         # the engine owns the poll now: a list edit must reach it live, not wait for
