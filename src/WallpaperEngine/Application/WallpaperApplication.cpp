@@ -52,7 +52,8 @@
 #include <stb_image_write.h>
 #include <thread>
 
-#define FULLSCREEN_CHECK_WAIT_TIME 250
+// microseconds between fullscreen checks while paused; the loop does nothing else then
+#define FULLSCREEN_CHECK_WAIT_TIME 250000
 
 float g_Time;
 float g_TimeLast;
