@@ -39,7 +39,7 @@ echo "pacman will list what it plans to install and ask you to confirm. Nothing"
 echo "is installed without your approval."
 sudo pacman -S --needed \
     base-devel cmake git pkgconf \
-    mesa glu glew freeglut glfw \
+    mesa glu glew glfw glm \
     libx11 libxext libxrandr libxi libxmu libsm libice \
     wayland wayland-protocols dbus \
     lz4 freetype2 \
@@ -68,8 +68,11 @@ make -C build -j"$(nproc)"
 
 echo
 echo "== step 4/6: installing the engine to ~/.local =="
+# cmake --install rather than a plain copy: the install step rewrites each binary's
+# library search path from the build tree to its own directory, so the install
+# keeps working after the build directory is gone
 mkdir -p "$ENGINE_HOME" "$HOME/.local/bin"
-cp -a build/output/. "$ENGINE_HOME/"
+cmake --install build --prefix "$ENGINE_HOME" --component lwe
 ln -sf "$ENGINE_HOME/linux-wallpaperengine" "$HOME/.local/bin/linux-wallpaperengine"
 ln -sf "$ENGINE_HOME/lwe-web-service" "$HOME/.local/bin/lwe-web-service"
 

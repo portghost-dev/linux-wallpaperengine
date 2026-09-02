@@ -29,7 +29,6 @@ find_package(OpenGL REQUIRED)
 find_package(GLEW REQUIRED)
 
 find_package(DBus REQUIRED)
-find_package(GLUT REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(SDL2 REQUIRED)
 find_package(MPV REQUIRED)
@@ -41,8 +40,16 @@ find_package(Freetype REQUIRED)
 set(ENABLE_OPT OFF)
 set(SPIRV_CROSS_FORCE_PIC ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-set(KISSFFT_TEST OFF)
-set(KISSFFT_TOOLS OFF)
+# vendored tool and test binaries share the output directory with the engine, so
+# every one of these has to be off or it ends up in the install payload
+set(KISSFFT_TEST OFF CACHE BOOL "" FORCE)
+set(KISSFFT_TOOLS OFF CACHE BOOL "" FORCE)
+# linked into the engine library, so the install has no separate kissfft file to carry
+set(KISSFFT_STATIC ON CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_CLI OFF CACHE BOOL "" FORCE)
+set(SPIRV_CROSS_ENABLE_TESTS OFF CACHE BOOL "" FORCE)
+set(ENABLE_GLSLANG_BINARIES OFF CACHE BOOL "" FORCE)
+set(GLSLANG_TESTS OFF CACHE BOOL "" FORCE)
 
 # Download CEF of specified version for current platform
 # Specify the CEF distribution version.
@@ -148,6 +155,12 @@ add_subdirectory(src/External/kissfft kissfft)
 add_subdirectory(src/External/argparse argparse)
 set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(src/External/quickjs quickjs)
+# quickjs has no switch for its command line tools; only the library is used here
+foreach(qjs_tool qjs_exe qjsc run-test262 api-test function_source)
+    if(TARGET ${qjs_tool})
+        set_target_properties(${qjs_tool} PROPERTIES EXCLUDE_FROM_ALL TRUE)
+    endif()
+endforeach()
 if(BUILD_TESTING)
     add_subdirectory(src/External/Catch2)
 endif()
@@ -608,7 +621,6 @@ add_library(
 target_link_libraries (linux-wallpaperengine-lib PUBLIC
     ${OPENGL_LIBRARIES}
     GLEW::GLEW
-    ${GLUT_LIBRARIES}
     ${ZLIB_LIBRARIES}
     ${LZ4_LIBRARY}
     ${SDL2_LIBRARIES}
@@ -632,7 +644,6 @@ if (BUILD_TESTING)
         Catch2::Catch2WithMain
         ${OPENGL_LIBRARIES}
         GLEW::GLEW
-        ${GLUT_LIBRARIES}
         ${ZLIB_LIBRARIES}
         ${LZ4_LIBRARY}
         ${SDL2_LIBRARIES}
@@ -734,7 +745,7 @@ add_dependencies(lwe-web-helper libcef_dll_wrapper)
 REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(lwe-web-helper)
 
 install(TARGETS lwe-web-helper
-    RUNTIME DESTINATION .
+    RUNTIME DESTINATION . COMPONENT lwe
 )
 
 add_executable(lwe-web-service
@@ -778,7 +789,7 @@ add_dependencies(lwe-web-service libcef_dll_wrapper)
 REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(lwe-web-service)
 
 install(TARGETS lwe-web-service
-    RUNTIME DESTINATION .
+    RUNTIME DESTINATION . COMPONENT lwe
 )
 
 if(BUILD_TESTING)
@@ -797,17 +808,23 @@ endif()
 # Install the main executable and shared library via install(TARGETS)
 # so that CMake automatically strips/replaces the build-time RPATH.
 install(TARGETS linux-wallpaperengine
-    RUNTIME DESTINATION .
+    RUNTIME DESTINATION . COMPONENT lwe
 )
 install(TARGETS linux-wallpaperengine-lib
-    LIBRARY DESTINATION .
+    LIBRARY DESTINATION . COMPONENT lwe
 )
 
-# Install everything else from the output directory (CEF resources, helper binaries, etc.)
-# but exclude the files already handled by install(TARGETS) above.
-install(DIRECTORY ${TARGET_OUTPUT_DIRECTORY}/ DESTINATION .
+# Install everything else from the output directory (CEF resources and the like).
+# Every binary of our own is excluded here because install(TARGETS) already placed it
+# with its install RPATH and permissions, and a directory copy would overwrite that.
+# Everything of ours is in component lwe; the vendored projects' own install rules
+# are skipped by installing only that component.
+install(DIRECTORY ${TARGET_OUTPUT_DIRECTORY}/ DESTINATION . COMPONENT lwe
     PATTERN "linux-wallpaperengine" EXCLUDE
     PATTERN "liblinux-wallpaperengine-lib.so" EXCLUDE
+    PATTERN "lwe-web-helper" EXCLUDE
+    PATTERN "lwe-web-service" EXCLUDE
+    PATTERN "lwe_bc7enc" EXCLUDE
 )
 
 # ---- lwe_bc7enc: the wizard's texture-compression shim (BC7/BC4/BC5) ----------------
@@ -836,5 +853,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|amd64")
         target_compile_options(lwe_bc7enc PRIVATE -msse2 -O2)
         set_target_properties(lwe_bc7enc PROPERTIES
             RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/output)
+        install(TARGETS lwe_bc7enc
+            RUNTIME DESTINATION . COMPONENT lwe
+        )
     endif()
 endif()
