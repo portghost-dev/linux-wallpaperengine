@@ -27,9 +27,11 @@ Set-ness is KEY PRESENCE - wp.load_set, not wp.load. Choosing
 override, distinct from inheriting.
 
 Marks are the keys changed during THIS play session; the marked set is the revert set.
-They clear when the status poll reports a different current wallpaper - rotation advance or
-any swap - which is the only mark boundary this surface has, because it only ever shows the
-wallpaper that is playing.
+Both live in wp_session.SESSION, shared with the editor, so a mark set on either surface
+shows on the other and Revert means the same thing from either door. Marks clear when the
+status poll reports a different current wallpaper - rotation advance or any swap - which is
+the only mark boundary this surface has, because it only ever shows the wallpaper that is
+playing.
 """
 from __future__ import annotations
 
@@ -48,6 +50,7 @@ from . import constants as C
 from .discovery import project as project_disc
 from .discovery import properties as properties_disc
 from .storage import meta, paths, settings, tier_a, wp
+from .wp_session import SESSION
 
 # The engine's own set-fps validation bounds, read from the dispatcher rather than guessed:
 # an integer in 1..480, anything else is refused with an error reply
@@ -57,11 +60,6 @@ FPS_MAX = 480
 
 SPEED_MIN = 0.1
 SPEED_MAX = 10.0
-
-# Load defaults strips per-wallpaper CUSTOMIZATION (L10). BG and TYPE are identity, not
-# customization - BG is how a preset names the base directory it renders from, so deleting
-# it would unmake the wallpaper rather than reset it.
-_IDENTITY_KEYS = ("BG", "TYPE")
 
 # Debounce for the re-show class: one trailing timer shared by every key.
 _RESHOW_MS = 600
@@ -111,10 +109,6 @@ class DeckPopupBridge(QObject):
         self._title: str = ""
         self._type: str = ""
         self._props: list[dict] = []
-        # wallpaper-scoped values as they stood when this play session began; a key mapped to
-        # None was ABSENT then, so reverting it means deleting it again
-        self._snapshot: dict[str, Any] = {}
-        self._marks: set[str] = set()
         self._pending: set[str] = set()
         self._reshow = QTimer(self)
         self._reshow.setSingleShot(True)
@@ -125,8 +119,8 @@ class DeckPopupBridge(QObject):
     def syncCurrent(self, wid: str) -> None:
         """Point this bridge at whatever the engine is showing. Called on every status tick.
 
-        A CHANGE of current wallpaper is the play-session boundary: the snapshot re-seats to
-        the new wallpaper's stored values and every mark drops. Values persist -
+        A CHANGE of current wallpaper is the play-session boundary: the leaving wallpaper's
+        marks drop and the new one is seated in the shared session. Values persist -
         only the marks and the revert set are session-scoped.
         """
         wid = str(wid or "")
@@ -135,15 +129,17 @@ class DeckPopupBridge(QObject):
         # a re-show still queued for the wallpaper leaving the screen would fight the swap
         self._reshow.stop()
         self._pending.clear()
+        if self._wid:
+            SESSION.clear_marks(self._wid)
         self._wid = wid
-        self._marks.clear()
         self._props = []
         self._title = ""
         self._type = ""
-        self._snapshot = {}
         if wid:
             self._load_identity(wid)
-            self._seat_snapshot(wid)
+            # a seat failure is a hard state, raised now rather than at revert time
+            if not SESSION.seat(wid):
+                self.commitFailed.emit(["SNAPSHOT"])
         self.stateChanged.emit()
         self.propsEdited.emit()
 
@@ -168,16 +164,6 @@ class DeckPopupBridge(QObject):
             self._props = properties_disc.normalize_all(proj.get("properties"))
         except Exception:
             self._props = []
-
-    def _seat_snapshot(self, wid: str) -> None:
-        try:
-            present = wp.load_set(wid)
-        except Exception:
-            present = {"props": {}}
-        snap: dict[str, Any] = {"SCALING": present.get("SCALING") if "SCALING" in present else None}
-        for name, val in (present.get("props") or {}).items():
-            snap[f"{C.WP_PROP_PREFIX}{name}"] = val
-        self._snapshot = snap
 
     @Slot(result=str)
     def currentWid(self) -> str:
@@ -418,7 +404,7 @@ class DeckPopupBridge(QObject):
             return False
         if not self._commit_conf(changes):
             return False
-        self._marks.update(changes.keys())
+        SESSION.mark(self._wid, changes.keys())
         self._pending.update(changes.keys())
         self._reshow.start()
         self.stateChanged.emit()
@@ -464,21 +450,32 @@ class DeckPopupBridge(QObject):
 
     @Slot(str, result=bool)
     def isMarked(self, key: str) -> bool:
-        return str(key or "") in self._marks
+        return SESSION.is_marked(self._wid, str(key or ""))
 
     @Slot(result=bool)
     def hasMarks(self) -> bool:
-        return bool(self._marks)
+        return SESSION.has_marks(self._wid)
+
+    @Slot(result=bool)
+    def canRevert(self) -> bool:
+        return SESSION.can_revert(self._wid)
+
+    @Slot(result=bool)
+    def snapshotValid(self) -> bool:
+        return SESSION.is_valid(self._wid)
 
     @Slot(result=bool)
     def revertChanges(self) -> bool:
         """Restore every marked key to the value it had when this play session began."""
-        if not self._wid or not self._marks:
+        changes = SESSION.revert_changes(self._wid)
+        if changes is None:
+            # marks without a valid snapshot: a revert that cannot restore must not run
+            if self._wid and SESSION.has_marks(self._wid):
+                self.commitFailed.emit(["SNAPSHOT"])
             return False
-        changes = {key: self._snapshot.get(key) for key in self._marks}
         if not self._commit_conf(changes):
             return False
-        self._marks.clear()
+        SESSION.clear_marks(self._wid)
         self._pending.update(changes.keys())
         self._reshow.start()
         self.stateChanged.emit()
@@ -491,17 +488,10 @@ class DeckPopupBridge(QObject):
         """Strip every per-wallpaper override and every PROP_ key back to the shipped baseline."""
         if not self._wid:
             return False
-        changes: dict[str, Any] = {
-            key: None for key in C.WP_SCHEMA if key not in _IDENTITY_KEYS
-        }
-        try:
-            for name in (wp.load_set(self._wid).get("props") or {}):
-                changes[f"{C.WP_PROP_PREFIX}{name}"] = None
-        except Exception:
-            pass
+        changes = SESSION.defaults_changes(self._wid)
         if not self._commit_conf(changes):
             return False
-        self._marks.clear()
+        SESSION.clear_marks(self._wid)
         self._pending.update(changes.keys())
         self._reshow.start()
         self.stateChanged.emit()
