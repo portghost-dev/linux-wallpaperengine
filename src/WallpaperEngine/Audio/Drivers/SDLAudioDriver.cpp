@@ -40,8 +40,9 @@ void audio_callback (void* userdata, uint8_t* streamData, int length) {
 		// get more data to fill the buffer
 		int audio_size = buffer->stream->decodeFrame (buffer->audio_buf, sizeof (buffer->audio_buf));
 
-		if (audio_size < 0) {
-		    // fallback for errors, silence
+		if (audio_size <= 0) {
+		    // errors and a finished stream both play silence; zero bytes here
+		    // would leave the fill loop with nothing to advance on
 		    buffer->audio_buf_size = 1024;
 		    memset (buffer->audio_buf, 0, buffer->audio_buf_size);
 		} else {
@@ -114,10 +115,18 @@ SDLAudioDriver::~SDLAudioDriver () {
     }
 
     if (this->m_deviceID != 0) {
+	// stops the callback, so the buffers are ours to free afterwards
 	SDL_CloseAudioDevice (this->m_deviceID);
     }
 
+    for (const auto& buffer : this->m_streams | std::views::values) {
+	delete buffer;
+    }
+
+    this->m_streams.clear ();
+
     SDL_QuitSubSystem (SDL_INIT_AUDIO);
+    SDL_DestroyMutex (this->m_streamListMutex);
 }
 
 int SDLAudioDriver::addStream (AudioStream* stream) {
@@ -132,7 +141,19 @@ int SDLAudioDriver::addStream (AudioStream* stream) {
 
     return newStreamId;
 }
-void SDLAudioDriver::removeStream (int streamId) { this->m_streams.erase (streamId); }
+void SDLAudioDriver::removeStream (int streamId) {
+    // the callback iterates this map under the same mutex, so the erase waits for it
+    SDL_LockMutex (this->m_streamListMutex);
+
+    const auto it = this->m_streams.find (streamId);
+
+    if (it != this->m_streams.end ()) {
+	delete it->second;
+	this->m_streams.erase (it);
+    }
+
+    SDL_UnlockMutex (this->m_streamListMutex);
+}
 
 const std::map<int, SDLAudioBuffer*>& SDLAudioDriver::getStreams () { return this->m_streams; }
 

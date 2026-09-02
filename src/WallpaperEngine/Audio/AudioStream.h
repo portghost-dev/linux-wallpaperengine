@@ -13,6 +13,7 @@ extern "C" {
 
 #include <SDL.h>
 #include <SDL_thread.h>
+#include <atomic>
 
 #include "WallpaperEngine/Audio/AudioContext.h"
 
@@ -48,11 +49,17 @@ public:
     /**
      * Gets the next packet in the queue
      *
-     * WARNING: BLOCKS UNTIL SOME DATA IS READ FROM IT
+     * Blocks while the reader thread is still producing; returns false once the reader
+     * has finished and the queue is drained
      *
-     * @return
+     * @return whether a packet was moved into the decode packet
      */
-    void dequeuePacket ();
+    bool dequeuePacket ();
+
+    /**
+     * The reader thread is done producing packets; wakes anything waiting on the queue
+     */
+    void markReaderDone ();
 
     /**
      * @return The audio context in use for this audio stream
@@ -124,6 +131,7 @@ public:
      * @return The SDL_mutex used for thread synchronization
      */
     [[nodiscard]] SDL_mutex* getMutex () const;
+    [[nodiscard]] SDL_mutex* getCodecMutex () const;
 
     /**
      * Reads a frame from the audio stream, resamples it to the driver's settings
@@ -168,6 +176,10 @@ private:
     AudioContext& m_audioContext;
     /** If this stream was properly initialized or not */
     bool m_initialized = false;
+    /** The reader thread exited; nothing more will be queued */
+    std::atomic<bool> m_readerDone = false;
+    /** Serialises codec use between the reader's flush and the playback decode */
+    SDL_mutex* m_codecMutex = nullptr;
     /** Repeat enabled? */
     bool m_repeat = false;
     /** Per-object linear playback gain 0..1 (authored sound.volume) */

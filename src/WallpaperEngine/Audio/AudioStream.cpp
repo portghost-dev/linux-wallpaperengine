@@ -34,8 +34,10 @@ int audio_read_thread (void* arg) {
 
 	if (ret == AVERROR_EOF) {
 	    // seek to the beginning of the file again
-	    avformat_seek_file (stream->getFormatContext (), stream->getAudioStream (), 0, 0, 0, ~AVSEEK_FLAG_FRAME);
+	    avformat_seek_file (stream->getFormatContext (), stream->getAudioStream (), 0, 0, 0, 0);
+	    SDL_LockMutex (stream->getCodecMutex ());
 	    avcodec_flush_buffers (stream->getContext ());
+	    SDL_UnlockMutex (stream->getCodecMutex ());
 
 	    // ensure the thread is not killed if audio has to be looped
 	    if (stream->isRepeat ()) {
@@ -53,8 +55,9 @@ int audio_read_thread (void* arg) {
 	}
     }
 
-    // stop the audio too just in case
+    av_packet_free (&packet);
     SDL_DestroyMutex (waitMutex);
+    stream->markReaderDone ();
 
     return 0;
 }
@@ -150,11 +153,6 @@ AudioStream::~AudioStream () {
 
     this->m_audioThread = nullptr;
 
-    if (this->m_queue != nullptr) {
-	// wait for the audio buffers to be done
-	SDL_CondWait (this->m_queue->wait, this->m_queue->mutex);
-    }
-
     if (this->m_swrctx != nullptr && swr_is_initialized (this->m_swrctx) == true) {
 	swr_close (this->m_swrctx);
     }
@@ -168,18 +166,49 @@ AudioStream::~AudioStream () {
 	av_frame_free (&this->m_decodeFrame);
     }
     if (this->m_queue != nullptr && this->m_queue->packetList != nullptr) {
+	// packets still queued own their data
+	MyAVPacketList entry {};
 #if FF_API_FIFO_OLD_API
+	while (av_fifo_size (this->m_queue->packetList) >= static_cast<int> (sizeof (entry))) {
+	    av_fifo_generic_read (this->m_queue->packetList, &entry, sizeof (entry), nullptr);
+	    av_packet_free (&entry.packet);
+	}
 	av_fifo_free (this->m_queue->packetList);
 	this->m_queue->packetList = nullptr;
 #else
+	while (av_fifo_read (this->m_queue->packetList, &entry, 1) >= 0) {
+	    av_packet_free (&entry.packet);
+	}
 	av_fifo_freep2 (&this->m_queue->packetList);
 #endif /* FF_API_FIFO_OLD_API */
     }
 
+    if (this->m_queue != nullptr) {
+	if (this->m_queue->cond != nullptr) {
+	    SDL_DestroyCond (this->m_queue->cond);
+	}
+	if (this->m_queue->wait != nullptr) {
+	    SDL_DestroyCond (this->m_queue->wait);
+	}
+	if (this->m_queue->mutex != nullptr) {
+	    SDL_DestroyMutex (this->m_queue->mutex);
+	}
+    }
+
     delete this->m_queue;
 
+    if (this->m_codecMutex != nullptr) {
+	SDL_DestroyMutex (this->m_codecMutex);
+    }
+
     if (this->m_formatContext != nullptr) {
-	avformat_free_context (this->m_formatContext);
+	// an input opened over a custom io context keeps that context ours to free
+	AVIOContext* custom = this->m_buffer != nullptr ? this->m_formatContext->pb : nullptr;
+	avformat_close_input (&this->m_formatContext);
+	if (custom != nullptr) {
+	    av_freep (&custom->buffer);
+	    avio_context_free (&custom);
+	}
     }
 
     if (this->m_context != nullptr) {
@@ -306,6 +335,7 @@ void AudioStream::initialize () {
     this->m_queue->mutex = SDL_CreateMutex ();
     this->m_queue->cond = SDL_CreateCond ();
     this->m_queue->wait = SDL_CreateCond ();
+    this->m_codecMutex = SDL_CreateMutex ();
 
     this->m_decodeFrame = av_frame_alloc ();
     this->m_decodePacket = av_packet_alloc ();
@@ -325,7 +355,7 @@ void AudioStream::queuePacket (AVPacket* pkt) {
     AVPacket* clone = av_packet_alloc ();
 
     if (clone == nullptr) {
-	av_packet_unref (clone);
+	av_packet_unref (pkt);
 	return;
     }
 
@@ -336,7 +366,8 @@ void AudioStream::queuePacket (AVPacket* pkt) {
     SDL_UnlockMutex (this->m_queue->mutex);
 
     if (!gotQueued) {
-	av_packet_free (&pkt);
+	// the reader keeps its own packet; only the clone that did not make it goes
+	av_packet_free (&clone);
     }
 }
 
@@ -367,8 +398,9 @@ bool AudioStream::doQueue (AVPacket* pkt) {
     return true;
 }
 
-void AudioStream::dequeuePacket () {
+bool AudioStream::dequeuePacket () {
     MyAVPacketList entry {};
+    bool got = false;
 
     SDL_LockMutex (this->m_queue->mutex);
 
@@ -392,6 +424,12 @@ void AudioStream::dequeuePacket () {
 	    // move the reference and free the old one
 	    av_packet_move_ref (this->m_decodePacket, entry.packet);
 	    av_packet_free (&entry.packet);
+	    got = true;
+	    break;
+	}
+
+	// nothing queued and nothing coming: a wait here would never be signalled
+	if (this->m_readerDone) {
 	    break;
 	}
 
@@ -400,7 +438,18 @@ void AudioStream::dequeuePacket () {
     }
 
     SDL_UnlockMutex (this->m_queue->mutex);
+
+    return got;
 }
+
+void AudioStream::markReaderDone () {
+    SDL_LockMutex (this->m_queue->mutex);
+    this->m_readerDone = true;
+    SDL_CondSignal (this->m_queue->cond);
+    SDL_UnlockMutex (this->m_queue->mutex);
+}
+
+SDL_mutex* AudioStream::getCodecMutex () const { return this->m_codecMutex; }
 
 AVCodecContext* AudioStream::getContext () const { return this->m_context; }
 
@@ -578,8 +627,10 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 	return -1;
     }
 
-    // copy the resampled data to the output buffer up to out_size bytes
-    memcpy (out_buf, resampled_data[0], std::min (resampled_data_size, out_size));
+    // copy the resampled data to the output buffer up to out_size bytes; the caller
+    // reads back exactly the number returned, so that number is the copied size
+    const int copied = std::min (resampled_data_size, out_size);
+    memcpy (out_buf, resampled_data[0], copied);
 
     // memory cleanup
     if (resampled_data) {
@@ -589,7 +640,7 @@ int AudioStream::resampleAudio (uint8_t* out_buf, const int out_size) {
 
     av_freep (&resampled_data);
 
-    return resampled_data_size;
+    return copied;
 }
 
 int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
@@ -597,6 +648,7 @@ int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
     while (this->m_audioContext.getApplicationContext ().state.general.keepRunning) {
 	while (this->m_audioPktSize > 0 && this->m_audioContext.getApplicationContext ().state.general.keepRunning) {
 	    int got_frame = 0;
+	    SDL_LockMutex (this->m_codecMutex);
 	    int ret = avcodec_receive_frame (this->getContext (), this->m_decodeFrame);
 
 	    if (ret == 0) {
@@ -608,6 +660,7 @@ int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
 	    if (ret == 0) {
 		ret = avcodec_send_packet (this->getContext (), this->m_decodePacket);
 	    }
+	    SDL_UnlockMutex (this->m_codecMutex);
 	    if (ret < 0 && ret != AVERROR (EAGAIN)) {
 		return -1;
 	    }
@@ -637,7 +690,10 @@ int AudioStream::decodeFrame (uint8_t* audioBuffer, const int bufferSize) {
 	    av_packet_unref (this->m_decodePacket);
 	}
 
-	this->dequeuePacket ();
+	// no packet and none coming: the stream has ended
+	if (!this->dequeuePacket ()) {
+	    return 0;
+	}
 
 	this->m_audioPktSize = this->m_decodePacket->size;
     }
