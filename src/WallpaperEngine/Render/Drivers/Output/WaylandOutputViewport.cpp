@@ -1,6 +1,8 @@
 #include "WaylandOutputViewport.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include <cstdlib>
+
 #define class _class
 #define namespace _namespace
 #define static
@@ -47,12 +49,11 @@ static void geometry (
 static void mode (void* data, wl_output* output, uint32_t flags, int32_t width, int32_t height, int32_t refresh) {
     const auto viewport = static_cast<WaylandOutputViewport*> (data);
 
-    // update viewport size (physical pixels; logicalSize comes from xdg-output or layer shell configure)
-    viewport->size = { width, height };
-    viewport->viewport = { 0, 0, viewport->size.x * viewport->scale, viewport->size.y * viewport->scale };
-
-    if (viewport->layerSurface) {
-	viewport->resize ();
+    // the mode is in physical pixels. once a layer surface exists its configure carries
+    // the logical size, which is what size holds, so a later mode must not overwrite it
+    if (!viewport->layerSurface) {
+	viewport->size = { width, height };
+	viewport->viewport = { 0, 0, viewport->size.x * viewport->scale, viewport->size.y * viewport->scale };
     }
 
     if (viewport->initialized) {
@@ -153,9 +154,13 @@ constexpr struct zxdg_output_v1_listener xdgOutputListener = {
 };
 
 WaylandOutputViewport::WaylandOutputViewport (
-    WaylandOpenGLDriver* driver, uint32_t waylandName, struct wl_registry* registry
+    WaylandOpenGLDriver* driver, uint32_t waylandName, uint32_t version, struct wl_registry* registry
 ) : OutputViewport ({ 0, 0, 0, 0 }, "", true), size ({ 0, 0 }), waylandName (waylandName), m_driver (driver) {
-    // setup output listener
+    // the name event this driver matches outputs by exists from version 4
+    if (version < 4) {
+	sLog.exception ("wl_output version ", version, " is too old, version 4 is required");
+    }
+
     this->output = static_cast<wl_output*> (wl_registry_bind (registry, waylandName, &wl_output_interface, 4));
     wl_output_add_listener (output, &outputListener, this);
 }
@@ -170,6 +175,18 @@ void WaylandOutputViewport::teardownSurfaces () {
 	wl_callback_destroy (this->frameCallback);
 	this->frameCallback = nullptr;
     }
+
+    if (this->cursorSurface) {
+	wl_surface_destroy (this->cursorSurface);
+	this->cursorSurface = nullptr;
+    }
+
+    if (this->cursorTheme) {
+	wl_cursor_theme_destroy (this->cursorTheme);
+	this->cursorTheme = nullptr;
+    }
+
+    this->pointer = nullptr;
 
     if (this->eglSurface) {
 	eglDestroySurface (m_driver->getEGLContext ()->display, this->eglSurface);
@@ -260,15 +277,20 @@ void WaylandOutputViewport::setupLS () {
     wl_display_roundtrip (m_driver->getWaylandContext ()->display);
     wl_display_flush (m_driver->getWaylandContext ()->display);
 
-    static const auto XCURSORSIZE = getenv ("XCURSOR_SIZE") ? std::stoi (getenv ("XCURSOR_SIZE")) : 24;
-    const auto PRCURSORTHEME
+    static const int XCURSORSIZE = [] {
+	const char* env = getenv ("XCURSOR_SIZE");
+	const long parsed = env ? strtol (env, nullptr, 10) : 0;
+	return parsed > 0 && parsed < 1024 ? static_cast<int> (parsed) : 24;
+    }();
+    cursorTheme
 	= wl_cursor_theme_load (getenv ("XCURSOR_THEME"), XCURSORSIZE * scale, m_driver->getWaylandContext ()->shm);
 
-    if (!PRCURSORTHEME) {
+    if (!cursorTheme) {
 	sLog.exception ("Failed to get a cursor theme");
     }
 
-    pointer = wl_cursor_theme_get_cursor (PRCURSORTHEME, "left_ptr");
+    // a theme without this cursor leaves pointer null and the enter handler skips the cursor
+    pointer = wl_cursor_theme_get_cursor (cursorTheme, "left_ptr");
     cursorSurface = wl_compositor_create_surface (m_driver->getWaylandContext ()->compositor);
 
     if (!cursorSurface) {
@@ -326,6 +348,11 @@ void WaylandOutputViewport::swapOutput () {
 	    );
 	}
     }
+    // a callback still pending from a frame the compositor never answered would leak
+    if (frameCallback) {
+	wl_callback_destroy (frameCallback);
+    }
+
     frameCallback = wl_surface_frame (surface);
     wl_callback_add_listener (frameCallback, &frameListener, this);
     eglSwapBuffers (m_driver->getEGLContext ()->display, this->eglSurface);

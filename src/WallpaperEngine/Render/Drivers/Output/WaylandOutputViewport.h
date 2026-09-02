@@ -27,7 +27,9 @@ namespace Output {
 
     class WaylandOutputViewport final : public OutputViewport {
     public:
-	WaylandOutputViewport (WaylandOpenGLDriver* driver, uint32_t waylandName, struct wl_registry* registry);
+	WaylandOutputViewport (
+	    WaylandOpenGLDriver* driver, uint32_t waylandName, uint32_t version, struct wl_registry* registry
+	);
 
 	/**
 	 * @return The wayland driver
@@ -52,6 +54,7 @@ namespace Output {
 	glm::dvec2 mousePos = { 0, 0 };
 	WallpaperEngine::Input::MouseClickStatus leftClick = WallpaperEngine::Input::MouseClickStatus::Released;
 	WallpaperEngine::Input::MouseClickStatus rightClick = WallpaperEngine::Input::MouseClickStatus::Released;
+	wl_cursor_theme* cursorTheme = nullptr;
 	wl_cursor* pointer = nullptr;
 	wl_surface* cursorSurface = nullptr;
 	bool callbackInitialized = false;

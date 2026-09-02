@@ -25,6 +25,9 @@ public:
     ~WaylandFullScreenDetector () override;
 
     [[nodiscard]] bool anythingFullscreen () const override;
+
+    /** the compositor withdrew the toplevel manager; the handle is gone */
+    void onManagerFinished () { m_toplevelManager = nullptr; }
     void reset () override;
     void recomputeRelevance () override;
 

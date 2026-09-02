@@ -1,4 +1,6 @@
 #include "WaylandFullScreenDetector.h"
+#include <algorithm>
+#include <poll.h>
 
 #include <set>
 
@@ -201,7 +203,10 @@ namespace {
     }
 
     void handleFinished (void* data, struct zwlr_foreign_toplevel_manager_v1* manager) {
+	const auto cb
+	    = static_cast<WallpaperEngine::Render::Drivers::Detectors::WaylandFullscreenDetectorCallbackData*> (data);
 	zwlr_foreign_toplevel_manager_v1_destroy (manager);
+	cb->detector->onManagerFinished ();
     }
 
     zwlr_foreign_toplevel_manager_v1_listener toplevelManagerListener = {
@@ -209,7 +214,9 @@ namespace {
 	.finished = handleFinished,
     };
 
-    void recomputeFullscreenCount (const WallpaperEngine::Render::Drivers::Detectors::WaylandFullscreenDetectorCallbackData* cb) {
+    void recomputeFullscreenCount (
+	const WallpaperEngine::Render::Drivers::Detectors::WaylandFullscreenDetectorCallbackData* cb
+    ) {
 	uint32_t count = 0;
 
 	for (const auto* toplevel : g_liveToplevels) {
@@ -227,7 +234,7 @@ void handleGlobal (void* data, struct wl_registry* registry, uint32_t name, cons
     const auto detector = static_cast<WaylandFullScreenDetector*> (data);
     if (strcmp (interface, zwlr_foreign_toplevel_manager_v1_interface.name) == 0) {
 	detector->m_toplevelManager = static_cast<zwlr_foreign_toplevel_manager_v1*> (
-	    wl_registry_bind (registry, name, &zwlr_foreign_toplevel_manager_v1_interface, 3)
+	    wl_registry_bind (registry, name, &zwlr_foreign_toplevel_manager_v1_interface, std::min (version, 3u))
 	);
 	if (detector->m_toplevelManager) {
 	    zwlr_foreign_toplevel_manager_v1_add_listener (
@@ -264,6 +271,16 @@ WaylandFullScreenDetector::WaylandFullScreenDetector (Application::ApplicationCo
 }
 
 WaylandFullScreenDetector::~WaylandFullScreenDetector () {
+    // this detector's toplevel records point at its callback data; drop them with it
+    for (auto it = g_liveToplevels.begin (); it != g_liveToplevels.end ();) {
+	if ((*it)->data == &m_callbackData) {
+	    delete *it;
+	    it = g_liveToplevels.erase (it);
+	} else {
+	    ++it;
+	}
+    }
+
     if (m_display) {
 	wl_display_disconnect (m_display);
     }
@@ -273,7 +290,23 @@ bool WaylandFullScreenDetector::anythingFullscreen () const {
     if (!m_toplevelManager) {
 	return false;
     }
-    wl_display_roundtrip (m_display);
+
+    // called from the render loop, so this services whatever the compositor has already
+    // sent and never waits for it. the count is at most one call behind
+    while (wl_display_prepare_read (m_display) != 0) {
+	wl_display_dispatch_pending (m_display);
+    }
+    wl_display_flush (m_display);
+
+    pollfd fd = { .fd = wl_display_get_fd (m_display), .events = POLLIN, .revents = 0 };
+
+    if (poll (&fd, 1, 0) > 0 && (fd.revents & POLLIN) != 0) {
+	wl_display_read_events (m_display);
+    } else {
+	wl_display_cancel_read (m_display);
+    }
+
+    wl_display_dispatch_pending (m_display);
     return m_fullscreenCount > 0;
 }
 

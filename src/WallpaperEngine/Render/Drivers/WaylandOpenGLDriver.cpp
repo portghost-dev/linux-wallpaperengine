@@ -35,10 +35,14 @@ static void handlePointerEnter (
     wl_fixed_t surface_y
 ) {
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
-    const auto viewport = driver->surfaceToViewport (surface);
+    const auto viewport = surface != nullptr ? driver->surfaceToViewport (surface) : nullptr;
     driver->viewportInFocus = viewport;
     if (mouseDbg ()) {
 	sLog.out ("LWE-MOUSEDBG enter viewport=", viewport ? viewport->name : "?");
+    }
+    if (viewport == nullptr || viewport->cursorSurface == nullptr || viewport->pointer == nullptr
+	|| viewport->pointer->image_count < 1) {
+	return;
     }
     wl_surface_set_buffer_scale (viewport->cursorSurface, viewport->scale);
     wl_surface_attach (viewport->cursorSurface, wl_cursor_image_get_buffer (viewport->pointer->images[0]), 0, 0);
@@ -124,6 +128,11 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
     const auto driver = static_cast<WaylandOpenGLDriver*> (data);
 
     if (strcmp (interface, wl_compositor_interface.name) == 0) {
+	// damage_buffer is a version 4 request; binding above the advertised version is a
+	// protocol error, so an older compositor is refused with a readable message instead
+	if (version < 4) {
+	    sLog.exception ("wl_compositor version ", version, " is too old, version 4 is required");
+	}
 	driver->getWaylandContext ()->compositor
 	    = static_cast<wl_compositor*> (wl_registry_bind (registry, name, &wl_compositor_interface, 4));
     } else if (strcmp (interface, wl_shm_interface.name) == 0) {
@@ -132,7 +141,7 @@ handleGlobal (void* data, struct wl_registry* registry, uint32_t name, const cha
     } else if (strcmp (interface, wl_output_interface.name) == 0) {
 	sLog.out ("Wayland output global added (registry id ", name, ")");
 	driver->m_screens.emplace_back (
-	    new WallpaperEngine::Render::Drivers::Output::WaylandOutputViewport (driver, name, registry)
+	    new WallpaperEngine::Render::Drivers::Output::WaylandOutputViewport (driver, name, version, registry)
 	);
     } else if (strcmp (interface, zwlr_layer_shell_v1_interface.name) == 0) {
 	driver->getWaylandContext ()->layerShell
@@ -273,25 +282,13 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 	this->viewportInFocus = nullptr;
     }
 
-    if (viewport->eglSurface) {
-	eglDestroySurface (m_eglContext.display, viewport->eglSurface);
-    }
-
-    if (viewport->eglWindow) {
-	wl_egl_window_destroy (viewport->eglWindow);
-    }
-
-    if (viewport->layerSurface) {
-	zwlr_layer_surface_v1_destroy (viewport->layerSurface);
-    }
+    // the same teardown the bench release path uses, so a pending frame callback and
+    // the cursor objects go with the surfaces here too
+    viewport->teardownSurfaces ();
 
     if (viewport->xdgOutput) {
 	zxdg_output_v1_destroy (viewport->xdgOutput);
 	viewport->xdgOutput = nullptr;
-    }
-
-    if (viewport->surface) {
-	wl_surface_destroy (viewport->surface);
     }
 
     if (viewport->output) {
