@@ -83,7 +83,9 @@ def load() -> dict[str, Any]:
             out[key] = _coerce(key, raw[key], spec)
         else:
             out[key] = defaults.get(key, spec["default"])
-    return out
+    # the same clamp and enum snap a save applies, so a value edited by hand or written
+    # by an older panel never reaches a consumer out of range
+    return _validate(out)
 
 
 def _validate(d: dict[str, Any]) -> dict[str, Any]:

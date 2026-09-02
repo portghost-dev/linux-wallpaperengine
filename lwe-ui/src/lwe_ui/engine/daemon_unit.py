@@ -26,7 +26,8 @@ UNIT_FILE_NAME = "lwe-engine.service"
 
 # The real engine binary (NOT the lwe-engine-api shim - the shim dies at cutover).
 # settings ENGINE_BIN overrides when it points somewhere other than the shim.
-DEFAULT_ENGINE_BIN = os.path.expanduser("~/src/linux-wallpaperengine/build/output/linux-wallpaperengine")
+# This is where install.sh puts the engine.
+DEFAULT_ENGINE_BIN = os.path.expanduser("~/.local/lib/lwe-engine/linux-wallpaperengine")
 
 _UNIT_TEMPLATE = """\
 # lwe-engine.service - LWE wallpaper engine daemon (two-service architecture)
@@ -120,7 +121,7 @@ def resolve_engine_bin() -> str:
     """The engine binary the unit should launch.
 
     Order: explicit ENGINE_BIN setting, then PATH (where an installed engine
-    lives), then the source-checkout build path - each only if it actually
+    lives), then the installer's own locations - each only if it actually
     exists, so a generated unit never points at a binary that is not there.
     An empty return means no engine was found; the unit writer refuses.
     """
@@ -170,6 +171,11 @@ _FOREIGN_BANNER = (
 )
 #: Comment lines this generator authors itself; never treated as foreign.
 _OWN_COMMENTS = frozenset({_HEADER, *_FOREIGN_BANNER})
+#: Only keys with these prefixes are carried through from a hand-edited env file: the
+#: engine's own instruments and NVIDIA driver toggles. Anything else in the engine's
+#: environment (a loader variable, a PATH) is not this file's business and is dropped
+#: as drift, which reconcile_env then repairs on the next panel start.
+_FOREIGN_PREFIXES = ("LWE_", "__NV_")
 
 
 def _foreign_lines(existing: str | None) -> list[str]:
@@ -202,8 +208,8 @@ def _foreign_lines(existing: str | None) -> list[str]:
             pending.append(line)
             continue
         key = stripped.split("=", 1)[0].strip()
-        if key in MANAGED_ENV_KEYS:
-            pending.clear()          # the generator re-emits this line and its own comment
+        if key in MANAGED_ENV_KEYS or not key.startswith(_FOREIGN_PREFIXES):
+            pending.clear()          # re-emitted by the generator, or not this file's to keep
             continue
         kept.extend(pending)
         pending.clear()
@@ -239,6 +245,10 @@ def build_env_content(outputs: list[str] | None = None, existing: str | None = N
                 "plain path or leave ASSETS_DIR empty for auto-discovery")
         args += ["--assets-dir", assets]
     for name in outs:
+        # the same word-splitting hazard as ASSETS_DIR above; a name like that is not an
+        # output this file can name, so it is left out rather than written broken
+        if any(c in name for c in ' \t"\n'):
+            continue
         args += ["--screen-root", name]
     layer = str(s.get("ENGINE_LAYER") or "bottom").strip()
     if layer and layer != "bottom":

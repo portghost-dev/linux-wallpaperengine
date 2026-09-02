@@ -138,7 +138,8 @@ def manual_hold_file() -> Path:
 
 
 def default_engine_bin() -> Path:
-    return _home() / "src/linux-wallpaperengine/build/output/linux-wallpaperengine"
+    """Where install.sh puts the engine."""
+    return _home() / ".local/lib/lwe-engine/linux-wallpaperengine"
 
 
 def default_assets_dir() -> Path:
