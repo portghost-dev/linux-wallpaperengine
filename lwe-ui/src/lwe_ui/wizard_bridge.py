@@ -41,6 +41,7 @@ class WizardBridge(QObject):
     graduated = Signal(str)
     benchBlocked = Signal(str)
     trashedUnsub = Signal(str, str)
+    _vramSampled = Signal(int)
 
     def __init__(self, backend, workshop, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -71,6 +72,9 @@ class WizardBridge(QObject):
         self._scanner = texcomp.scan
         self._encoder = texcomp.encode_scene
         self._async = lambda fn: threading.Thread(target=fn, daemon=True).start()
+        self._vram_ticks = 0
+        self._vram_busy = False
+        self._vramSampled.connect(self._on_vram_sampled)
 
     @Slot(result=str)
     def phase(self) -> str:
@@ -392,7 +396,10 @@ class WizardBridge(QObject):
     def _poll(self) -> None:
         if self._session is None:
             return
-        self._sample_vram()
+        # once a second, off the GUI thread; the result comes back through _vramSampled
+        self._vram_ticks += 1
+        if self._vram_ticks % 4 == 0:
+            self._sample_vram()
         self._session.poll(self._clock())
         if self._session.done:
             self._finish_bench()
@@ -434,25 +441,39 @@ class WizardBridge(QObject):
 
     def _sample_vram(self) -> None:
         """Best-effort peak VRAM (nvidia-smi pmon fb). Missing instrument -> peak stays -1."""
-        if self._proc is None or self._session is None:
+        if self._proc is None or self._session is None or self._vram_busy:
             return
         try:
-            import subprocess
             pid = int(self._proc.processId())
-            if pid <= 0:
-                return
-            r = subprocess.run(["nvidia-smi", "pmon", "-c", "1", "-s", "m"],
-                               capture_output=True, text=True, timeout=3, check=False)
-            if r.returncode == 0:
-                for ln in r.stdout.splitlines():
-                    parts = ln.split()
-                    if len(parts) >= 4 and parts[1].isdigit() and int(parts[1]) == pid:
-                        try:
-                            self._session.on_vram(int(parts[3]))
-                        except ValueError:
-                            pass
         except Exception:
-            pass
+            return
+        if pid <= 0:
+            return
+        self._vram_busy = True
+
+        def work() -> None:
+            mb = -1
+            try:
+                import subprocess
+                r = subprocess.run(["nvidia-smi", "pmon", "-c", "1", "-s", "m"],
+                                   capture_output=True, text=True, timeout=3, check=False)
+                if r.returncode == 0:
+                    for ln in r.stdout.splitlines():
+                        parts = ln.split()
+                        if len(parts) >= 4 and parts[1].isdigit() and int(parts[1]) == pid:
+                            if parts[3].isdigit():
+                                mb = int(parts[3])
+            except Exception:
+                mb = -1
+            finally:
+                self._vram_busy = False
+            self._vramSampled.emit(mb)
+
+        self._async(work)
+
+    def _on_vram_sampled(self, mb: int) -> None:
+        if self._session is not None and mb >= 0:
+            self._session.on_vram(mb)
 
     def _finish_bench(self) -> None:
         """Verdict reached: stop the timer, kill the engine, resume the live wallpaper, set phase."""

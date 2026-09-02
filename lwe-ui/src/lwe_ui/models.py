@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
 from time import monotonic
 from typing import Any
 
@@ -565,6 +566,7 @@ class Backend(QObject):
     """The single QObject exposed to QML. Owns the library model + mutations + status read."""
 
     statusChanged = Signal()
+    engineStatsChanged = Signal()
     settingsChanged = Signal()
     countChanged = Signal()
     notice = Signal(str)
@@ -583,6 +585,9 @@ class Backend(QObject):
         self._filter = LibraryFilterModel(self._model, self)  # the GridView binds to this
         self._cpu_last: tuple | None = None   # (monotonic, ticks, pidset) for the CPU delta
         self._vram_total: int = -1            # cached GPU total MiB (-1 until queried)
+        self._stats_last: dict = {"cpu": 0.0, "gpu": -1, "vram": -1, "rss": -1,
+                                  "vramTotal": -1, "memHigh": -1, "pids": 0}
+        self._stats_busy = False
         # (engine_wid, ui_wid) of the last API show that the engine accepted. Presets have
         # no project of their own - the engine renders their BASE wallpaper - so status()
         # needs this to translate engine truth back to the tile the user actually clicked.
@@ -1678,18 +1683,42 @@ class Backend(QObject):
 
     @Slot(result="QVariantMap")
     def engineStats(self) -> dict:
-        """One CPU/GPU/VRAM sample for the header meter cluster.
+        """The latest CPU/GPU/VRAM sample for the header meter cluster, and a request for
+        the next one.
+
+        The sample itself forks pgrep and nvidia-smi, so it is taken on a worker thread:
+        this returns the last completed sample at once and starts the next one if none is
+        running. engineStatsChanged fires when a sample lands.
+        """
+        if not self._stats_busy:
+            self._stats_busy = True
+
+            def work() -> None:
+                try:
+                    self._stats_last = self._sample_engine_stats()
+                except Exception:
+                    pass
+                finally:
+                    self._stats_busy = False
+                self.engineStatsChanged.emit()
+
+            threading.Thread(target=work, daemon=True).start()
+        return dict(self._stats_last)
+
+    @Slot(result="QVariantMap")
+    def engineStatsLast(self) -> dict:
+        """The last completed sample, without requesting another."""
+        return dict(self._stats_last)
+
+    def _sample_engine_stats(self) -> dict:
+        """One CPU/GPU/VRAM sample. Worker thread only.
 
         cpu: percent of the whole machine across the engine family, delta between
         successive calls (first call and any pid change return 0.0 - a delta needs a
         baseline). gpu: WHOLE-GPU utilization percent (see _gpu_sample - different subject
         from the rest, deliberately). vram: MiB from nvidia-smi's per-process fb column,
         -1 when unavailable. vramTotal: MiB, cached after the first successful query.
-
-        COST: this used to be gated on the header cluster being visible (a peek or pinned
-        chips). The meters are always-visible rings now, so it runs for the life of the
-        app - hence one combined nvidia-smi fork for gpu+total rather than a separate call
-        per figure. Budget: one pgrep pair, one pmon, one query-gpu per sample.
+        Budget: one pgrep pair, one pmon, one query-gpu per sample.
         """
         pids = self._engine_pids()
         # GPU is a whole-machine fact, so it is sampled whether or not the engine is up -
@@ -2005,7 +2034,6 @@ class ImportBridge(QObject):
             return
         self._busy = True
         self.busyChanged.emit()
-        import threading
 
         def work() -> None:
             from .storage import importer
@@ -2116,7 +2144,6 @@ class ImportBridge(QObject):
         self._busy = True
         self.busyChanged.emit()
 
-        import threading
 
         def work() -> None:
             from .storage import importer

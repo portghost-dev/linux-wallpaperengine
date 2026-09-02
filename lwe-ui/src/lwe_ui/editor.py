@@ -261,6 +261,8 @@ class EditorBridge(QObject):
     def __init__(self, backend: Any = None, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._backend = backend
+        # the engine's live tuning, read once per open; audioDials seeds from it
+        self._status_snap: dict[str, Any] = {}
         self._wid: str = ""
         self._playing: str = ""                 # the wid the engine is showing (scope gate)
         self._render_dir: str = ""
@@ -298,6 +300,7 @@ class EditorBridge(QObject):
         self._wid = wid
         self._pending.clear()
         self._reshow.stop()
+        self._status_snap = self._live_status()
         if not wid:
             self._render_dir = ""
             self._proj = {}
@@ -944,13 +947,7 @@ class EditorBridge(QObject):
         this repo carries them, so a source-seeded slider would show a value nothing is
         running.
         """
-        snap: dict[str, Any] = {}
-        try:
-            got = api_client.status()
-            if isinstance(got, dict):
-                snap = got
-        except Exception:
-            snap = {}
+        snap = self._status_snap
         custom = self.audioMode() == "custom"
         out = []
         for key, spec in AUDIO_DIALS.items():
@@ -966,6 +963,16 @@ class EditorBridge(QObject):
                 "engineValue": value,
             })
         return out
+
+    def _live_status(self) -> dict[str, Any]:
+        """One status read, skipped outright when no engine socket is there to answer."""
+        try:
+            if not api_client.available():
+                return {}
+            got = api_client.status()
+            return got if isinstance(got, dict) else {}
+        except Exception:
+            return {}
 
     @Slot(result=str)
     def audioMode(self) -> str:
@@ -1017,6 +1024,7 @@ class EditorBridge(QObject):
             self.commitFailed.emit([key])
             return False
         self._persist_setting(C.AUDIO_DIAL_KEYS[spec["field"]], value)
+        self._status_snap[spec["field"]] = value
         self.valuesRefreshed.emit()
         return True
 

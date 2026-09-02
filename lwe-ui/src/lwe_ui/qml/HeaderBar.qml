@@ -109,6 +109,13 @@ Rectangle {
         running: true
         onTriggered: header.liveStats = backend.engineStats()
     }
+    // the sample is taken off the GUI thread; pick it up the moment it lands. This reads
+    // the landed sample only, the timer is the one thing that requests the next one
+    Connections {
+        target: backend
+        ignoreUnknownSignals: true
+        function onEngineStatsChanged() { header.liveStats = backend.engineStatsLast() }
+    }
 
     function _num(v) { return (v === undefined || v === null) ? -1 : Number(v); }
 
