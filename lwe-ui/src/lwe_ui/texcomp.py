@@ -416,9 +416,14 @@ def encode_scene(d: str, wid: str,
                 # meta carries the HEADER dims, exactly as the tool wrote (mip0 can be
                 # smaller than the padded header - e.g. an 8192x4096 header over an
                 # 8192x3240 mip0)
-                json.dump({"src": k, "wallpaper": wid, "fif": int(fif),
-                           "gl": glname, "fmt_src": FMTNAME.get(fmt, fmt),
-                           "tw": tw, "th": th, "mips": meta_mips}, open(mp, "w"))
+                # the meta is what marks the pair as done, so it gets the same tmp and
+                # replace as the blob: a torn or unwritable meta must never look complete
+                meta_tmp = mp + ".tmp"
+                with open(meta_tmp, "w") as f:
+                    json.dump({"src": k, "wallpaper": wid, "fif": int(fif),
+                               "gl": glname, "fmt_src": FMTNAME.get(fmt, fmt),
+                               "tw": tw, "th": th, "mips": meta_mips}, f)
+                os.replace(meta_tmp, mp)
                 encoded += 1
             except Exception:
                 failed += 1
