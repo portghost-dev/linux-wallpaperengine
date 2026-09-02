@@ -75,6 +75,7 @@ public:
     JSValue getGlobalThis () const { return m_globalThis; }
     LoadedModule* getRunningModule () const { return m_runningModule; }
     JSValue dynamicToJs (DynamicValue& value) const;
+    static void logException (JSContext* ctx, const char* context);
 
     /**
      * Evaluate a WallpaperEngine script's update() function.

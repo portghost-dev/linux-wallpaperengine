@@ -35,7 +35,10 @@ protected:
 	JSValue callback;
 	std::chrono::milliseconds duration;
 	std::chrono::steady_clock::time_point next;
+	int errorsLogged = 0;
     };
+
+    void runTimerCallback (Timeout& timeout, const char* context);
 
     // one live engine.registerAudioBuffers() result; the arrays are refreshed
     // from the playback recorder every tick, before script update() calls run

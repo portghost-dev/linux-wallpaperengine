@@ -143,12 +143,24 @@ int scriptableobject_property_set (
     return 0;
 }
 
+static void scriptableobject_finalizer (JSRuntime* rt, JSValueConst val) {
+    JSClassID classId = 0;
+    auto* container = static_cast<OpaqueScriptableObjectAdapter*> (JS_GetAnyOpaque (val, &classId));
+
+    if (!container || container->magic != SCRIPTABLE_OPAQUE_MAGIC) {
+	return;
+    }
+
+    delete container;
+}
+
 ScriptableObjectAdapter::ScriptableObjectAdapter (ScriptEngine& engine, std::string name) :
     ObjectAdapter (engine), m_exoticMethods (), m_name (std::move (name)) {
     m_exoticMethods.get_property = scriptableobject_property_get;
     this->registerType (
 	{
 	    .class_name = m_name.c_str (),
+	    .finalizer = scriptableobject_finalizer,
 	    .exotic = &m_exoticMethods,
 	}
     );

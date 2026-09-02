@@ -400,6 +400,23 @@ void EngineObject::updateAudioBuffers () {
     }
 }
 
+void EngineObject::runTimerCallback (Timeout& timeout, const char* context) {
+    JSContext* ctx = this->m_engine.getContext ();
+    JSValue result = JS_Call (ctx, timeout.callback, JS_NULL, 0, nullptr);
+
+    if (JS_IsException (result)) {
+	// a callback that keeps throwing is reported a few times, not every fire
+	if (timeout.errorsLogged < 3) {
+	    timeout.errorsLogged++;
+	    ScriptEngine::logException (ctx, context);
+	} else {
+	    JS_FreeValue (ctx, JS_GetException (ctx));
+	}
+    }
+
+    JS_FreeValue (ctx, result);
+}
+
 void EngineObject::tick () {
     // refresh audio-response arrays first so update() callbacks read current data
     this->updateAudioBuffers ();
@@ -414,7 +431,7 @@ void EngineObject::tick () {
 
 	timeout.next = now + timeout.duration;
 
-	JS_Call (this->m_engine.getContext (), timeout.callback, JS_NULL, 0, nullptr);
+	this->runTimerCallback (timeout, "engine.setInterval");
     }
 
     std::vector<uint32_t> removeTimeouts;
@@ -425,7 +442,7 @@ void EngineObject::tick () {
 	    continue;
 	}
 
-	JS_Call (this->m_engine.getContext (), timeout.callback, JS_NULL, 0, nullptr);
+	this->runTimerCallback (timeout, "engine.setTimeout");
 
 	JS_FreeValue (this->m_engine.getContext (), timeout.callback);
 

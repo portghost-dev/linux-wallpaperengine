@@ -331,6 +331,8 @@ static void logJSException (JSContext* ctx, const char* context) {
     JS_FreeValue (ctx, exc);
 }
 
+void ScriptEngine::logException (JSContext* ctx, const char* context) { logJSException (ctx, context); }
+
 void ScriptEngine::installBuiltins () {
     if (this->m_builtinsInstalled || !this->m_context) {
 	return;
