@@ -1507,7 +1507,7 @@ void CPass::addAttribute (const std::string& name, GLint type, GLint elements, c
 	return;
     }
 
-    this->m_attribs.emplace_back (new AttribEntry (id, name, type, elements, value));
+    this->m_attribs.emplace_back (std::make_unique<AttribEntry> (id, name, type, elements, value));
 }
 
 template <typename T> void CPass::addUniform (const std::string& name, UniformType type, T value) {
@@ -1518,18 +1518,12 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 	return;
     }
 
-    // free the uniform that's already registered if it's there already
-    const auto it = this->m_uniforms.find (name);
+    // the entry owns its copy of the value, and a name lives in exactly one map
+    auto entry = std::make_unique<UniformEntry> (id, name, type, new T (value), 1);
+    entry->release = [] (const void* payload) { delete static_cast<const T*> (payload); };
 
-    if (it != this->m_uniforms.end ()) {
-	delete it->second;
-    }
-
-    // build a copy of the value and allocate it somewhere
-    T* newValue = new T (value);
-
-    // uniform found, add it to the list
-    this->m_uniforms.insert_or_assign (name, new UniformEntry (id, name, type, newValue, 1));
+    this->m_referenceUniforms.erase (name);
+    this->m_uniforms.insert_or_assign (name, std::move (entry));
 }
 
 template <typename T> void CPass::addUniform (const std::string& name, UniformType type, T* value, int count) {
@@ -1541,14 +1535,8 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 	return;
     }
 
-    // free the uniform that's already registered if it's there already
-
-    if (const auto it = this->m_uniforms.find (name); it != this->m_uniforms.end ()) {
-	delete it->second;
-    }
-
-    // uniform found, add it to the list
-    this->m_uniforms.insert_or_assign (name, new UniformEntry (id, name, type, value, count));
+    this->m_referenceUniforms.erase (name);
+    this->m_uniforms.insert_or_assign (name, std::make_unique<UniformEntry> (id, name, type, value, count));
 }
 
 template <typename T> void CPass::addUniform (const std::string& name, UniformType type, T** value) {
@@ -1560,15 +1548,9 @@ template <typename T> void CPass::addUniform (const std::string& name, UniformTy
 	return;
     }
 
-    // free the uniform that's already registered if it's there already
-
-    if (const auto it = this->m_uniforms.find (name); it != this->m_uniforms.end ()) {
-	delete it->second;
-    }
-
-    // uniform found, add it to the list
+    this->m_uniforms.erase (name);
     this->m_referenceUniforms.insert_or_assign (
-	name, new ReferenceUniformEntry (id, name, type, reinterpret_cast<const void**> (value))
+	name, std::make_unique<ReferenceUniformEntry> (id, name, type, reinterpret_cast<const void**> (value))
     );
 }
 

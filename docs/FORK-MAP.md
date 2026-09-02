@@ -468,6 +468,14 @@ The fork turns the render core into a VRAM-conscious pipeline built on retained 
 - **Tests**: none.
 - **Uncertain**: the ambient sign flip and axis-compensation rewrites are calibrated to specific wallpapers; no in-code reference for native correctness.
 
+### Pass uniform and attribute ownership
+
+- **What it does**: Upstream's `CPass` registered every uniform and attribute with `new` into three containers of raw pointers that the destructor never walked, heap-copied the payload of by-value uniforms, and on a same-name re-registration freed the entry but not that copy. A pass is torn down on every wallpaper switch, so a playlist leaked a few dozen entries per pass per rotation. The reference-uniform path also deleted a same-named plain entry without erasing its map slot, leaving a freed pointer the render loop would walk. The fork holds the entries in owning pointers so replacement and teardown free them (`CPass.h::release`), gives a by-value entry a release function for its payload, and has each registration path erase the name from the other map (`CPass.cpp::payload`).
+- **Where it lives**: modified `CPass.{h,cpp}` only, the registration templates and the three containers.
+- **Surface**: none.
+- **Coupling**: self-contained; consumers already reach the entries through pointer access.
+- **Tests**: none.
+
 ---
 
 **Area summary (5 lines)**: The fork adds full 3D scene-object support: a new `CModel` renders WE `model` objects by parsing MDLV meshes directly (`CModel.cpp::loadMesh`), and `PuppetModel` upgrades upstream's static puppet loader to CPU-skinned skeletal animation with loop/mirror/single clips (`PuppetModel.cpp::parse`, `CImage.cpp::updatePuppetAnimation`). Scene lighting is implemented end-to-end: a scriptable `CLight` object, a CScene light/shadow stage, and `ShaderUnit::generateLightingV1` (`ShaderUnit.cpp::generateLightingV1`) replacing upstream's zero-stub with a PBR lighting + shadow-atlas module injected via `#require LightingV1`, fed per-frame by `CPass::refreshLightStage` (`CPass.cpp::refreshLightStage`). Particles gain playback rate/startTime/prewarm, recursive child systems with eventspawn/eventdeath/eventfollow instance semantics, per-particle trail ribbons, and pooled GL buffers - all inside a heavily rewritten `CParticle`. CImage gets scale-aware FBO coverage, shared/float composite pools, composition-layer FBO aliasing, shape geometry and perspective layers; CText gains UTF-8, alignment, width-limiting and parent-chain placement; CSound honors authored volume (env kill switch `LWE_NOOBJVOL`). Everything is controlled by env vars and runtime-toggleable instruments (`LWE_*`, `InstrumentRegistry`), with essentially no test coverage under `Testing/Cases/` for this area; the lighting stack is the most deeply woven (CScene + CPass + ShaderUnit + CRenderable virtuals), while CText/CSound/texture-animation control are easy cherry-picks.

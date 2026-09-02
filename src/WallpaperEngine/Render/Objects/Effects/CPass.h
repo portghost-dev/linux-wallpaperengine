@@ -3,6 +3,7 @@
 #include <array>
 #include <functional>
 #include <glm/gtc/type_ptr.hpp>
+#include <memory>
 #include <utility>
 
 #include "../../TextureProvider.h"
@@ -95,11 +96,19 @@ private:
 	UniformEntry (const GLint id, std::string name, UniformType type, const void* value, int count) :
 	    id (id), name (std::move (name)), type (type), value (value), count (count) { }
 
+	~UniformEntry () {
+	    if (release != nullptr) {
+		release (value);
+	    }
+	}
+
 	const GLint id;
 	std::string name;
 	UniformType type;
 	const void* value;
 	int count;
+	// set when the entry owns a copy of the value
+	void (*release) (const void*) = nullptr;
     };
 
     class ReferenceUniformEntry {
@@ -224,9 +233,9 @@ private:
     std::optional<std::reference_wrapper<std::string>> m_target;
     std::map<int, std::shared_ptr<const CFBO>> m_fbos = {};
     std::map<std::string, int> m_combos = {};
-    std::vector<AttribEntry*> m_attribs = {};
-    std::map<std::string, UniformEntry*> m_uniforms = {};
-    std::map<std::string, ReferenceUniformEntry*> m_referenceUniforms = {};
+    std::vector<std::unique_ptr<AttribEntry>> m_attribs = {};
+    std::map<std::string, std::unique_ptr<UniformEntry>> m_uniforms = {};
+    std::map<std::string, std::unique_ptr<ReferenceUniformEntry>> m_referenceUniforms = {};
     BlendingMode m_blendingmode = BlendingMode_Normal;
     const glm::mat4* m_modelViewProjectionMatrix;
     const glm::mat4* m_modelViewProjectionMatrixInverse;
