@@ -21,6 +21,8 @@ Rectangle {
         return (v === undefined || v === null || v === "" || v === "-") ? "" : String(v);
     }
     readonly property bool engineUp: (engineStatus.state || "") === "up"
+    // outputs released: nothing is on screen and the rotation clock is not running
+    readonly property bool outputsReleased: deck._field("outputs_state") === "released"
     readonly property bool engineOff: !masterActive
     readonly property bool engineDown: !engineOff && deck._field("state") === ""
 
@@ -50,7 +52,7 @@ Rectangle {
         // 250ms: a seconds flip lands within a quarter second of true - below perception
         // for a clock readout - and the bar fill moves smoothly
         interval: 250; repeat: true
-        running: !isNaN(deck._statNextIn) && !deck.holding
+        running: !isNaN(deck._statNextIn) && !deck.holding && !deck.outputsReleased
         onTriggered: deck._nowMs = Date.now()
     }
     function elapsedSecs() {
@@ -495,11 +497,19 @@ Rectangle {
                 // EXEMPT from transportDim: this bar is the bench's presence cue, not part of the
                 // transport that recedes behind it. It carries its own breathing opacity.
             }
+            Label {
+                anchors.centerIn: parent
+                visible: !deck.holding && deck.outputsReleased
+                opacity: deck.transportDim
+                text: "Wallpapers stopped"
+                color: Theme.textSecondary
+                font.pixelSize: Theme.fontMeta
+            }
             Rectangle {
                 width: barSlot.barWidth; height: 3; radius: 1.5
                 anchors.verticalCenter: parent.verticalCenter
                 color: Theme.border
-                visible: !deck.holding
+                visible: !deck.holding && !deck.outputsReleased
                 opacity: deck.transportDim
                 Rectangle {
                     width: parent.width * deck._progress()
@@ -513,7 +523,7 @@ Rectangle {
                 anchors.right: parent.left
                 anchors.rightMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
-                visible: !deck.holding
+                visible: !deck.holding && !deck.outputsReleased
                 opacity: deck.transportDim
                 text: {
                     var e = deck.elapsedSecs();
@@ -527,7 +537,7 @@ Rectangle {
                 anchors.left: parent.right
                 anchors.leftMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
-                visible: !deck.holding
+                visible: !deck.holding && !deck.outputsReleased
                 opacity: deck.transportDim
                 text: deck.fmtTime(centerProgress.statusInterval())
                 color: Theme.textTertiary
