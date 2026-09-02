@@ -67,7 +67,7 @@ def main() -> None:
     grid = win.findChild(QObject, "libraryGrid")
     assert grid is not None
 
-    assert int(win.property("minimumWidth")) == 1080
+    assert int(win.property("minimumWidth")) == 640
     assert int(win.property("minimumHeight")) == 640
 
     prev_cols = 0
