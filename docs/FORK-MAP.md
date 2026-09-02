@@ -803,6 +803,15 @@ The fork turns the script engine from a skeleton into a working WE-compatible ru
 - **Coupling**: deeply woven into `WallpaperApplication` (render loop, output release machinery, show-args, status). The detector-side `recomputeRelevance` (two detector files + one call site) lifts alone. The Pause/Stop split cannot be lifted without the fork's release plumbing (`apiReleaseOutputs`/`ReleaseReason` - owned by the socket/output-lifecycle area).
 - **Tests**: `Testing/Cases/CommandDispatcher.cpp` (valid forms) and `Cases/CommandDispatcher.cpp` (rejection forms) cover the two verbs' wire validation, not the runtime behavior.
 
+### 11. Automute detector that never blocks the render loop
+
+- **What it does**: Upstream's `PulseAudioPlayingDetector` asked the server for its sink inputs every frame and spun on the operation until it completed, so a server that stopped answering hung the engine, and a context that had left the ready state handed back a null operation that the loop dereferenced. The fork issues the query without waiting and commits the answer from the end-of-list callback (`PulseAudioPlayingDetector.cpp::sinkInputInfoCallback`), so no frame blocks on the server; the unused server-info round trip is gone (`PulseAudioPlayingDetector.cpp::pa_context_get_sink_input_info_list`). The context carries a state callback (`PulseAudioPlayingDetector.cpp::contextStateCallback`), the constructor waits at most `CONNECT_TIMEOUT` for ready (`PulseAudioPlayingDetector.cpp::pa_mainloop_prepare`), and a lost connection, or one that never reaches ready, is recycled with a doubling backoff capped at `RETRY_DELAY_MAX` (`PulseAudioPlayingDetector.cpp::maintainConnection`). The mainloop is drained at the top of every update regardless of settings. While the server is unreachable the detector reports nothing playing, so losing audio costs automute, not the wallpaper.
+- **Where it lives**: modified `src/WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.{h,cpp}` only.
+- **Surface**: none of its own; driven by the existing `--noautomute` flag and the `automute` show arg. Failures log as `Audio detection will ...` lines.
+- **Coupling**: self-contained, two files. The reconnect shape mirrors the recorder in entry 4.
+- **Tests**: none.
+- **Uncertain**: "playing" is still any other process holding an unmuted sink input; the detector does not measure level, so an open but silent stream keeps automute asserted.
+
 ---
 
 **Area summary (5 lines):**
