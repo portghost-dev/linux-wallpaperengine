@@ -263,13 +263,26 @@ bool uploadFromTexcache (const WallpaperEngine::Data::Assets::Texture& h, const 
     if (meta.value ("gl", std::string ()) != want) {
 	return false;
     }
+    // the cache is user state and the raw asset is always there, so a meta file that does
+    // not describe a mip chain sends the upload to the raw path instead of an empty texture
+    const auto mipsIt = meta.find ("mips");
+    if (mipsIt == meta.end () || !mipsIt->is_array () || mipsIt->empty ()) {
+	return false;
+    }
+    const auto& mips = *mipsIt;
+    for (const auto& m : mips) {
+	if (!m.is_array () || m.size () < 3 || !m[0].is_number_integer () || !m[1].is_number_integer ()
+	    || !m[2].is_number_unsigned () || m[0].get<int> () <= 0 || m[1].get<int> () <= 0) {
+	    return false;
+	}
+    }
     std::ifstream bf (bc, std::ios::binary);
     std::vector<char> blob ((std::istreambuf_iterator<char> (bf)), std::istreambuf_iterator<char> ());
 
     int startLevel = 0;
-    if (capDimension > 0 && meta["mips"].size () > 1) {
+    if (capDimension > 0 && mips.size () > 1) {
 	int i = 0;
-	for (const auto& m : meta["mips"]) {
+	for (const auto& m : mips) {
 	    if (std::max (m[0].get<int> (), m[1].get<int> ()) >= capDimension) {
 		startLevel = i;
 	    }
@@ -280,7 +293,7 @@ bool uploadFromTexcache (const WallpaperEngine::Data::Assets::Texture& h, const 
     size_t off = 0;
     int level = 0;
     uint64_t uploaded = 0;
-    for (const auto& m : meta["mips"]) {
+    for (const auto& m : mips) {
 	const int mw = m[0].get<int> ();
 	const int mh = m[1].get<int> ();
 	const size_t bytes = m[2].get<size_t> ();
@@ -417,6 +430,16 @@ void CTexture::createGL () {
 		dataptr = handle = stbi_load_from_memory (
 		    reinterpret_cast<const unsigned char*> (pixels.data), pixels.size, &width, &height, &fileChannels, 4
 		);
+
+		// a failed decode would otherwise allocate the level with undefined texels
+		if (handle == nullptr) {
+		    sLog.error (
+			"texture level ", level, " could not be decoded (", stbi_failure_reason (),
+			"), upload stops here"
+		    );
+		    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, glLevel > 0 ? glLevel - 1 : 0);
+		    break;
+		}
 	    } else {
 		glPixelStorei (GL_UNPACK_ALIGNMENT, 1);
 
@@ -647,7 +670,9 @@ void CTexture::setupOpenGLParameters (const uint32_t textureID) const {
 
     // set mipmap levels
     glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
-    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, this->m_header->images[textureID].size () - 1);
+    const auto levels = this->m_header->images.find (textureID);
+    const size_t levelCount = levels != this->m_header->images.end () ? levels->second.size () : 0;
+    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, levelCount > 0 ? static_cast<GLint> (levelCount - 1) : 0);
 
     // setup texture wrapping and filtering
     if (this->m_header->flags & TextureFlags_ClampUVs) {
