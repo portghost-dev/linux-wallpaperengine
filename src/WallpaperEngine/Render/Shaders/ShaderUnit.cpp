@@ -729,25 +729,32 @@ void ShaderUnit::parseParameterConfiguration (
 
     Variables::ShaderVariable* parameter = nullptr;
 
+    // a material parameter may carry no default when a constant resolved it above; it
+    // starts at the type's zero and the constant supplies the value when the pass binds
     if (type == "vec4") {
-	parameter
-	    = new Variables::ShaderVariableVector4 (VectorBuilder::parse<glm::vec4> (defvalue->get<std::string> ()));
+	parameter = new Variables::ShaderVariableVector4 (
+	    defvalue.has_value () ? VectorBuilder::parse<glm::vec4> (defvalue->get<std::string> ()) : glm::vec4 (0.0f)
+	);
     } else if (type == "vec3") {
-	parameter = new Variables::ShaderVariableVector3 (VectorBuilder::parse<glm::vec3> (*defvalue));
+	parameter = new Variables::ShaderVariableVector3 (
+	    defvalue.has_value () ? VectorBuilder::parse<glm::vec3> (*defvalue) : glm::vec3 (0.0f)
+	);
     } else if (type == "vec2") {
-	parameter = new Variables::ShaderVariableVector2 (VectorBuilder::parse<glm::vec2> (*defvalue));
+	parameter = new Variables::ShaderVariableVector2 (
+	    defvalue.has_value () ? VectorBuilder::parse<glm::vec2> (*defvalue) : glm::vec2 (0.0f)
+	);
     } else if (type == "float") {
-	if (defvalue->is_string ()) {
-	    parameter = new Variables::ShaderVariableFloat (std::stoi (defvalue->get<std::string> ()));
-	} else {
-	    parameter = new Variables::ShaderVariableFloat (defvalue->get<float> ());
+	float value = 0.0f;
+	if (defvalue.has_value ()) {
+	    value = defvalue->is_string () ? std::stof (defvalue->get<std::string> ()) : defvalue->get<float> ();
 	}
+	parameter = new Variables::ShaderVariableFloat (value);
     } else if (type == "int") {
-	if (defvalue->is_string ()) {
-	    parameter = new Variables::ShaderVariableInteger (std::stoi (defvalue->get<std::string> ()));
-	} else {
-	    parameter = new Variables::ShaderVariableInteger (defvalue->get<int> ());
+	int value = 0;
+	if (defvalue.has_value ()) {
+	    value = defvalue->is_string () ? std::stoi (defvalue->get<std::string> ()) : defvalue->get<int> ();
 	}
+	parameter = new Variables::ShaderVariableInteger (value);
     } else if (type == "sampler2D" || type == "sampler2DComparison") {
 	// samplers can have special requirements, check what sampler we're working with and create definitions
 	// if needed
@@ -814,10 +821,14 @@ void ShaderUnit::parseParameterConfiguration (
 		    for (const auto& item : require->items ()) {
 			const std::string& macro = item.key ();
 			const auto it = this->m_combos.find (macro);
+			const auto overridden = this->m_overrideCombos.find (macro);
 
 			// these can not exist and that'd be fine, we just care about the values
-			if ((it != this->m_combos.end () || this->m_overrideCombos.contains (macro))
-			    && it->second == item.value ()) {
+			const int* current = it != this->m_combos.end ()  ? &it->second
+			    : overridden != this->m_overrideCombos.end () ? &overridden->second
+									  : nullptr;
+
+			if (current != nullptr && *current == item.value ()) {
 			    isRequired = false;
 			    break;
 			}
@@ -908,6 +919,9 @@ void ShaderUnit::parseParameterConfiguration (
 	parameter->setName (name);
 
 	this->m_parameters.push_back (parameter);
+    } else {
+	// nothing binds a parameter without a material, so nothing else would free it
+	delete parameter;
     }
 }
 
