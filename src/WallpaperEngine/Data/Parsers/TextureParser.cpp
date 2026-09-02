@@ -11,8 +11,15 @@
 using namespace WallpaperEngine::Data::Assets;
 using namespace WallpaperEngine::Data::Parsers;
 
+// no texture this engine can upload needs more than this much decoded across all of its
+// images and mips; a file that asks for more is claiming space, not describing pixels
+constexpr uint64_t MAX_TEXTURE_BYTES = 4ull << 30;
+// a mip chain of a texture with dimensions that fit in 32 bits is never longer than this
+constexpr uint32_t MAX_MIPMAP_COUNT = 32;
+
 TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
     auto result = std::make_unique<Texture> ();
+    uint64_t budget = MAX_TEXTURE_BYTES;
 
     parseTextureHeader (*result, file);
     parseContainer (*result, file);
@@ -22,8 +29,12 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
 	const uint32_t mipmapCount = result->rawGLMipLevels > 0 ? result->rawGLMipLevels : placeholderMipmapCount;
 	MipmapList mipmaps;
 
+	if (mipmapCount > MAX_MIPMAP_COUNT) {
+	    sLog.exception ("Texture image ", image, " declares ", mipmapCount, " mipmaps");
+	}
+
 	for (uint32_t mipmap = 0; mipmap < mipmapCount; mipmap++) {
-	    mipmaps.emplace_back (parseMipmap (file, *result, image, mipmap));
+	    mipmaps.emplace_back (parseMipmap (file, *result, image, mipmap, budget));
 	}
 
 	result->images.emplace (image, mipmaps);
@@ -61,8 +72,21 @@ void TextureParser::validateMipmapPayloadBounds (const Mipmap& mipmap, const Bin
     }
 }
 
-MipmapSharedPtr
-TextureParser::parseMipmap (const BinaryReader& file, const Texture& header, uint32_t imageIndex, uint32_t mipIndex) {
+// the per-mip cap above bounds one allocation; this bounds the sum, since a small file can
+// carry many mips that each expand well past their compressed size
+static void chargeTextureBudget (const Mipmap& mipmap, uint64_t& budget) {
+    const auto bytes = static_cast<uint64_t> (mipmap.uncompressedSize);
+
+    if (bytes > budget) {
+	sLog.exception ("Texture decoded size exceeds the ", MAX_TEXTURE_BYTES >> 20, " MiB limit");
+    }
+
+    budget -= bytes;
+}
+
+MipmapSharedPtr TextureParser::parseMipmap (
+    const BinaryReader& file, const Texture& header, uint32_t imageIndex, uint32_t mipIndex, uint64_t& budget
+) {
     auto result = std::make_shared<Mipmap> ();
 
     if (header.containerVersion == ContainerVersion_TEXB0004 && header.freeImageFormat == FIF_UNKNOWN) {
@@ -82,6 +106,7 @@ TextureParser::parseMipmap (const BinaryReader& file, const Texture& header, uin
 	result->compression = (result->uncompressedSize != result->compressedSize) ? 1 : 0;
 
 	validateMipmapPayloadBounds (*result, file);
+	chargeTextureBudget (*result, budget);
 
 	result->uncompressedData = std::unique_ptr<char[]> (new char[result->uncompressedSize]);
 
@@ -134,6 +159,7 @@ TextureParser::parseMipmap (const BinaryReader& file, const Texture& header, uin
     }
 
     validateMipmapPayloadBounds (*result, file);
+    chargeTextureBudget (*result, budget);
 
     result->uncompressedData = std::unique_ptr<char[]> (new char[result->uncompressedSize]);
 
@@ -346,8 +372,17 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) 
 	    sLog.exception ("Animated texture declares no frames");
 	}
 
-	header.gifWidth = header.frames.front ()->width1;
-	header.gifHeight = header.frames.front ()->height1;
+	const float w = header.frames.front ()->width1;
+	const float h = header.frames.front ()->height1;
+
+	// frame sizes are floats from the file; a negative, non-finite or absurd one has no
+	// unsigned equivalent to convert to
+	if (!std::isfinite (w) || !std::isfinite (h) || w < 0.0f || h < 0.0f || w > 65536.0f || h > 65536.0f) {
+	    sLog.exception ("Animated texture frame size ", w, "x", h, " is not usable");
+	}
+
+	header.gifWidth = static_cast<uint32_t> (w);
+	header.gifHeight = static_cast<uint32_t> (h);
     }
 
     // Calculate spritesheet grid dimensions from animation frames
@@ -357,10 +392,17 @@ void TextureParser::parseAnimations (Texture& header, const BinaryReader& file) 
 	float frameWidth = firstFrame.width1;
 	float frameHeight = firstFrame.height1;
 
-	if (frameWidth > 0.0f && frameHeight > 0.0f) {
-	    const uint32_t cols = static_cast<uint32_t> (std::round (static_cast<double> (header.width) / frameWidth));
-	    const uint32_t rows
-		= static_cast<uint32_t> (std::round (static_cast<double> (header.height) / frameHeight));
+	if (std::isfinite (frameWidth) && std::isfinite (frameHeight) && frameWidth > 0.0f && frameHeight > 0.0f) {
+	    const double colsD = std::round (static_cast<double> (header.width) / frameWidth);
+	    const double rowsD = std::round (static_cast<double> (header.height) / frameHeight);
+
+	    // a tiny frame size divides into a grid no unsigned can hold; treat it as not a spritesheet
+	    if (colsD < 0.0 || rowsD < 0.0 || colsD > 65536.0 || rowsD > 65536.0) {
+		return;
+	    }
+
+	    const uint32_t cols = static_cast<uint32_t> (colsD);
+	    const uint32_t rows = static_cast<uint32_t> (rowsD);
 	    const uint32_t frameCount = static_cast<uint32_t> (header.frames.size ());
 
 	    // Only populate spritesheet metadata if the inferred grid can actually hold all frames
@@ -471,12 +513,18 @@ void TextureParser::parseSpritesheetMetadata (
 		float frameHeight = firstSeq.value ("height", 0.0f);
 		float duration = firstSeq.value ("duration", 1.0f);
 
-		if (frames > 0 && frameWidth > 0.0f && frameHeight > 0.0f && header.width > 0 && header.height > 0) {
+		if (frames > 0 && std::isfinite (frameWidth) && std::isfinite (frameHeight) && frameWidth > 0.0f
+		    && frameHeight > 0.0f && header.width > 0 && header.height > 0) {
 		    // Calculate grid dimensions from texture size and frame size
-		    header.spritesheetCols = static_cast<uint32_t> (std::round (header.width / frameWidth));
-		    header.spritesheetRows = static_cast<uint32_t> (std::round (header.height / frameHeight));
-		    header.spritesheetFrames = static_cast<uint32_t> (frames);
-		    header.spritesheetDuration = duration;
+		    const double cols = std::round (header.width / frameWidth);
+		    const double rows = std::round (header.height / frameHeight);
+
+		    if (cols >= 0.0 && rows >= 0.0 && cols <= 65536.0 && rows <= 65536.0) {
+			header.spritesheetCols = static_cast<uint32_t> (cols);
+			header.spritesheetRows = static_cast<uint32_t> (rows);
+			header.spritesheetFrames = static_cast<uint32_t> (frames);
+			header.spritesheetDuration = duration;
+		    }
 		}
 	    }
 	}

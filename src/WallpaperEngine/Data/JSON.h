@@ -2,10 +2,12 @@
 
 #include "Builders/ColorBuilder.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <glm/detail/qualifier.hpp>
 #include <glm/detail/type_vec1.hpp>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <string>
@@ -47,6 +49,11 @@ public:
     }
     template <int length, typename type, glm::qualifier qualifier>
     [[nodiscard]] glm::vec<length, type, qualifier> get () const {
+	// the same field is written as "32 32" or as a bare 32; a number fills every component
+	if (this->base ().is_number ()) {
+	    return glm::vec<length, type, qualifier> (static_cast<type> (this->base ().template get<double> ()));
+	}
+
 	return VectorBuilder::parse<length, type, qualifier> (this->base ().get<std::string> ());
     }
     [[nodiscard]] Model::Color get () const { return ColorBuilder::parse (this->base ().get<std::string> ()); }
@@ -74,9 +81,16 @@ public:
 		}
 		char* end = nullptr;
 		const double parsed = std::strtod (s.c_str (), &end);
-		// "inf"/"nan" parse successfully; casting them to an integral is UB
+		// "inf"/"nan" parse successfully; casting them to an integral is UB, and so
+		// is a finite value outside the target's range, which clamps instead
 		if (end != s.c_str () && std::isfinite (parsed)) {
-		    return static_cast<T> (parsed);
+		    if constexpr (std::is_integral_v<T>) {
+			constexpr double lo = static_cast<double> (std::numeric_limits<T>::lowest ());
+			constexpr double hi = static_cast<double> (std::numeric_limits<T>::max ());
+			return static_cast<T> (std::clamp (parsed, lo, hi));
+		    } else {
+			return static_cast<T> (parsed);
+		    }
 		}
 		return std::nullopt;
 	    }

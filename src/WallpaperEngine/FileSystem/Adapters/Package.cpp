@@ -48,8 +48,17 @@ ReadStreamSharedPtr PackageAdapter::open (const std::filesystem::path& path) con
     // read file into memory
     auto buffer = std::make_unique<char[]> (entry->length);
 
-    // go to the file's position and read into the buffer
-    this->package->file->base ().seekg (entry->offset + this->package->baseOffset, std::ios::beg);
+    // go to the file's position and read into the buffer. the stream is shared by every
+    // file in the package, so a failed read earlier must not poison this one, and the
+    // offset sum is widened before it can wrap
+    auto& stream = this->package->file->base ();
+    stream.clear ();
+    stream.seekg (static_cast<std::streamoff> (entry->offset) + this->package->baseOffset, std::ios::beg);
+
+    if (!stream) {
+	throw std::filesystem::filesystem_error ("Cannot seek to file", path, std::error_code ());
+    }
+
     this->package->file->next (buffer.get (), entry->length);
 
     // create a memory stream and return that
