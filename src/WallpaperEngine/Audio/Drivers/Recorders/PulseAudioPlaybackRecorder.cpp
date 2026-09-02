@@ -1,5 +1,7 @@
 #include "PulseAudioPlaybackRecorder.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <glm/common.hpp>
@@ -16,13 +18,44 @@ float movetowards (float current, float target, float maxDelta) {
 }
 
 namespace WallpaperEngine::Audio::Drivers::Recorders {
-void pa_stream_notify_cb (pa_stream* stream, void* /*userdata*/) {
+constexpr auto STARVATION_TIMEOUT = std::chrono::milliseconds (1000);
+constexpr auto RETRY_DELAY_MAX = std::chrono::milliseconds (30000);
+
+void releaseCaptureStream (PulseAudioPlaybackRecorder::PulseAudioData* recorder) {
+    if (recorder->captureStream == nullptr) {
+	return;
+    }
+
+    // unref alone leaves the stream connected and unread server-side, holding its
+    // descriptors until the client dies. the server's fd table is the real ceiling
+    pa_stream_set_state_callback (recorder->captureStream, nullptr, nullptr);
+    pa_stream_set_read_callback (recorder->captureStream, nullptr, nullptr);
+
+    const pa_stream_state_t state = pa_stream_get_state (recorder->captureStream);
+
+    if (state == PA_STREAM_READY || state == PA_STREAM_CREATING) {
+	pa_stream_disconnect (recorder->captureStream);
+    }
+
+    pa_stream_unref (recorder->captureStream);
+    recorder->captureStream = nullptr;
+    recorder->currentSink.clear ();
+}
+
+void pa_stream_notify_cb (pa_stream* stream, void* userdata) {
+    auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
+
     switch (pa_stream_get_state (stream)) {
 	case PA_STREAM_FAILED:
 	    sLog.error ("Cannot open stream for capture. Audio processing is disabled");
+	    recorder->streamFailed = true;
+	    break;
+	case PA_STREAM_TERMINATED:
+	    recorder->streamFailed = true;
 	    break;
 	case PA_STREAM_READY:
 	    sLog.debug ("Capture stream ready");
+	    recorder->streamFailed = false;
 	    break;
 	default:
 	    break;
@@ -99,28 +132,45 @@ void pa_stream_read_cb (pa_stream* stream, const size_t /*nbytes*/, void* userda
 }
 
 void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userdata) {
-    if (info == nullptr) {
+    if (info == nullptr || info->default_sink_name == nullptr) {
 	return;
     }
 
     auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
+
+    std::string monitor_name (info->default_sink_name);
+    monitor_name += ".monitor";
+
+    // the subscription fires on every sink and source change; re-taking a stream that
+    // is already on the right monitor is what orphans the old one
+    if (recorder->captureStream != nullptr && !recorder->streamFailed && recorder->currentSink == monitor_name) {
+	const pa_stream_state_t live = pa_stream_get_state (recorder->captureStream);
+
+	if (live == PA_STREAM_READY || live == PA_STREAM_CREATING) {
+	    return;
+	}
+    }
+
+    releaseCaptureStream (recorder);
 
     pa_sample_spec spec;
     spec.format = PA_SAMPLE_U8;
     spec.rate = 44100;
     spec.channels = 1;
 
-    if (recorder->captureStream) {
-	pa_stream_unref (recorder->captureStream);
+    recorder->captureStream = pa_stream_new (ctx, "output monitor", &spec, nullptr);
+
+    if (recorder->captureStream == nullptr) {
+	sLog.error ("Cannot allocate capture stream. Audio processing is disabled");
+	recorder->streamFailed = true;
+	return;
     }
 
-    recorder->captureStream = pa_stream_new (ctx, "output monitor", &spec, nullptr);
+    recorder->streamFailed = false;
+    recorder->currentSink = monitor_name;
 
     pa_stream_set_state_callback (recorder->captureStream, &pa_stream_notify_cb, userdata);
     pa_stream_set_read_callback (recorder->captureStream, &pa_stream_read_cb, userdata);
-
-    std::string monitor_name (info->default_sink_name);
-    monitor_name += ".monitor";
 
     // setup latency
     pa_buffer_attr attr {};
@@ -133,6 +183,7 @@ void pa_server_info_cb (pa_context* ctx, const pa_server_info* info, void* userd
     if (pa_stream_connect_record (recorder->captureStream, monitor_name.c_str (), &attr, PA_STREAM_ADJUST_LATENCY)
 	!= 0) {
 	sLog.error ("Failed to connect to input for recording");
+	recorder->streamFailed = true;
     }
 }
 
@@ -145,10 +196,13 @@ void pa_context_subscribe_cb (pa_context* ctx, pa_subscription_event_type_t t, u
 }
 
 void pa_context_notify_cb (pa_context* ctx, void* userdata) {
+    auto* recorder = static_cast<PulseAudioPlaybackRecorder::PulseAudioData*> (userdata);
+
     switch (pa_context_get_state (ctx)) {
 	case PA_CONTEXT_READY:
 	    {
 		// set callback
+		recorder->contextLost = false;
 		pa_context_set_subscribe_callback (ctx, pa_context_subscribe_cb, userdata);
 		// set events mask and enable event callback.
 		pa_operation* o = pa_context_subscribe (
@@ -169,8 +223,19 @@ void pa_context_notify_cb (pa_context* ctx, void* userdata) {
 
 		break;
 	    }
+	case PA_CONTEXT_TERMINATED:
 	case PA_CONTEXT_FAILED:
-	    sLog.error ("PulseAudio context initialization failed. Audio processing is disabled");
+	    sLog.error ("PulseAudio context lost. Audio processing will reconnect");
+	    recorder->contextLost = true;
+
+	    if (recorder->captureStream != nullptr) {
+		pa_stream_set_state_callback (recorder->captureStream, nullptr, nullptr);
+		pa_stream_set_read_callback (recorder->captureStream, nullptr, nullptr);
+		pa_stream_unref (recorder->captureStream);
+		recorder->captureStream = nullptr;
+		recorder->currentSink.clear ();
+	    }
+
 	    break;
 	default:
 	    break;
@@ -194,28 +259,30 @@ PulseAudioPlaybackRecorder::PulseAudioPlaybackRecorder () :
 	return;
     }
 
-    // wait until the context is ready
-    while (pa_context_get_state (this->m_context) != PA_CONTEXT_READY) {
+    this->m_lastFrame = std::chrono::steady_clock::now ();
+
+    // a failed connection must not spin here forever, update () retries with backoff
+    while (pa_context_get_state (this->m_context) != PA_CONTEXT_READY && !this->m_captureData.contextLost) {
 	pa_mainloop_iterate (this->m_mainloop, 1, nullptr);
     }
 }
 
 PulseAudioPlaybackRecorder::~PulseAudioPlaybackRecorder () {
-    if (m_captureData.captureStream) {
-	pa_stream_unref (m_captureData.captureStream);
-    }
+    this->releaseContext ();
 
     delete[] this->m_captureData.audioBufferTmp;
     delete[] this->m_captureData.audioBuffer;
     free (this->m_captureData.kisscfg);
 
-    pa_context_disconnect (this->m_context);
-    pa_context_unref (this->m_context);
     pa_mainloop_free (this->m_mainloop);
 }
 
 void PulseAudioPlaybackRecorder::update () {
     pa_mainloop_iterate (this->m_mainloop, 0, nullptr);
+
+    const auto now = std::chrono::steady_clock::now ();
+
+    this->maintainConnection (now);
 
     if (!this->enabled) {
 	for (int i = 0; i < 64; i++) {
@@ -248,7 +315,34 @@ void PulseAudioPlaybackRecorder::update () {
     }
 
     if (!this->m_captureData.fullFrameReady) {
+	// a starved feed must read as silence, a held frame reads as full-scale audio
+	if (now - this->m_lastFrame > STARVATION_TIMEOUT) {
+	    if (!this->m_starved) {
+		this->m_starved = true;
+		sLog.error ("Audio capture starved, decaying bands to silence");
+	    }
+
+	    for (int i = 0; i < 64; i++) {
+		this->m_FFTdestination64[i] = 0.0f;
+
+		if (i < 32) {
+		    this->m_FFTdestination32[i] = 0.0f;
+		}
+
+		if (i < 16) {
+		    this->m_FFTdestination16[i] = 0.0f;
+		}
+	    }
+	}
+
 	return;
+    }
+
+    this->m_lastFrame = now;
+
+    if (this->m_starved) {
+	this->m_starved = false;
+	sLog.out ("Audio capture recovered");
     }
 
     this->m_captureData.fullFrameReady = false;
@@ -282,6 +376,60 @@ void PulseAudioPlaybackRecorder::update () {
 	    = fmax (0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 31.0f) * 1.0f - 0.5f))));
 	this->m_FFTdestination16[band >> 2]
 	    = fmax (0.0f, fmin (1.0f, f1 * static_cast<float> (2.0f - pow (M_E, (1.0f - band / 15.0f) * 1.0f - 0.5f))));
+    }
+}
+
+void PulseAudioPlaybackRecorder::releaseContext () {
+    releaseCaptureStream (&this->m_captureData);
+
+    if (this->m_context == nullptr) {
+	return;
+    }
+
+    pa_context_set_state_callback (this->m_context, nullptr, nullptr);
+    pa_context_disconnect (this->m_context);
+    pa_context_unref (this->m_context);
+    this->m_context = nullptr;
+}
+
+void PulseAudioPlaybackRecorder::maintainConnection (const std::chrono::steady_clock::time_point now) {
+    if (!this->m_captureData.contextLost && !this->m_captureData.streamFailed) {
+	this->m_retryDelay = std::chrono::milliseconds (250);
+	return;
+    }
+
+    if (now < this->m_nextRetry) {
+	return;
+    }
+
+    this->m_nextRetry = now + this->m_retryDelay;
+    this->m_retryDelay = std::min (this->m_retryDelay * 2, RETRY_DELAY_MAX);
+
+    if (this->m_captureData.contextLost) {
+	this->releaseContext ();
+
+	this->m_context = pa_context_new (this->m_mainloopApi, "wallpaperengine-audioprocessing");
+
+	if (this->m_context == nullptr) {
+	    return;
+	}
+
+	pa_context_set_state_callback (this->m_context, &pa_context_notify_cb, &this->m_captureData);
+
+	if (pa_context_connect (this->m_context, nullptr, PA_CONTEXT_NOFLAGS, nullptr) < 0) {
+	    return;
+	}
+
+	this->m_captureData.contextLost = false;
+	return;
+    }
+
+    if (this->m_context == nullptr) {
+	return;
+    }
+
+    if (pa_operation* o = pa_context_get_server_info (this->m_context, &pa_server_info_cb, &this->m_captureData)) {
+	pa_operation_unref (o);
     }
 }
 
