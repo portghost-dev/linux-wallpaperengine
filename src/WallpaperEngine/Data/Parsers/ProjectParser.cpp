@@ -21,7 +21,7 @@ ProjectUniquePtr ProjectParser::parse (const JSON& data, AssetLocatorUniquePtr c
 
     if (workshopId.has_value ()) {
 	if (workshopId->is_number ()) {
-	    actualWorkshopId = std::to_string (workshopId->get<int> ());
+	    actualWorkshopId = std::to_string (workshopId->get<uint64_t> ());
 	} else if (workshopId->is_string ()) {
 	    actualWorkshopId = workshopId->get<std::string> ();
 	} else {

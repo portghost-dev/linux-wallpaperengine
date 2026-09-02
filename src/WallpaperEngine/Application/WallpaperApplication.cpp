@@ -238,7 +238,7 @@ ProjectUniquePtr WallpaperApplication::loadBackground (const std::string& bg) {
 	}
 
 	const auto& dep = json["dependency"];
-	const std::string depId = dep.is_string () ? dep.get<std::string> () : std::to_string (dep.get<int> ());
+	const std::string depId = dep.is_string () ? dep.get<std::string> () : std::to_string (dep.get<uint64_t> ());
 	const std::filesystem::path basePath = std::filesystem::path (bg).parent_path () / depId;
 	sLog.out ("Preset wallpaper: resolving dependency ", depId, " for ", bg);
 
@@ -680,7 +680,7 @@ std::vector<WallpaperApplication::WebLibraryEntry> WallpaperApplication::enumera
 	    std::string id;
 
 	    if (workshopId != json.end () && workshopId->is_number ()) {
-		id = std::to_string (workshopId->get<int> ());
+		id = std::to_string (workshopId->get<uint64_t> ());
 	    } else if (workshopId != json.end () && workshopId->is_string ()) {
 		id = workshopId->get<std::string> ();
 	    } else {
