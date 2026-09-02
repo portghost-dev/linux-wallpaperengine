@@ -225,7 +225,7 @@ class DeckPopupBridge(QObject):
                 conf_speed = float(wp.load(self._wid).get("SPEED") or 1.0)
             except Exception:
                 conf_speed = 1.0
-        if not self._push(api_client.set_speed, "ENGINE_TIMESCALE", conf_speed * factor):
+        if not self._push(api_client.set_speed, "ENGINE_TIMESCALE", C.resolve_speed(conf_speed, factor)):
             return False
         if not self._persist_setting("ENGINE_TIMESCALE", factor):
             self.commitFailed.emit(["ENGINE_TIMESCALE"])

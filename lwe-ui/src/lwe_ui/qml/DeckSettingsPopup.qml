@@ -698,9 +698,8 @@ Popup {
                                             pop.speedDetented(pop.speedForPos(value))
                                         onCommit: function(p) {
                                             var s = pop.speedDetented(pop.speedForPos(p));
-                                            // the detent settles the knob on release rather
-                                            // than fighting the finger mid-drag
-                                            speedSlider.value = pop.posForSpeed(s);
+                                            // no imperative value write: it would break the
+                                            // binding; the rev bump re-binds to the detented value
                                             deckPopup.setGlobalSpeed(s);
                                         }
                                     }

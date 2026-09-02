@@ -54,6 +54,26 @@ AUDIO_DIAL_ENV = {
 
 SCHEDULE_UI = False
 
+
+# The engine accepts one speed number in this range, on show and on set-speed alike, and
+# refuses the whole request outside it. Every door resolves through this before pushing.
+ENGINE_SPEED_MIN = 0.0
+ENGINE_SPEED_MAX = 20.0
+
+
+def resolve_speed(conf_speed, factor) -> float:
+    """The rate the engine runs: this wallpaper's SPEED times the global factor, clamped."""
+    try:
+        speed = float(conf_speed if conf_speed not in (None, "") else 1.0)
+    except (TypeError, ValueError):
+        speed = 1.0
+    try:
+        speed *= float(factor if factor not in (None, "") else 1.0)
+    except (TypeError, ValueError):
+        pass
+    return max(ENGINE_SPEED_MIN, min(ENGINE_SPEED_MAX, speed))
+
+
 SETTINGS_SCHEMA: dict[str, dict] = {
     "ROTATION_ENABLED": {"type": "bool", "default": True},
     "ORDER": {"type": "enum", "default": "shuffle", "choices": ORDERS},
@@ -77,7 +97,7 @@ SETTINGS_SCHEMA: dict[str, dict] = {
     "ENGINE_HWDEC": {"type": "enum", "default": "no", "choices": HWDECS},
     "ENGINE_TEXCOMP": {"type": "bool", "default": True},
     "TEXTURE_DETAIL": {"type": "enum", "default": "auto", "choices": TEXTURE_DETAILS},
-    "ENGINE_TIMESCALE": {"type": "float", "default": 1.0},
+    "ENGINE_TIMESCALE": {"type": "float", "default": 1.0, "min": 0.1, "max": 10.0},
     # Audio response dials. ENGINE-NATIVE values - the
     # same units set-tuning takes and the same units editor.AUDIO_DIALS maps to and from.
     # The 0..1 "quality" face is a control concern and is never persisted. Defaults are the
@@ -120,7 +140,7 @@ WP_SCHEMA: dict[str, dict] = {
     "TYPE": {"type": "enum", "default": "scene", "choices": WALLPAPER_TYPES},
     "SCALING": {"type": "enum", "default": "default", "choices": SCALINGS},
     "FPS": {"type": "int_or_empty", "default": ""},
-    "SPEED": {"type": "float", "default": 1.0},
+    "SPEED": {"type": "float", "default": 1.0, "min": 0.1, "max": 10.0},
     "CC": {"type": "str", "default": "1 1 1 0"},
     "CC_MODE": {"type": "enum_or_empty", "default": "", "choices": CC_MODES},
     # per-wallpaper audio dials, engine-native units; all three absent = inherit globals

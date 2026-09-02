@@ -1594,7 +1594,8 @@ Rectangle {
                                     onCommit: function(v) {
                                         var d = ccRow.modelData.detent;
                                         var out = Math.abs(v - d) <= 0.03 ? d : v;
-                                        ccSlider.value = out;
+                                        // no imperative value write: it would break the
+                                        // binding; the refresh re-binds to the stored value
                                         editor.setCcChannel(ccRow.modelData.idx, out);
                                     }
                                 }

@@ -207,6 +207,23 @@ def resolved_tuning(wid: str) -> dict[str, float]:
     return out
 
 
+def effective_speed(wid: str, factor=None) -> float:
+    """The rate the engine runs for `wid`: its conf SPEED times the global factor (the
+    stored ENGINE_TIMESCALE when `factor` is None), clamped to the engine's range."""
+    conf_speed = 1.0
+    if wid:
+        try:
+            conf_speed = wp.load(wid).get("SPEED", 1.0)
+        except Exception:
+            conf_speed = 1.0
+    if factor is None:
+        try:
+            factor = settings.load().get("ENGINE_TIMESCALE", 1.0)
+        except Exception:
+            factor = 1.0
+    return C.resolve_speed(conf_speed, factor)
+
+
 def resolve_show_args(wid: str) -> tuple[str, dict[str, Any]]:
     """Resolve a wallpaper's FULL per-show vocabulary: conf overrides first, engine-global
     settings fill the gaps, session overrides win last. Returns (engine_wid, kwargs for
@@ -246,15 +263,7 @@ def resolve_show_args(wid: str) -> tuple[str, dict[str, Any]]:
         pass
     args["cc"] = cc
 
-    try:
-        speed = float(conf.get("SPEED") or 1.0)
-    except (TypeError, ValueError):
-        speed = 1.0
-    try:
-        speed *= float(s.get("ENGINE_TIMESCALE") or 1.0)
-    except (TypeError, ValueError):
-        pass
-    args["speed"] = speed
+    args["speed"] = C.resolve_speed(conf.get("SPEED"), s.get("ENGINE_TIMESCALE"))
 
     raw_props = conf.get("props")
     if isinstance(raw_props, dict) and raw_props:
@@ -991,6 +1000,11 @@ class Backend(QObject):
         skey = self._SESSION_KEYS.get(key)
         return "live" if skey in self._LIVE_GLOBAL_KEYS else "next"
 
+    @Slot(float, result=float)
+    def effectiveSpeed(self, factor: float) -> float:
+        """The rate the engine should run for the wallpaper on screen under `factor`."""
+        return effective_speed(self._current_ui_wid(), factor)
+
     def _current_ui_wid(self) -> str:
         """The ui_id of whatever the daemon is showing right now, "" when idle/down."""
         try:
@@ -1528,13 +1542,12 @@ class Backend(QObject):
                 except ValueError:
                     pass
 
-            # ENGINE_TIMESCALE is a true global (no per-wallpaper resolve): the popup and
-            # the editor have pushed set-speed since they shipped, so a Settings edit that
-            # only landed on the next show made one key mean two things.
+            # the engine holds one speed number, the resolved rate of the wallpaper on
+            # screen, so the global factor is pushed through the same resolve as a show.
             # independently tolerant, like every other push in this method: one verb that
             # cannot answer must never cost the rest of the fan-out
             try:
-                api_client.set_speed(float(s.get("ENGINE_TIMESCALE") or 1.0))
+                api_client.set_speed(self.effectiveSpeed(float(s.get("ENGINE_TIMESCALE") or 1.0)))
             except Exception:
                 pass
 

@@ -141,6 +141,37 @@ class ApiShowNowTest(unittest.TestCase):
         self.assertEqual(captured["skip_objects"], [27, 539])
         self.assertAlmostEqual(captured["speed"], 3.0, msg="SPEED 1.5 x global 2.0")
 
+    def test_speed_product_clamped_to_engine_range(self) -> None:
+        """The engine refuses a whole show over speed 20; the panel resolves and clamps
+        in one place, so a large per-wallpaper SPEED times a large global factor still
+        lands as an accepted show at the engine's ceiling."""
+        from lwe_ui import constants as C
+        from lwe_ui.storage import wp
+
+        self._flag(True)
+        settings.save({"ENGINE_TIMESCALE": 10.0})
+        wp.save("3134543499", {"SPEED": 10.0})
+
+        captured: dict = {}
+
+        def _show(wid, wait_done=False, **kw):
+            captured.update(kw, wid=wid)
+            return {"id": 1, "ok": True, "status": "accepted"}
+
+        _API.available = lambda: True
+        _API.show = _show
+
+        self.assertTrue(self.backend.showNow("3134543499"))
+        self.assertAlmostEqual(captured["speed"], C.ENGINE_SPEED_MAX)
+        self.assertAlmostEqual(C.resolve_speed(3.0, 2.0), 6.0)
+        self.assertAlmostEqual(C.resolve_speed(None, None), 1.0)
+        self.assertAlmostEqual(C.resolve_speed("x", 2.0), 2.0)
+        self.assertAlmostEqual(C.resolve_speed(0.0, 5.0), 0.0)
+        # the live doors resolve the same number through the same helper
+        self.assertAlmostEqual(models.effective_speed("3134543499", 10.0), C.ENGINE_SPEED_MAX)
+        self.assertAlmostEqual(models.effective_speed("3134543499", 0.5), 5.0)
+        self.assertAlmostEqual(models.effective_speed("", 3.0), 3.0)
+
     def test_vocabulary_defaults_and_overrides(self) -> None:
         """Untouched conf: schema defaults ride (editor confs pin every key - SCALING
         'default', VOLUME 0 = silent, exactly what the watcher launched); session

@@ -851,7 +851,7 @@ class EditorBridge(QObject):
             conf_speed = float(self._wp_get("SPEED") or 1.0)
         except (TypeError, ValueError):
             conf_speed = 1.0
-        if not self._push(api_client.set_speed, "ENGINE_TIMESCALE", conf_speed * factor):
+        if not self._push(api_client.set_speed, "ENGINE_TIMESCALE", C.resolve_speed(conf_speed, factor)):
             return False
         if not self._persist_setting("ENGINE_TIMESCALE", factor):
             self.commitFailed.emit(["ENGINE_TIMESCALE"])

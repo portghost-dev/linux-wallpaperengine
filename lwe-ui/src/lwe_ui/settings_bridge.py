@@ -234,7 +234,8 @@ class SettingsBridge(QObject):
             return True
         try:
             if key == "ENGINE_TIMESCALE":
-                return self._ok(api_client.set_speed(float(value)))
+                # the engine holds the resolved rate, never the bare factor
+                return self._ok(api_client.set_speed(self._backend.effectiveSpeed(float(value))))
             if key == "ENGINE_VOLUME":
                 return self._ok(api_client.set_volume(int(value)))
             if key == "AUDIO_REACTIVE_DEFAULT":
