@@ -381,7 +381,7 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 	// live calibration dials; every supplied key must be a finite number and at
 	// least one must be present (the handler clamps to each dial's range)
 	bool any = false;
-	for (const auto* key : { "classic_k", "classic_exp", "audio_gain" }) {
+	for (const auto* key : { "classic_k", "classic_exp", "audio_gain", "audio_smooth" }) {
 	    if (!args.contains (key)) {
 		continue;
 	    }

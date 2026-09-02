@@ -8,6 +8,7 @@
 
 // live band-gain dial (WallpaperApplication.cpp defines + env-seeds; set-tuning writes)
 extern float g_LweAudioGain;
+extern float g_LweAudioSmoothMs;
 
 float movetowards (float current, float target, float maxDelta) {
     if (abs (target - current) <= maxDelta) {
@@ -285,6 +286,8 @@ void PulseAudioPlaybackRecorder::update () {
     while (pa_mainloop_iterate (this->m_mainloop, 0, nullptr) > 0) { }
 
     const auto now = std::chrono::steady_clock::now ();
+    const float dt = std::chrono::duration<float> (now - this->m_lastUpdate).count ();
+    this->m_lastUpdate = now;
 
     this->maintainConnection (now);
 
@@ -305,17 +308,21 @@ void PulseAudioPlaybackRecorder::update () {
 	return;
     }
 
-    // interpolate current values to the destination
+    // a slew limiter passes any change under its cap through untouched, which is what
+    // reads as flicker; this attenuates every change by the same dt-derived constant
+    const float alpha
+	= g_LweAudioSmoothMs <= 0.0f ? 1.0f : 1.0f - std::exp (-std::max (dt, 0.0f) * 1000.0f / g_LweAudioSmoothMs);
+
     for (int i = 0; i < 64; i++) {
-	this->audio64[i] = movetowards (this->audio64[i], this->m_FFTdestination64[i], 0.3f);
+	this->audio64[i] += (this->m_FFTdestination64[i] - this->audio64[i]) * alpha;
 	if (i >= 32) {
 	    continue;
 	}
-	this->audio32[i] = movetowards (this->audio32[i], this->m_FFTdestination32[i], 0.3f);
+	this->audio32[i] += (this->m_FFTdestination32[i] - this->audio32[i]) * alpha;
 	if (i >= 16) {
 	    continue;
 	}
-	this->audio16[i] = movetowards (this->audio16[i], this->m_FFTdestination16[i], 0.3f);
+	this->audio16[i] += (this->m_FFTdestination16[i] - this->audio16[i]) * alpha;
     }
 
     if (!this->m_captureData.fullFrameReady) {

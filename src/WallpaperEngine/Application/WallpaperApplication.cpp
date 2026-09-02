@@ -68,6 +68,8 @@ static float lweEnvFloat (const char* name, const float fallback, const float lo
 float g_LweClassicDivisor = lweEnvFloat ("LWE_CLASSICK", 16.0f, 0.01f, 1000.0f);
 float g_LweFalloffExp = lweEnvFloat ("LWE_CLASSICEXP", 2.0f, 0.5f, 6.0f);
 float g_LweAudioGain = lweEnvFloat ("LWE_AUDIOGAIN", 1.0f, 0.1f, 20.0f);
+// band smoothing time constant in msecs; 0 disables smoothing entirely
+float g_LweAudioSmoothMs = lweEnvFloat ("LWE_AUDIOSMOOTH", 90.0f, 0.0f, 500.0f);
 
 using namespace WallpaperEngine::Assets;
 using namespace WallpaperEngine::Application;
@@ -1461,9 +1463,12 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	if (command.args.contains ("audio_gain")) {
 	    g_LweAudioGain = std::clamp (command.args["audio_gain"].get<float> (), 0.1f, 20.0f);
 	}
+	if (command.args.contains ("audio_smooth")) {
+	    g_LweAudioSmoothMs = std::clamp (command.args["audio_smooth"].get<float> (), 0.0f, 500.0f);
+	}
 	sLog.out (
 	    "API: tuning classic_k=", g_LweClassicDivisor, " classic_exp=", g_LweFalloffExp,
-	    " audio_gain=", g_LweAudioGain
+	    " audio_gain=", g_LweAudioGain, " audio_smooth=", g_LweAudioSmoothMs
 	);
 	this->m_commandServer->respond (
 	    client,
@@ -1471,7 +1476,8 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 		command.id,
 		{ { "classic_k", g_LweClassicDivisor },
 		  { "classic_exp", g_LweFalloffExp },
-		  { "audio_gain", g_LweAudioGain } }
+		  { "audio_gain", g_LweAudioGain },
+		  { "audio_smooth", g_LweAudioSmoothMs } }
 	    )
 	);
 	return;
@@ -1749,6 +1755,7 @@ nlohmann::json WallpaperApplication::apiStatus () const {
     result["classic_k"] = g_LweClassicDivisor;
     result["classic_exp"] = g_LweFalloffExp;
     result["audio_gain"] = g_LweAudioGain;
+    result["audio_smooth"] = g_LweAudioSmoothMs;
     result["clients"] = this->m_commandServer->clientCount ();
     result["cc"] = { this->m_colorCorrection.x, this->m_colorCorrection.y, this->m_colorCorrection.z,
 		     this->m_colorCorrection.w };

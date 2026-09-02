@@ -43,6 +43,7 @@ private:
     PulseAudioData m_captureData;
 
     std::chrono::steady_clock::time_point m_lastFrame = {};
+    std::chrono::steady_clock::time_point m_lastUpdate = {};
     std::chrono::steady_clock::time_point m_nextRetry = {};
     std::chrono::milliseconds m_retryDelay { 250 };
     bool m_starved = false;
