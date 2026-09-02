@@ -374,6 +374,7 @@ Item {
                         }
                         Label { anchors.verticalCenter: parent.verticalCenter
                                 text: rowItem.modelData.label || ""; color: Theme.textPrimary
+                                textFormat: Text.PlainText
                                 font.pixelSize: Theme.fontControl
                                 elide: Text.ElideRight
                                 width: Math.max(0, Math.min(implicitWidth, parent.width - 10 - subLbl.implicitWidth - 18)) }

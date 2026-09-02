@@ -73,7 +73,7 @@ def extract(wallpaper_dir: str | Path) -> list[dict]:
         out.append(
             {
                 "objid": str(obj.get("id", "")),
-                "name": obj.get("name", "") or "",
+                "name": project.strip_markup(obj.get("name", "") or ""),
                 "type": classify(obj),
                 # optional fields for the editor objects panel (tree + row detail); absent
                 # keys read as empty, so older objindex caches stay compatible.

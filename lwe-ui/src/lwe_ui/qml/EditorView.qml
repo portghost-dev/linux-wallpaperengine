@@ -627,6 +627,7 @@ Rectangle {
             Label {
                 anchors.verticalCenter: parent.verticalCenter
                 text: editor.title
+                textFormat: Text.PlainText
                 color: Theme.textPrimary
                 font.pixelSize: Theme.fontNav
                 font.weight: Theme.weightMedium

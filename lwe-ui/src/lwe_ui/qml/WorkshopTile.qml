@@ -170,6 +170,7 @@ Rectangle {
             anchors.right: stateChip.visible ? stateChip.left : parent.right
             anchors.rightMargin: Theme.spacingSm
             text: tile.title
+            textFormat: Text.PlainText
             color: Theme.textPrimary
             font.pixelSize: Theme.fontBody13
             elide: Text.ElideRight

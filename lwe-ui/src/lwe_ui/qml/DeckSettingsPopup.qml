@@ -508,6 +508,7 @@ Popup {
                 Label {
                     width: parent.width
                     text: (pop.rev, deckPopup.title())
+                    textFormat: Text.PlainText
                     color: Theme.textPrimary
                     font.pixelSize: 14
                     font.weight: Theme.weightMedium

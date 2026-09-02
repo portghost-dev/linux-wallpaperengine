@@ -145,6 +145,7 @@ Item {
                         width: parent.parent.width - (face.hasDot ? 6 + Theme.spacingSm : 0)
                                - Theme.spacingLg
                         text: face.eyebrow !== "" ? face.eyebrow : face.title
+                        textFormat: Text.PlainText
                         elide: Text.ElideRight
                         color: Theme.textSecondary
                         font.pixelSize: face.eyebrow !== "" ? Theme.fontMeta : Theme.fontNav
@@ -155,6 +156,7 @@ Item {
                     width: parent.width
                     visible: face.eyebrow !== "" && face.title !== ""
                     text: face.title
+                    textFormat: Text.PlainText
                     color: Theme.textPrimary
                     font.pixelSize: Theme.fontNav
                     font.weight: Theme.weightMedium
@@ -166,6 +168,7 @@ Item {
                 width: parent.width - face.pad * 2
                 visible: face.body !== ""
                 text: face.body
+                textFormat: Text.PlainText
                 color: Theme.textSecondary
                 font.pixelSize: Theme.fontBody13
                 wrapMode: Text.WordWrap

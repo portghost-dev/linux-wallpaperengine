@@ -342,6 +342,7 @@ Window {
                                     }
                                     Label {
                                         text: rowCol.modelData.name || rowCol.modelData.objid
+                                        textFormat: Text.PlainText
                                         color: rowCol.soloed ? Theme.textPrimary : Theme.textMutedBody
                                         font.pixelSize: Theme.fontMeta
                                         font.family: Theme.monoFamily

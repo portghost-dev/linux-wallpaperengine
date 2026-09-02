@@ -1197,6 +1197,7 @@ Rectangle {
                                 leftPadding: 104
                                 spacing: Theme.spacingSm
                                 Label { text: modelData.name + "=" + modelData.value
+                                        textFormat: Text.PlainText
                                         color: Theme.textMutedBody; font.pixelSize: Theme.fontMicro
                                         font.family: Theme.monoFamily }
                                 Label { text: "x"; color: Theme.textTertiary; font.pixelSize: Theme.fontMeta
@@ -1348,6 +1349,7 @@ Rectangle {
                             required property var model
                             width: logView.width
                             text: model.line
+                            textFormat: Text.PlainText
                             color: model.line.toLowerCase().indexOf("error") >= 0 ? Theme.warning
                                    : model.line.toLowerCase().indexOf("watch") >= 0 ? Theme.warning
                                    : model.source === "journal" ? Theme.textTertiary

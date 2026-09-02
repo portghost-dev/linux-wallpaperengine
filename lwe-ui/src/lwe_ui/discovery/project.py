@@ -10,11 +10,27 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 from pathlib import Path
 
 from ..storage import atomic
 
 _VIDEO_EXTS = (".mp4", ".webm")
+
+
+
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
+
+def strip_markup(text: object) -> str:
+    """A third-party string as plain text: tags removed, whitespace collapsed.
+
+    Titles and object names come from wallpaper files and are rendered by the panel; a
+    tag-shaped run must never reach a text sink that could read it as markup."""
+    if not isinstance(text, str):
+        text = "" if text is None else str(text)
+    return _WS_RE.sub(" ", _TAG_RE.sub(" ", text)).strip()
 
 
 def read(wallpaper_dir: str | Path) -> dict:
@@ -53,9 +69,7 @@ def read(wallpaper_dir: str | Path) -> dict:
         if isinstance(props, dict):
             properties = props
 
-    title = raw.get("title") or ""
-    if not isinstance(title, str):
-        title = str(title)
+    title = strip_markup(raw.get("title") or "")
 
     return {
         "id": wdir.name,

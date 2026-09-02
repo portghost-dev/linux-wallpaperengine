@@ -144,6 +144,7 @@ RecordsFace {
                 Label {
                     width: parent.width
                     text: row.modelData.title
+                    textFormat: Text.PlainText
                     color: Theme.textPrimary
                     font.pixelSize: Theme.fontBody13
                     elide: Text.ElideRight

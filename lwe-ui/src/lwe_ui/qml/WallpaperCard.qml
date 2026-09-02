@@ -251,6 +251,7 @@ Rectangle {
                 id: titleLabel
                 width: parent.width - (card.nowPlaying ? 6 + Theme.spacingSm : 0)
                 text: card.title
+                textFormat: Text.PlainText
                 color: Theme.textPrimary
                 font.pixelSize: Theme.fontBody13
                 elide: Text.ElideRight

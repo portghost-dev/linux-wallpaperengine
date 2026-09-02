@@ -25,15 +25,13 @@ _KIND_MAP = {
     "textinput": "text",
 }
 
-_TAG_RE = re.compile(r"<[^>]+>")
-_WS_RE = re.compile(r"\s+")
 
 
 def _strip_html(text: object) -> str:
     """Remove HTML tags and collapse whitespace from a WE label string."""
     if not isinstance(text, str):
         return ""
-    return _WS_RE.sub(" ", _TAG_RE.sub(" ", text)).strip()
+    return project.strip_markup(text)
 
 
 def _normalize(name: str, spec: dict) -> dict | None:

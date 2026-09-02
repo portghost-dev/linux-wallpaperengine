@@ -162,6 +162,7 @@ Rectangle {
                 Label {
                     width: Math.min(implicitWidth, Theme.compact ? 130 : 170)
                     elide: Text.ElideRight
+                    textFormat: Text.PlainText
                     text: {
                         var id = deck._field("current");
                         if (id === "") return "nothing";
@@ -181,6 +182,7 @@ Rectangle {
                 Label {
                     width: Math.min(implicitWidth, 116)
                     elide: Text.ElideRight
+                    textFormat: Text.PlainText
                     text: {
                         var id = deck._field("next_up");
                         var t = backend.titleOf(id);
@@ -237,6 +239,7 @@ Rectangle {
             Label {
                 width: Math.min(implicitWidth, 200)
                 elide: Text.ElideRight
+                textFormat: Text.PlainText
                 text: {
                     var id = deck._field("current");
                     var t = id !== "" ? backend.titleOf(id) : "";
@@ -309,6 +312,7 @@ Rectangle {
                 width: Math.min(implicitWidth, 200)
                 elide: Text.ElideRight
                 text: (deck.wizRev, wizardBridge.wpTitle())
+                textFormat: Text.PlainText
                 color: Theme.textPrimary
                 font.pixelSize: Theme.fontDeckName
                 font.weight: Theme.weightMedium
@@ -374,6 +378,7 @@ Rectangle {
             Label {
                 width: Math.min(implicitWidth, 200)
                 elide: Text.ElideRight
+                textFormat: Text.PlainText
                 text: {
                     var id = leftDevBench.devWid;
                     var t = id !== "" ? backend.titleOf(id) : "";
@@ -426,6 +431,7 @@ Rectangle {
                     width: Math.min(implicitWidth, 150)
                     elide: Text.ElideRight
                     text: leftAB.abTitle
+                    textFormat: Text.PlainText
                     color: Theme.textPrimary
                     font.pixelSize: Theme.fontDeckName
                     font.weight: Theme.weightMedium

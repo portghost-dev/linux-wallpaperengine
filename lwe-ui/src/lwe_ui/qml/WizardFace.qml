@@ -28,6 +28,7 @@ Item {
         anchors.right: parent.right
         anchors.margins: Theme.spacingLg
         text: face.title
+        textFormat: Text.PlainText
         color: Theme.textPrimary
         font.pixelSize: Theme.fontNav
         font.weight: Theme.weightMedium

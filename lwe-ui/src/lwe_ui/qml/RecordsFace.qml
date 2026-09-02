@@ -56,6 +56,7 @@ Popup {
                     spacing: Theme.spacingXs
                     Label {
                         text: face.title
+                        textFormat: Text.PlainText
                         color: Theme.textPrimary
                         font.pixelSize: Theme.fontDeckName
                         font.weight: Theme.weightMedium
