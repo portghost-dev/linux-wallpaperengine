@@ -57,7 +57,7 @@ bool WebInstance::open () {
     info.SetAsWindowless (0);
 
     CefBrowserSettings settings;
-    // the engine already clamped this to CEF's documented 60 minimum
+    // the engine clamps this to CEF's 1..60 range before it is sent
     settings.windowless_frame_rate = this->m_framerate;
 
     this->m_renderHandler = new WallpaperEngine::WebBrowser::CEF::RenderHandler (this);

@@ -19,7 +19,7 @@ struct SpawnConfig {
      * this helper - it would fail with ERR_UNKNOWN_URL_SCHEME.
      */
     std::vector<SchemeEntry> schemes;
-    /** settings.render.maximumFPS; the helper clamps it to CEF's documented 60 minimum */
+    /** settings.render.maximumFPS as the engine clamped it to CEF's 1..60 range */
     int maximumFPS = 0;
     std::filesystem::path socketPath;
     /** PROTOCOL_VERSION of the process that built this; mismatched pairs refuse to run */

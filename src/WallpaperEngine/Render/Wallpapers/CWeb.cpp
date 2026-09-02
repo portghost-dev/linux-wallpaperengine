@@ -38,9 +38,10 @@ CWeb::CWeb (
 
     this->m_instanceId = this->m_helper.allocateInstance ();
 
-    // documentation says that 60 fps is the maximum value
-    const uint32_t framerate
-	= static_cast<uint32_t> (std::max (60, context.getApp ().getContext ().settings.render.maximumFPS));
+    // CEF accepts 1..60 for a windowless frame rate; nothing downstream clamps it
+    const uint32_t framerate = static_cast<uint32_t> (
+	std::min (60, std::max (1, context.getApp ().getContext ().settings.render.maximumFPS))
+    );
 
     // the helper builds the <scheme>://root/<filename> URL from these two fields; the
     // scheme name is derived the same way on both sides (WPSchemeHandlerFactory)
