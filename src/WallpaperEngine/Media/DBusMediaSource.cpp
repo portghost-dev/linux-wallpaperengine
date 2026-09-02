@@ -5,6 +5,10 @@
 
 using namespace WallpaperEngine::Media;
 
+// bound on the synchronous startup calls. the running poll never waits
+constexpr int REPLY_TIMEOUT_MS = 1000;
+constexpr int ERROR_LOG_LIMIT = 3;
+
 DBusHandlerResult dbus_message_filter (DBusConnection* connection, DBusMessage* message, void* user_data) {
     const auto mediaSource = static_cast<DBusMediaSource*> (user_data);
 
@@ -79,6 +83,11 @@ DBusMediaSource::DBusMediaSource (std::chrono::milliseconds updateInterval) : Me
 }
 
 DBusMediaSource::~DBusMediaSource () {
+    if (this->m_positionCall != nullptr) {
+	dbus_pending_call_cancel (this->m_positionCall);
+	dbus_pending_call_unref (this->m_positionCall);
+    }
+
     dbus_connection_remove_filter (this->m_connection, dbus_message_filter, this);
 
     dbus_connection_unref (this->m_connection);
@@ -225,6 +234,8 @@ void DBusMediaSource::update () {
 
     while (dbus_connection_dispatch (this->m_connection) == DBUS_DISPATCH_DATA_REMAINS)
 	;
+
+    this->collectPositionReply ();
 }
 
 DBusMessage* DBusMediaSource::dbusMessage (
@@ -241,7 +252,7 @@ DBusMessage* DBusMediaSource::dbusMessage (
 	dbus_message_append_args (msg, DBUS_TYPE_STRING, &iface, DBUS_TYPE_STRING, &prop, DBUS_TYPE_INVALID);
     }
 
-    DBusMessage* reply = dbus_connection_send_with_reply_and_block (m_connection, msg, -1, &err);
+    DBusMessage* reply = dbus_connection_send_with_reply_and_block (m_connection, msg, REPLY_TIMEOUT_MS, &err);
 
     if (reply == nullptr) {
 	sLog.error ("DBus error: ", err.message, " (", err.name, ")");
@@ -339,32 +350,78 @@ void DBusMediaSource::initialStatusFetch () {
 }
 
 void DBusMediaSource::performUpdate () {
-    // nothing to do if no player is detected
-    if (!this->m_currentPlayer.has_value ()) {
+    // nothing to do if no player is detected, or the last question is still out
+    if (!this->m_currentPlayer.has_value () || this->m_positionCall != nullptr) {
 	return;
     }
 
-    DBusMessage* reply = this->dbusMessage (
-	this->m_currentPlayer.value ().c_str (), "/org/mpris/MediaPlayer2", "org.freedesktop.DBus.Properties", "Get",
-	"org.mpris.MediaPlayer2.Player", "Position"
+    const char* iface = "org.mpris.MediaPlayer2.Player";
+    const char* prop = "Position";
+
+    DBusMessage* msg = dbus_message_new_method_call (
+	this->m_currentPlayer.value ().c_str (), "/org/mpris/MediaPlayer2", "org.freedesktop.DBus.Properties", "Get"
     );
+    Data::Utils::ScopeGuard guard ([msg] { dbus_message_unref (msg); });
+
+    dbus_message_append_args (msg, DBUS_TYPE_STRING, &iface, DBUS_TYPE_STRING, &prop, DBUS_TYPE_INVALID);
+
+    if (!dbus_connection_send_with_reply (this->m_connection, msg, &this->m_positionCall, REPLY_TIMEOUT_MS)) {
+	this->m_positionCall = nullptr;
+    }
+}
+
+void DBusMediaSource::collectPositionReply () {
+    if (this->m_positionCall == nullptr || !dbus_pending_call_get_completed (this->m_positionCall)) {
+	return;
+    }
+
+    DBusMessage* reply = dbus_pending_call_steal_reply (this->m_positionCall);
+    dbus_pending_call_unref (this->m_positionCall);
+    this->m_positionCall = nullptr;
 
     if (reply == nullptr) {
 	return;
     }
 
     Data::Utils::ScopeGuard guard ([reply] { dbus_message_unref (reply); });
+
+    if (dbus_message_get_type (reply) == DBUS_MESSAGE_TYPE_ERROR) {
+	const char* name = dbus_message_get_error_name (reply);
+	const std::string error = name ?: "";
+
+	if (this->m_errorsLogged < ERROR_LOG_LIMIT) {
+	    this->m_errorsLogged++;
+	    sLog.error ("DBus error: ", error, " from player ", this->m_currentPlayer.value ());
+	}
+
+	// a slow player keeps its slot. one that is gone is forgotten until a player
+	// announces itself again through PropertiesChanged
+	if (error != DBUS_ERROR_NO_REPLY) {
+	    this->m_currentPlayer.reset ();
+
+	    if (this->m_mediaInfo.playbackState != PlaybackState::Stopped) {
+		this->m_mediaInfo.playbackState = PlaybackState::Stopped;
+		this->fireMetadataListeners ();
+	    }
+	}
+
+	return;
+    }
+
+    this->m_errorsLogged = 0;
+
     DBusMessageIter outer;
-    dbus_message_iter_init (reply, &outer);
+
+    if (!dbus_message_iter_init (reply, &outer) || dbus_message_iter_get_arg_type (&outer) != DBUS_TYPE_VARIANT) {
+	return;
+    }
 
     DBusMessageIter variant;
     dbus_message_iter_recurse (&outer, &variant);
 
-    dbus_int64_t position = 0;
-    dbus_message_iter_get_basic (&variant, &position);
-
-    if (this->m_mediaInfo.position != position) {
-	this->m_mediaInfo.position = position;
-	this->fireMetadataListeners ();
+    if (dbus_message_iter_get_arg_type (&variant) != DBUS_TYPE_INT64) {
+	return;
     }
+
+    this->parsePosition (variant);
 }

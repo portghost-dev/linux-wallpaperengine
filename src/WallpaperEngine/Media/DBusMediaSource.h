@@ -25,8 +25,12 @@ protected:
 	const char* prop = nullptr
     );
 
+    void collectPositionReply ();
+
     std::optional<std::string> m_currentPlayer = std::nullopt;
 
     DBusConnection* m_connection;
+    DBusPendingCall* m_positionCall = nullptr;
+    int m_errorsLogged = 0;
 };
 }

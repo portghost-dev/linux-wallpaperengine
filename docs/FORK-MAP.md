@@ -812,6 +812,14 @@ The fork turns the script engine from a skeleton into a working WE-compatible ru
 - **Tests**: none.
 - **Uncertain**: "playing" is still any other process holding an unmuted sink input; the detector does not measure level, so an open but silent stream keeps automute asserted.
 
+### 12. Media source that polls without blocking
+
+- **What it does**: Upstream's `MediaSource::update` compared the clock against a next-update stamp that nothing ever set, so the two second interval handed to `DBusMediaSource` was dead and `performUpdate` ran every frame. Each run was a synchronous `Position` round trip to the current MPRIS player with the library default timeout, so a player that had gone away logged an error per frame and a player that stopped answering could hold the render thread for the full default wait. The fork arms the stamp after each poll (`MediaSource.cpp::m_nextUpdate`), sends the `Position` query as a pending call and collects the reply on a later frame (`DBusMediaSource.cpp::collectPositionReply`), bounds the startup calls with `REPLY_TIMEOUT_MS` (`DBusMediaSource.cpp::REPLY_TIMEOUT_MS`), and forgets a player whose call fails with anything but a timeout, marking playback stopped until a player announces itself again through `PropertiesChanged`. Errors log a few times and then stop (`DBusMediaSource.cpp::ERROR_LOG_LIMIT`).
+- **Where it lives**: modified `src/WallpaperEngine/Media/MediaSource.cpp`, `DBusMediaSource.{h,cpp}` only.
+- **Surface**: none. The interval is still the constructor argument in `WallpaperApplication::initializeSubsystems`.
+- **Coupling**: self-contained. Position now updates at the polling interval rather than per frame, which is what the interval argument always claimed.
+- **Tests**: none.
+
 ---
 
 **Area summary (5 lines):**
