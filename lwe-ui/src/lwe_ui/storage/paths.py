@@ -13,7 +13,7 @@ from .. import constants as C
 # A wallpaper id becomes both a path component ($WALLPAPERS_DIR/$id) and a token in the
 # shell-sourced playlist MEMBERS list, which a shell consumer word-splits and (before finding 1's
 # fix) glob-expands. Reject anything that could traverse a path or glob/split in the shell.
-_UNSAFE_WID = re.compile(r"[\s*?\[\]/\\]")
+_SAFE_WID = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def is_safe_wid(wid: str) -> bool:
@@ -23,7 +23,8 @@ def is_safe_wid(wid: str) -> bool:
     w = str(wid or "")
     if not w or w in (".", ".."):
         return False
-    return not _UNSAFE_WID.search(w)
+    # an allowlist, as the contract above says: a denylist let a ';' through to the engine
+    return _SAFE_WID.match(w) is not None
 
 
 def _home() -> Path:

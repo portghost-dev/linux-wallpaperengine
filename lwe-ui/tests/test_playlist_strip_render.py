@@ -144,8 +144,9 @@ def test_schedule_modal_span_colors_follow_entry_not_position(app, backend) -> N
     the modal's own bound loColor/hiColor properties - proof against the real component, not a
     Python-side re-derivation of the same formula.
     """
-    host_path = _QML_DIR / "_test_schedule_host.qml"
-    host_path.write_text(
+    # the host lives in memory under a phantom URL inside the qml dir, so `import "."`
+    # resolves and nothing is ever written into the shipped package directory
+    host_qml = (
         "import QtQuick\n"
         "import QtQuick.Window\n"
         "import \".\"\n"
@@ -155,61 +156,58 @@ def test_schedule_modal_span_colors_follow_entry_not_position(app, backend) -> N
         "    Component.onCompleted: modal.open()\n"
         "}\n"
     )
-    try:
-        engine = QQmlApplicationEngine()
-        engine.addImportPath(str(_QML_DIR))
-        engine.rootContext().setContextProperty("backend", backend)
-        engine.load(QUrl.fromLocalFile(str(host_path)))
-        assert engine.rootObjects(), "test host window failed to load"
-        win = engine.rootObjects()[0]
-        for _ in range(5):
-            QCoreApplication.processEvents()
+    engine = QQmlApplicationEngine()
+    engine.addImportPath(str(_QML_DIR))
+    engine.rootContext().setContextProperty("backend", backend)
+    engine.loadData(host_qml.encode(), QUrl.fromLocalFile(str(_QML_DIR / "_test_schedule_host.qml")))
+    assert engine.rootObjects(), "test host window failed to load"
+    win = engine.rootObjects()[0]
+    for _ in range(5):
+        QCoreApplication.processEvents()
 
-        entry_a = win.findChild(QObject, "entryA")
-        entry_b = win.findChild(QObject, "entryB")
-        day_strip = win.findChild(QObject, "dayStripRow")
-        assert entry_a and entry_b and day_strip, "entryA/entryB/dayStripRow objectName hooks missing"
-        time_a = entry_a.findChild(QObject, "timeField")
-        time_b = entry_b.findChild(QObject, "timeField")
-        assert time_a and time_b, "timeField objectName hook missing inside EntryRow"
+    entry_a = win.findChild(QObject, "entryA")
+    entry_b = win.findChild(QObject, "entryB")
+    day_strip = win.findChild(QObject, "dayStripRow")
+    assert entry_a and entry_b and day_strip, "entryA/entryB/dayStripRow objectName hooks missing"
+    time_a = entry_a.findChild(QObject, "timeField")
+    time_b = entry_b.findChild(QObject, "timeField")
+    assert time_a and time_b, "timeField objectName hook missing inside EntryRow"
 
-        a_dot = entry_a.property("dotColor").name()
-        b_dot = entry_b.property("dotColor").name()
+    a_dot = entry_a.property("dotColor").name()
+    b_dot = entry_b.property("dotColor").name()
 
-        time_a.setProperty("text", "21:30")
-        time_b.setProperty("text", "08:00")
-        for _ in range(3):
-            QCoreApplication.processEvents()
-        assert day_strip.property("ok") is True
-        lo_color = day_strip.property("loColor").name()
-        hi_color = day_strip.property("hiColor").name()
-        assert lo_color == b_dot, (
-            f"BUG case (B=08:00 earlier than A=21:30): the lo span should carry entry B's own "
-            f"color ({b_dot}), got {lo_color} - this is the exact F25 regression (colors bound "
-            f"to sorted lo/hi position instead of to the entry that produced each boundary)"
-        )
-        assert hi_color == a_dot, (
-            f"BUG case: the hi span should carry entry A's own color ({a_dot}), got {hi_color}"
-        )
+    time_a.setProperty("text", "21:30")
+    time_b.setProperty("text", "08:00")
+    for _ in range(3):
+        QCoreApplication.processEvents()
+    assert day_strip.property("ok") is True
+    lo_color = day_strip.property("loColor").name()
+    hi_color = day_strip.property("hiColor").name()
+    assert lo_color == b_dot, (
+        f"BUG case (B=08:00 earlier than A=21:30): the lo span should carry entry B's own "
+        f"color ({b_dot}), got {lo_color} - this is the exact F25 regression (colors bound "
+        f"to sorted lo/hi position instead of to the entry that produced each boundary)"
+    )
+    assert hi_color == a_dot, (
+        f"BUG case: the hi span should carry entry A's own color ({a_dot}), got {hi_color}"
+    )
 
-        time_a.setProperty("text", "08:00")
-        time_b.setProperty("text", "21:30")
-        for _ in range(3):
-            QCoreApplication.processEvents()
-        assert day_strip.property("ok") is True
-        lo_color2 = day_strip.property("loColor").name()
-        hi_color2 = day_strip.property("hiColor").name()
-        assert lo_color2 == a_dot, (
-            f"normal order (A=08:00 earlier than B=21:30): lo span should carry entry A's color "
-            f"({a_dot}), got {lo_color2}"
-        )
-        assert hi_color2 == b_dot, (
-            f"normal order: hi span should carry entry B's color ({b_dot}), got {hi_color2}"
-        )
-        print("OK test_schedule_modal_span_colors_follow_entry_not_position "
-              "(verified live in both time orderings, F25)")
-    finally:
-        host_path.unlink(missing_ok=True)
+    time_a.setProperty("text", "08:00")
+    time_b.setProperty("text", "21:30")
+    for _ in range(3):
+        QCoreApplication.processEvents()
+    assert day_strip.property("ok") is True
+    lo_color2 = day_strip.property("loColor").name()
+    hi_color2 = day_strip.property("hiColor").name()
+    assert lo_color2 == a_dot, (
+        f"normal order (A=08:00 earlier than B=21:30): lo span should carry entry A's color "
+        f"({a_dot}), got {lo_color2}"
+    )
+    assert hi_color2 == b_dot, (
+        f"normal order: hi span should carry entry B's color ({b_dot}), got {hi_color2}"
+    )
+    print("OK test_schedule_modal_span_colors_follow_entry_not_position "
+          "(verified live in both time orderings, F25)")
 
 
 def test_interval_enter_releases_focus(app, backend) -> None:

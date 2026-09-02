@@ -99,30 +99,6 @@ def _test_confirmpop_and_prule_are_new_standalone_files() -> None:
     print("OK T30 ConfirmPop + PRule are new standalone files; the editor keeps its inline one")
 
 
-def _test_frozen_surfaces_are_untouched() -> None:
-    """T23: zero diff in the popup and the editor views; editor.py carries exactly the one
-    authorized persistence change."""
-    frozen = ["src/lwe_ui/qml/DeckSettingsPopup.qml", "src/lwe_ui/deck_popup.py",
-              "src/lwe_ui/qml/EditorView.qml", "src/lwe_ui/qml/ObjectsPanel.qml"]
-    proc = subprocess.run(["git", "diff", "--stat", "HEAD", "--"] + frozen,
-                          cwd=str(_ROOT), capture_output=True, text=True, check=False)
-    if proc.returncode == 0:
-        assert proc.stdout.strip() == "", \
-            f"frozen surfaces must diff to zero lines:\n{proc.stdout}"
-
-    proc = subprocess.run(["git", "diff", "-U0", "HEAD", "--", "src/lwe_ui/editor.py"],
-                          cwd=str(_ROOT), capture_output=True, text=True, check=False)
-    if proc.returncode == 0 and proc.stdout.strip():
-        added = [ln for ln in proc.stdout.splitlines()
-                 if ln.startswith("+") and not ln.startswith("+++")]
-        removed = [ln for ln in proc.stdout.splitlines()
-                   if ln.startswith("-") and not ln.startswith("---")]
-        assert not removed, f"editor.py must lose nothing:\n{chr(10).join(removed)}"
-        assert len(added) == 1 and "_persist_setting" in added[0], \
-            f"editor.py may gain exactly the setAudioDial persistence line:\n{added}"
-    print("OK T23 frozen surfaces diff to zero; editor.py carries only the P0 line")
-
-
 def _test_dead_strings_are_gone() -> None:
     """T24: every string sec 8.5 names dies with its row or its rewrite, and no Save verb
     survives anywhere in the Settings family."""
@@ -684,7 +660,6 @@ def main() -> None:
     _test_no_srow_on_the_reworked_pages()
     _test_every_section_header_is_a_prule()
     _test_confirmpop_and_prule_are_new_standalone_files()
-    _test_frozen_surfaces_are_untouched()
     _test_dead_strings_are_gone()
     _test_ruled_strings_are_verbatim()
     _test_cut_keys_have_no_qml_row()

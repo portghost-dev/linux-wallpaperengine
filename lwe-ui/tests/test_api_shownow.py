@@ -75,10 +75,15 @@ class ApiShowNowTest(unittest.TestCase):
         self.assertEqual(self.api_show_calls, ["3134543499"])
 
     def test_invalid_id_rejected_without_api_call(self) -> None:
-        _API.show = lambda wid, wait_done=False, **kw: (_ for _ in ()).throw(
-            AssertionError("unsafe id must never reach the API"))
+        # a sentinel that only throws proves nothing, since showNow swallows exceptions
+        # and returns False either way; the recorder is what shows the API was not called
+        _API.show = lambda wid, wait_done=False, **kw: (
+            self.api_show_calls.append(wid),
+            {"id": 1, "ok": True, "status": "accepted"},
+        )[1]
         for bad in ("", "  ", "../etc", "a b", "id;rm"):
-            self.assertFalse(self.backend.showNow(bad))
+            self.assertFalse(self.backend.showNow(bad), f"unsafe id {bad!r} was shown")
+        self.assertEqual(self.api_show_calls, [], "an unsafe id reached the API")
 
     def test_transport_failure_returns_false(self) -> None:
         _API.show = lambda wid, wait_done=False, **kw: None
