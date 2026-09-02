@@ -109,6 +109,21 @@ def luminance(color: str) -> float:
     return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
 
 
+def _wcag_luminance(color: str) -> float:
+    lin = []
+    for c in _rgb(color):
+        c = c / 255.0
+        lin.append(c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4)
+    r, g, b = lin
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _wcag_contrast(c1: str, c2: str) -> float:
+    l1, l2 = _wcag_luminance(c1), _wcag_luminance(c2)
+    hi, lo = max(l1, l2), min(l1, l2)
+    return (hi + 0.05) / (lo + 0.05)
+
+
 def _mix(c1: str, c2: str, t: float) -> str:
     r1, g1, b1 = _rgb(c1)
     r2, g2, b2 = _rgb(c2)
@@ -232,7 +247,9 @@ def resolve(roles: dict[str, str]) -> dict[str, str]:
     text2 = _mix(text, muted, 0.40)
     text4 = _mix(muted, bg, 0.45)
 
-    accent_ink = "#0D0D12" if luminance(accent) >= 0.5 else "#FFFFFF"
+    ink_white = _wcag_contrast(accent, "#FFFFFF")
+    ink_dark = _wcag_contrast(accent, "#0D0D12")
+    accent_ink = "#FFFFFF" if ink_white > ink_dark else "#0D0D12"
 
     ladder = "#FFFFFF" if dark else "#000000"
     hairline = _with_alpha(ladder, 0.12)

@@ -88,6 +88,11 @@ def main() -> None:
     assert amber["onAccent"] == "#0D0D12", amber["onAccent"]
     ink_dark_accent = themes.resolve({**themes.base_roles("dark"), "accent": "#20304A"})
     assert ink_dark_accent["onAccent"] == "#FFFFFF"
+    # mid-luminance saturated accents take the ink with the higher measured contrast
+    cozy_pink = themes.resolve(themes.base_roles("cozyPink"))
+    assert cozy_pink["onAccent"] == "#0D0D12", cozy_pink["onAccent"]
+    lavender = themes.resolve(themes.base_roles("lavenderMilk"))
+    assert lavender["onAccent"] == "#FFFFFF", lavender["onAccent"]
 
     assert themes.parse_color("#FFF") == "#FFFFFF"
     assert themes.parse_color("ffffff") == "#FFFFFF"
