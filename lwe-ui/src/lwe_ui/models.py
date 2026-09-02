@@ -208,6 +208,15 @@ def resolved_tuning(wid: str) -> dict[str, float]:
     return out
 
 
+def fit_rotation_entries(entries: list[dict]) -> list[dict]:
+    """The longest prefix of `entries` one rotate-set can carry under the engine's caps."""
+    import json
+    kept = list(entries[:C.ENGINE_ROTATE_MAX_ENTRIES])
+    while kept and len(json.dumps(kept)) > C.ENGINE_ROTATE_MAX_BYTES:
+        kept.pop()
+    return kept
+
+
 def effective_speed(wid: str, factor=None) -> float:
     """The rate the engine runs for `wid`: its conf SPEED times the global factor (the
     stored ENGINE_TIMESCALE when `factor` is None), clamped to the engine's range."""
@@ -895,6 +904,9 @@ class Backend(QObject):
             except Exception:
                 continue  # one broken conf must not sink the whole set
             entries.append({"id": engine_wid, "ui_id": wid, **args})
+        # the engine refuses more than its entry cap and drops a request line over its
+        # byte cap outright, so the set is trimmed to what will land rather than lost whole
+        entries = fit_rotation_entries(entries)
         mode = str(d.get("MODE") or "shuffle")
         order = mode if mode in ("shuffle", "random", "sequential") else "sequential"
         enabled = (bool(self._setting("ROTATION_ENABLED", True)) and mode != "static"

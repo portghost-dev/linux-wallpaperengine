@@ -55,6 +55,11 @@ AUDIO_DIAL_ENV = {
 SCHEDULE_UI = False
 
 
+# The engine refuses a rotate-set with more entries than this, and drops a request line
+# longer than 64 KiB outright; the byte cap here leaves room for the request envelope.
+ENGINE_ROTATE_MAX_ENTRIES = 512
+ENGINE_ROTATE_MAX_BYTES = 60 * 1024
+
 # The engine accepts one speed number in this range, on show and on set-speed alike, and
 # refuses the whole request outside it. Every door resolves through this before pushing.
 ENGINE_SPEED_MIN = 0.0

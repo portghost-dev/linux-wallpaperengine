@@ -12,9 +12,9 @@ docs/findings.md) is:
     --assets-dir <assets_dir>
     [--fps <FPS>]                       # omitted when FPS == ""
     --scaling <SCALING>                 # MUST precede the --screen-root list
+    [--clamp <CLAMPING>]                # omitted when CLAMPING == ""; keys the mirror group like scaling
     (--screen-root <output>) x outputs
     --silent | --volume <N>             # VOLUME 0 -> --silent, else --volume N
-    [--clamp <CLAMPING>]                # omitted when CLAMPING == ""
     [--noautomute]                      # AUTOMUTE false -> emit
     [--no-audio-processing]             # AUDIO_REACTIVE false -> emit
     [--disable-mouse]                   # MOUSE false -> emit
@@ -45,7 +45,7 @@ def _as_bool(value: object) -> bool:
 def _tail_flags(wp: dict, pause_on_fullscreen: bool = False) -> list[str]:
     """The shared flag block that follows the screen-roots / --window and precedes --bg.
 
-    Order: volume, clamp, noautomute, no-audio-processing, disable-mouse,
+    Order: volume, noautomute, no-audio-processing, disable-mouse,
     no-fullscreen-pause, set-propertyxprops, render-debug skip-objectxSKIP.
 
     `pause_on_fullscreen` is the GLOBAL PAUSE_ON_FULLSCREEN setting (default false), used to
@@ -63,10 +63,6 @@ def _tail_flags(wp: dict, pause_on_fullscreen: bool = False) -> list[str]:
         argv.append(flags["silent"])
     else:
         argv += [flags["volume"], str(volume_n)]
-
-    clamping = str(wp.get("CLAMPING", C.WP_SCHEMA["CLAMPING"]["default"]) or "")
-    if clamping != "":
-        argv += [flags["clamp"], clamping]
 
     if not _as_bool(wp.get("AUTOMUTE", C.WP_SCHEMA["AUTOMUTE"]["default"])):
         argv.append(flags["noautomute"])
@@ -114,7 +110,7 @@ def _build_env(wp: dict) -> dict[str, str]:
 
 
 def _head_flags(engine_bin: str, assets_dir: str, wp: dict) -> list[str]:
-    """engine_bin, --assets-dir, [--fps], --scaling - the block before screen-roots/--window."""
+    """engine_bin, --assets-dir, [--fps], --scaling, [--clamp] - the block before screen-roots/--window."""
     flags = C.ENGINE_FLAGS
     argv: list[str] = [engine_bin, flags["assets_dir"], assets_dir]
 
@@ -123,9 +119,14 @@ def _head_flags(engine_bin: str, assets_dir: str, wp: dict) -> list[str]:
     if fps_s != "":
         argv += [flags["fps"], fps_s]
 
-    # SCALING must precede the screen-root list / --window
+    # SCALING and CLAMPING key the mirror group, so both must precede the screen-root
+    # list / --window; after it they land on the last output only and split the group
     scaling = wp.get("SCALING", C.WP_SCHEMA["SCALING"]["default"])
     argv += [flags["scaling"], str(scaling)]
+
+    clamping = str(wp.get("CLAMPING", C.WP_SCHEMA["CLAMPING"]["default"]) or "")
+    if clamping != "":
+        argv += [flags["clamp"], clamping]
 
     return argv
 
