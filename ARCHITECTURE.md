@@ -116,7 +116,11 @@ At the top of every loop pass, before rendering, the app services its control su
 (`WallpaperApplication::show()` at WallpaperApplication.cpp::show): the property-reload check, pending socket commands, the rotation
 tick, the deadman tick, the fullscreen-gate tick, the running-apps poll, and the
 crash-guard's survived mark. **Commands are answered even while paused, released, or
-parked** - that is the whole point of the architecture.
+parked** - that is the whole point of the architecture. The paused pass is the one
+that does not poll: it sleeps for a quarter second
+(`WallpaperApplication.cpp::FULLSCREEN_CHECK_WAIT_TIME`) and skips the event dispatch,
+so a command is answered within 250 ms instead of at frame cadence, and Wayland
+events, hotplug included, wait for resume.
 
 The same discipline applies to replies: `CommandServer::respond()` waits for a wedged
 client in bounded slices (500 ms total) and then drops it
@@ -324,6 +328,9 @@ is to be the daemon API's reference client and the system's owner:
   running-apps condition are both engine-side detectors (see section 2), configured by
   the panel via `set-fullscreen`, `set-fullscreen-ignore`, and `set-app-conditions`.
   There are no UI-side watcher processes.
+- The GUI thread never forks or blocks. Periodic samples, service queries, and the
+  bench and import work run on worker threads and report back through signals
+  (`lwe-ui/src/lwe_ui/models.py::engineStatsLast` is the read-only face of one).
 
 Its durable settings/playlist/per-wallpaper state is shell-sourceable KEY=value files
 under `~/.config/lwe/` (Tier A); the same directory also carries JSON state (meta,
@@ -385,12 +392,20 @@ These are the rules the system depends on; breaking any of them is a bug even if
 compiles:
 
 1. **One thread owns the loop.** Rendering, command execution, and all engine-state
-   changes happen on the main thread. The inherited SDL audio callback is the one
-   exception and is separately mutex-guarded. Nothing in the command path may block it: poll timeouts
-   are bounded, replies are budgeted, respawns are one-attempt-per-pass.
+   changes happen on the main thread. The inherited SDL audio reader thread and
+   callback are the exception; both cross into a stream under its own mutex and
+   leave through a reader-done flag (`Audio/AudioStream.h::markReaderDone`).
+   Nothing in the command path may block the loop: poll timeouts are bounded,
+   replies are budgeted, respawns are one-attempt-per-pass. External services are
+   polled, never awaited: PulseAudio, the media player over DBus, and the
+   fullscreen check all answer on a later pass or not at all.
 2. **Wire input is never trusted.** Ids are charset-validated before resolution; JSON
    depth and size are capped; every handler-side read is preceded by dispatcher
-   validation of that exact key. Keep it that way when adding verbs.
+   validation of that exact key. Keep it that way when adding verbs. Content is not
+   trusted either: the parsers charge every allocation against a budget
+   (`Data/Parsers/TextureParser.cpp::chargeTextureBudget`), refuse counts and offsets
+   that do not fit, read workshop ids as 64-bit everywhere, and the panel renders
+   wallpaper-supplied strings as plain text.
 3. **GL ids are not stable across rebuilds.** Mip-residency expansion
    (`CTexture::expandResidency`) deletes and recreates texture objects, so holders
    must re-query `getTextureID` rather than cache a `GLuint`. The texture registry
@@ -414,6 +429,12 @@ compiles:
    documented config and cache handoffs (`~/.config/lwe/`, the engine-env file, and
    the texture cache described in section 2.7). If you add
    state, decide which side owns it and say so in the verb's contract.
+7. **Whoever acquires, releases.** Pass uniforms and attributes are freed by the
+   pass that allocated them (`Render/Objects/Effects/CPass.h::release`), script
+   results by the adapter that created them, Wayland outputs through one teardown
+   path whether the compositor removed them or the engine did, and audio streams by
+   the driver that opened them, after the reader is done. A resource whose release
+   lives somewhere else than its acquire is a leak waiting for a code path.
 
 ## 8. Where to start reading
 
