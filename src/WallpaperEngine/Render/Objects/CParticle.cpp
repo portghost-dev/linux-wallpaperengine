@@ -91,6 +91,10 @@ void uploadParticleBuffer (GLenum target, GLsizeiptr& capacity, GLsizeiptr bytes
 	return;
     }
     if (bytes > 0) {
+	// a large upload orphans first so the copy never waits on the previous draw
+	if (capacity >= 256 * 1024) {
+	    glBufferData (target, capacity, nullptr, GL_DYNAMIC_DRAW);
+	}
 	glBufferSubData (target, 0, bytes, data);
     }
 }
@@ -316,23 +320,25 @@ void CParticle::setupChildren () {
     }
 }
 
-void CParticle::render () {
+bool CParticle::simulate () {
     if (!m_initialized || !m_particle.visible->value->getBool ()) {
-	return;
+	return false;
     }
+
+    const uint32_t pass = getScene ().getContext ().getDriver ().getPassCounter ();
+
+    if (m_simulatedPass == pass) {
+	return true;
+    }
+
+    m_simulatedPass = pass;
 
     // Initialize time on first render to avoid huge dt spike
     if (m_time == 0.0) {
 	m_time = g_Time;
 	m_startWall = g_Time;
-	// Skip update on first frame to avoid weird initial burst
-	// This ensures all particles start from a clean state
-	if (m_useRopeRenderer) {
-	    renderRope ();
-	} else {
-	    renderSprites ();
-	}
-	return;
+	m_started = false;
+	return true;
     }
 
     // Update particles
@@ -364,7 +370,39 @@ void CParticle::render () {
 	}
     }
 
-    if (started) {
+    m_started = started;
+    buildSpriteTree ();
+    return true;
+}
+
+uint32_t CParticle::liveParticleCount () const {
+    uint32_t count = m_particleCount;
+
+    for (const auto& child : m_children) {
+	count += child->liveParticleCount ();
+    }
+
+    return count;
+}
+
+void CParticle::buildSpriteTree () {
+    if (!m_useRopeRenderer) {
+	buildSpriteVertices ();
+    }
+
+    for (const auto& child : m_children) {
+	child->buildSpriteTree ();
+    }
+}
+
+void CParticle::render () {
+    if (!m_initialized || !m_particle.visible->value->getBool ()) {
+	return;
+    }
+
+    simulate ();
+
+    if (m_started) {
 	for (const auto& child : m_children) {
 	    child->renderAsChild ();
 	}
@@ -2666,6 +2704,110 @@ void CParticle::updateParticleRenderVars () {
     }
 }
 
+void CParticle::buildSpriteVertices () {
+    const uint32_t pass = getScene ().getContext ().getDriver ().getPassCounter ();
+    m_builtPass = pass;
+    m_aliveCount = 0;
+    m_spriteVertexCount = 0;
+    m_activeIndexCount = 0;
+
+    if (m_particleCount == 0 || m_pass == nullptr) {
+	return;
+    }
+
+    for (uint32_t i = 0; i < m_particleCount; i++) {
+	if (m_particles[i].alive) {
+	    m_aliveCount++;
+	}
+    }
+
+    if (m_aliveCount == 0) {
+	return;
+    }
+
+    // Build vertex data in WP shader layout:
+    // a_Position(3) + a_TexCoordVec4(uv.x, uv.y, rotZ, size)(4) + a_Color(4)
+    //   + a_TexCoordVec4C1(vel.x, vel.y, vel.z, lifetime)(4) + a_TexCoordC2(rotX, rotY)(2) = 17 floats
+    uint32_t vertexIndex = 0;
+    uint32_t indexOffset = 0;
+
+    for (uint32_t i = 0; i < m_particleCount; i++) {
+	const auto& p = m_particles[i];
+	if (!p.alive) {
+	    continue;
+	}
+
+	// Skip particles with invalid values
+	if (!std::isfinite (p.position.x) || !std::isfinite (p.position.y) || !std::isfinite (p.position.z)
+	    || !std::isfinite (p.size) || p.size <= 0.0f || p.size > 10000.0f) {
+	    continue;
+	}
+
+	// Compute the lifetime value for the WP shader's ComputeSpriteFrame.
+	// The shader computes: floor(frac(lifetime) * numFrames) to get current frame,
+	// and frac(lifetime * numFrames) for the blend factor between frames.
+	// We encode the CPU-computed p.frame (which accounts for sequenceMultiplier
+	// and animation mode) into the lifetime value the shader expects.
+	float lifetime = p.getLifetimePos ();
+
+	if (m_spritesheetFrames > 0 && p.frame >= 0.0f) {
+	    if (m_particle.animationMode == "randomframe") {
+		// Center within the frame to avoid floating-point edge cases
+		lifetime = (p.frame + 0.5f) / static_cast<float> (m_spritesheetFrames);
+	    } else {
+		// Encode frame index + fractional blend: shader reconstructs via
+		// floor(lifetime * numFrames) = current frame,
+		// frac(lifetime * numFrames) = blend toward next frame
+		lifetime = p.frame / static_cast<float> (m_spritesheetFrames);
+	    }
+	}
+
+	auto addVertex = [&] (float u, float v) {
+	    const uint32_t base = vertexIndex * SPRITE_FLOATS_PER_VERTEX;
+	    // a_Position (vec3)
+	    m_vertices[base + 0] = p.position.x;
+	    m_vertices[base + 1] = p.position.y;
+	    m_vertices[base + 2] = p.position.z;
+	    // a_TexCoordVec4 (vec4: uv.x, uv.y, rotZ, size)
+	    m_vertices[base + 3] = u;
+	    m_vertices[base + 4] = v;
+	    m_vertices[base + 5] = p.rotation.z;
+	    m_vertices[base + 6] = p.size;
+	    m_vertices[base + 7] = p.color.r;
+	    m_vertices[base + 8] = p.color.g;
+	    m_vertices[base + 9] = p.color.b;
+	    m_vertices[base + 10] = p.alpha * p.followAlpha;
+	    // a_TexCoordVec4C1 (vec4: vel.x, vel.y, vel.z, lifetime)
+	    m_vertices[base + 11] = p.velocity.x;
+	    m_vertices[base + 12] = p.velocity.y;
+	    m_vertices[base + 13] = p.velocity.z;
+	    m_vertices[base + 14] = lifetime;
+	    // a_TexCoordC2 (vec2: rotX, rotY)
+	    m_vertices[base + 15] = p.rotation.x;
+	    m_vertices[base + 16] = p.rotation.y;
+	    vertexIndex++;
+	};
+
+	// 4 vertices for quad corners
+	uint32_t baseVertex = vertexIndex;
+	addVertex (0.0f, 1.0f); // 0: Bottom-left
+	addVertex (1.0f, 1.0f); // 1: Bottom-right
+	addVertex (1.0f, 0.0f); // 2: Top-right
+	addVertex (0.0f, 0.0f); // 3: Top-left
+
+	// 6 indices forming 2 triangles
+	m_indices[indexOffset++] = baseVertex + 0;
+	m_indices[indexOffset++] = baseVertex + 1;
+	m_indices[indexOffset++] = baseVertex + 2;
+	m_indices[indexOffset++] = baseVertex + 2;
+	m_indices[indexOffset++] = baseVertex + 3;
+	m_indices[indexOffset++] = baseVertex + 0;
+    }
+
+    m_spriteVertexCount = vertexIndex;
+    m_activeIndexCount = static_cast<GLsizei> (indexOffset);
+}
+
 void CParticle::renderSprites () {
     if (m_particleCount == 0 || m_pass == nullptr) {
 	return;
@@ -2676,14 +2818,11 @@ void CParticle::renderSprites () {
 	return;
     }
 
-    // Count alive particles
-    uint32_t aliveCount = 0;
-    for (uint32_t i = 0; i < m_particleCount; i++) {
-	if (m_particles[i].alive) {
-	    aliveCount++;
-	}
+    if (m_builtPass != getScene ().getContext ().getDriver ().getPassCounter ()) {
+	buildSpriteVertices ();
     }
 
+    const uint32_t aliveCount = m_aliveCount;
     if (aliveCount == 0) {
 	return;
     }
@@ -2766,86 +2905,6 @@ void CParticle::renderSprites () {
 	}
     }
 
-    // Build vertex data in WP shader layout:
-    // a_Position(3) + a_TexCoordVec4(uv.x, uv.y, rotZ, size)(4) + a_Color(4)
-    //   + a_TexCoordVec4C1(vel.x, vel.y, vel.z, lifetime)(4) + a_TexCoordC2(rotX, rotY)(2) = 17 floats
-    uint32_t vertexIndex = 0;
-    uint32_t indexOffset = 0;
-
-    for (uint32_t i = 0; i < m_particleCount; i++) {
-	const auto& p = m_particles[i];
-	if (!p.alive) {
-	    continue;
-	}
-
-	// Skip particles with invalid values
-	if (!std::isfinite (p.position.x) || !std::isfinite (p.position.y) || !std::isfinite (p.position.z)
-	    || !std::isfinite (p.size) || p.size <= 0.0f || p.size > 10000.0f) {
-	    continue;
-	}
-
-	// Compute the lifetime value for the WP shader's ComputeSpriteFrame.
-	// The shader computes: floor(frac(lifetime) * numFrames) to get current frame,
-	// and frac(lifetime * numFrames) for the blend factor between frames.
-	// We encode the CPU-computed p.frame (which accounts for sequenceMultiplier
-	// and animation mode) into the lifetime value the shader expects.
-	float lifetime = p.getLifetimePos ();
-
-	if (m_spritesheetFrames > 0 && p.frame >= 0.0f) {
-	    if (m_particle.animationMode == "randomframe") {
-		// Center within the frame to avoid floating-point edge cases
-		lifetime = (p.frame + 0.5f) / static_cast<float> (m_spritesheetFrames);
-	    } else {
-		// Encode frame index + fractional blend: shader reconstructs via
-		// floor(lifetime * numFrames) = current frame,
-		// frac(lifetime * numFrames) = blend toward next frame
-		lifetime = p.frame / static_cast<float> (m_spritesheetFrames);
-	    }
-	}
-
-	auto addVertex = [&] (float u, float v) {
-	    const uint32_t base = vertexIndex * SPRITE_FLOATS_PER_VERTEX;
-	    // a_Position (vec3)
-	    m_vertices[base + 0] = p.position.x;
-	    m_vertices[base + 1] = p.position.y;
-	    m_vertices[base + 2] = p.position.z;
-	    // a_TexCoordVec4 (vec4: uv.x, uv.y, rotZ, size)
-	    m_vertices[base + 3] = u;
-	    m_vertices[base + 4] = v;
-	    m_vertices[base + 5] = p.rotation.z;
-	    m_vertices[base + 6] = p.size;
-	    m_vertices[base + 7] = p.color.r;
-	    m_vertices[base + 8] = p.color.g;
-	    m_vertices[base + 9] = p.color.b;
-	    m_vertices[base + 10] = p.alpha * p.followAlpha;
-	    // a_TexCoordVec4C1 (vec4: vel.x, vel.y, vel.z, lifetime)
-	    m_vertices[base + 11] = p.velocity.x;
-	    m_vertices[base + 12] = p.velocity.y;
-	    m_vertices[base + 13] = p.velocity.z;
-	    m_vertices[base + 14] = lifetime;
-	    // a_TexCoordC2 (vec2: rotX, rotY)
-	    m_vertices[base + 15] = p.rotation.x;
-	    m_vertices[base + 16] = p.rotation.y;
-	    vertexIndex++;
-	};
-
-	// 4 vertices for quad corners
-	uint32_t baseVertex = vertexIndex;
-	addVertex (0.0f, 1.0f); // 0: Bottom-left
-	addVertex (1.0f, 1.0f); // 1: Bottom-right
-	addVertex (1.0f, 0.0f); // 2: Top-right
-	addVertex (0.0f, 0.0f); // 3: Top-left
-
-	// 6 indices forming 2 triangles
-	m_indices[indexOffset++] = baseVertex + 0;
-	m_indices[indexOffset++] = baseVertex + 1;
-	m_indices[indexOffset++] = baseVertex + 2;
-	m_indices[indexOffset++] = baseVertex + 2;
-	m_indices[indexOffset++] = baseVertex + 3;
-	m_indices[indexOffset++] = baseVertex + 0;
-    }
-
-    m_activeIndexCount = static_cast<GLsizei> (indexOffset);
     if (m_activeIndexCount == 0) {
 	return;
     }
@@ -2861,21 +2920,21 @@ void CParticle::renderSprites () {
     glBindBuffer (GL_ARRAY_BUFFER, m_vbo);
     uploadParticleBuffer (
 	GL_ARRAY_BUFFER, m_vboCapacity,
-	static_cast<GLsizeiptr> (vertexIndex * SPRITE_FLOATS_PER_VERTEX * sizeof (float)), m_vertices.data ()
+	static_cast<GLsizeiptr> (m_spriteVertexCount * SPRITE_FLOATS_PER_VERTEX * sizeof (float)), m_vertices.data ()
     );
 
     glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, m_ebo);
     uploadParticleBuffer (
-	GL_ELEMENT_ARRAY_BUFFER, m_eboCapacity, static_cast<GLsizeiptr> (indexOffset * sizeof (uint32_t)),
+	GL_ELEMENT_ARRAY_BUFFER, m_eboCapacity, static_cast<GLsizeiptr> (m_activeIndexCount * sizeof (uint32_t)),
 	m_indices.data ()
     );
 
     logParticleBuffer (
 	this->getParticle ().name, getId (), false, true,
-	static_cast<uint64_t> (vertexIndex) * SPRITE_FLOATS_PER_VERTEX * sizeof (float), m_particleCount, m_maxParticles
+	static_cast<uint64_t> (m_spriteVertexCount) * SPRITE_FLOATS_PER_VERTEX * sizeof (float), m_particleCount, m_maxParticles
     );
     logParticleBuffer (
-	this->getParticle ().name, getId (), false, false, static_cast<uint64_t> (indexOffset) * sizeof (uint32_t),
+	this->getParticle ().name, getId (), false, false, static_cast<uint64_t> (m_activeIndexCount) * sizeof (uint32_t),
 	m_particleCount, m_maxParticles
     );
 
@@ -3226,7 +3285,7 @@ void CParticle::renderRope () {
 
     glBindBuffer (GL_ELEMENT_ARRAY_BUFFER, m_ebo);
     uploadParticleBuffer (
-	GL_ELEMENT_ARRAY_BUFFER, m_eboCapacity, static_cast<GLsizeiptr> (indexOffset * sizeof (uint32_t)),
+	GL_ELEMENT_ARRAY_BUFFER, m_eboCapacity, static_cast<GLsizeiptr> (m_activeIndexCount * sizeof (uint32_t)),
 	m_indices.data ()
     );
 

@@ -15,8 +15,10 @@
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Render/Drivers/Output/OutputViewport.h"
 #include "WallpaperEngine/Render/MipResidency.h"
+#include "WallpaperEngine/Render/Utils/WorkPool.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <ranges>
 
@@ -377,6 +379,52 @@ void CScene::queueAnimation (DynamicValue& value, CObject& object) {
 	" channels=", animation->channels.size (), " len=", animation->length, "f fps=", animation->fps,
 	" relative=", animation->relative ? 1 : 0
     );
+}
+
+void CScene::simulateParticles () {
+    static const bool s_serial = getenv ("LWE_NOPARSIM") != nullptr;
+    // the pool pays off once a frame's serial particle work outweighs its wake and join
+    constexpr double PARALLEL_COST_FLOOR_US = 1000.0;
+    std::vector<std::function<void ()>> tasks;
+    std::vector<double> costs;
+
+    for (const auto& cur : this->m_objectsByRenderOrder) {
+	if (dynamic_cast<Objects::CParticle*> (cur) != nullptr) {
+	    costs.push_back (0.0);
+	}
+    }
+
+    if (costs.empty ()) {
+	return;
+    }
+
+    size_t slot = 0;
+
+    for (const auto& cur : this->m_objectsByRenderOrder) {
+	if (auto* system = dynamic_cast<Objects::CParticle*> (cur); system != nullptr) {
+	    double* cost = &costs[slot++];
+	    tasks.emplace_back ([system, cost] {
+		const auto start = std::chrono::steady_clock::now ();
+		system->simulate ();
+		*cost = std::chrono::duration<double, std::micro> (std::chrono::steady_clock::now () - start).count ();
+	    });
+	}
+    }
+
+    if (s_serial || tasks.size () < 2 || this->m_particleSimCostUs < PARALLEL_COST_FLOOR_US) {
+	for (const auto& task : tasks) {
+	    task ();
+	}
+    } else {
+	Utils::WorkPool::instance ().run (std::move (tasks));
+    }
+
+    double total = 0.0;
+    for (const double cost : costs) {
+	total += cost;
+    }
+
+    this->m_particleSimCostUs = 0.8 * this->m_particleSimCostUs + 0.2 * total;
 }
 
 void CScene::tickAnimations () {
@@ -1025,6 +1073,8 @@ void CScene::renderFrame (const glm::ivec4& viewport) {
     this->getScriptEngine ().tick ();
 
     this->tickAnimations ();
+
+    this->simulateParticles ();
 
     // update main textures for images
     for (const auto& cur : this->m_objectsByRenderOrder) {

@@ -470,6 +470,7 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/Objects/CSound.cpp
     src/WallpaperEngine/Render/Objects/CParticle.h
     src/WallpaperEngine/Render/Objects/CParticle.cpp
+    src/WallpaperEngine/Render/Utils/WorkPool.cpp
     src/WallpaperEngine/Render/Objects/CText.h
     src/WallpaperEngine/Render/Objects/CText.cpp
 

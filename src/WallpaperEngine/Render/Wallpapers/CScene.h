@@ -152,6 +152,8 @@ private:
     std::unordered_set<int> m_objectsBeingResolved = {};
     std::shared_ptr<const CFBO> m_compositionRenderTarget = nullptr;
     void tickAnimations ();
+    void simulateParticles ();
+    double m_particleSimCostUs { 0.0 };
     struct AnimatedPropertyEntry {
 	Data::Model::DynamicValue* value = nullptr;
 	CObject* object = nullptr;

@@ -146,9 +146,14 @@ public:
 
     void setup () override;
     void render () override;
+    /** Advances the system for the current driver pass without touching GL; safe to run on a
+     *  worker thread. render() calls it when nothing did so earlier in the pass. */
+    bool simulate ();
     void update (float dt);
 
     [[nodiscard]] bool isChildSystem () const { return m_parentSystem != nullptr; }
+    /** Live particles in this system and its children, as of the last simulation */
+    [[nodiscard]] uint32_t liveParticleCount () const;
 
     void resetPopulation ();
 
@@ -241,6 +246,9 @@ protected:
     void updateChildren (float dt);
     /** Draw path for child systems, called by the parent after its own draw setup */
     void renderAsChild ();
+    /** Fills the sprite vertex and index arrays from the live particles; no GL, worker safe */
+    void buildSpriteVertices ();
+    void buildSpriteTree ();
     void spawnBurstInstance (const glm::vec3& anchor, float dt);
     void recordSpawnRange (uint32_t from);
     void applyLinkScale (uint32_t from);
@@ -269,6 +277,11 @@ private:
     double m_time { 0.0 };
     double m_sysTime { 0.0 };
     double m_startWall { 0.0 };
+    uint32_t m_simulatedPass { UINT32_MAX };
+    uint32_t m_builtPass { UINT32_MAX };
+    uint32_t m_aliveCount { 0 };
+    uint32_t m_spriteVertexCount { 0 };
+    bool m_started { false };
 
     double m_statWindowStart { 0.0 };
     uint64_t m_statEmitted { 0 };
