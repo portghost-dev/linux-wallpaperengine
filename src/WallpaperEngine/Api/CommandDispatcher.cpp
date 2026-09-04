@@ -32,7 +32,8 @@ const std::set<std::string> KNOWN_VERBS = { "status",
 					    "set-particles",
 					    "set-instrument",
 					    "set-tuning",
-					    "set-app-conditions" };
+					    "set-app-conditions",
+					    "set-overlay" };
 
 std::string validateShowArgs (const json& args) {
     if (args.contains ("cc")) {
@@ -435,6 +436,47 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 	if (!args.contains ("enabled") || !args["enabled"].is_boolean ()) {
 	    return { .command = std::nullopt,
 		     .errorResponse = failure (id, cmd + " requires args.enabled, a boolean") };
+	}
+    }
+
+    if (cmd == "set-overlay") {
+	// the handler applies whichever keys are present, so each one is proven here
+	static const std::set<std::string> CORNERS = { "top-left", "top-right", "bottom-left", "bottom-right" };
+	const bool hasText = args.contains ("text");
+	const bool hasCorner = args.contains ("corner");
+	const bool hasVisible = args.contains ("visible");
+
+	if (!hasText && !hasCorner && !hasVisible) {
+	    return { .command = std::nullopt,
+		     .errorResponse
+		     = failure (id, "set-overlay requires at least one of args.text, args.corner, args.visible") };
+	}
+
+	if (hasText) {
+	    bool ok = args["text"].is_string () && args["text"].get<std::string> ().size () <= 512;
+
+	    for (const char c : ok ? args["text"].get<std::string> () : std::string ()) {
+		ok = ok && ((c >= 0x20 && c <= 0x7E) || c == '\n');
+	    }
+
+	    if (!ok) {
+		return { .command = std::nullopt,
+			 .errorResponse = failure (
+			     id,
+			     "set-overlay text must be a string of at most 512 printable ASCII characters and newlines"
+			 ) };
+	    }
+	}
+
+	if (hasCorner
+	    && (!args["corner"].is_string () || CORNERS.find (args["corner"].get<std::string> ()) == CORNERS.end ())) {
+	    return { .command = std::nullopt,
+		     .errorResponse
+		     = failure (id, "set-overlay corner must be one of top-left/top-right/bottom-left/bottom-right") };
+	}
+
+	if (hasVisible && !args["visible"].is_boolean ()) {
+	    return { .command = std::nullopt, .errorResponse = failure (id, "set-overlay visible must be a boolean") };
 	}
     }
 

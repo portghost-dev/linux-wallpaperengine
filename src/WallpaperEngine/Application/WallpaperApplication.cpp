@@ -13,6 +13,7 @@
 #include "WallpaperEngine/Render/CTexture.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
 #include "WallpaperEngine/Render/FBOProvider.h"
+#include "WallpaperEngine/Render/OverlayLabel.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 
 #include "WallpaperEngine/Data/Dumpers/StringPrinter.h"
@@ -1559,6 +1560,35 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	return;
     }
 
+    if (command.cmd == "set-overlay") {
+	std::optional<std::string> text;
+	std::optional<Render::OverlayLabel::Corner> corner;
+	std::optional<bool> visible;
+
+	if (command.args.contains ("text")) {
+	    text = command.args["text"].get<std::string> ();
+	}
+	if (command.args.contains ("corner")) {
+	    corner = Render::OverlayLabel::cornerFromName (command.args["corner"].get<std::string> ());
+	}
+	if (command.args.contains ("visible")) {
+	    visible = command.args["visible"].get<bool> ();
+	}
+
+	Render::OverlayLabel::set (text, corner, visible);
+	const auto state = Render::OverlayLabel::current ();
+	this->m_commandServer->respond (
+	    client,
+	    Api::CommandDispatcher::done (
+		command.id,
+		{ { "visible", state.visible },
+		  { "corner", Render::OverlayLabel::cornerName (state.corner) },
+		  { "text", state.text } }
+	    )
+	);
+	return;
+    }
+
     if (command.cmd == "set-particles") {
 	// NOT live in the same sense: the flag is read while the scene is BUILT
 	// (CScene skips creating particle systems entirely), so the current wallpaper
@@ -1818,6 +1848,11 @@ nlohmann::json WallpaperApplication::apiStatus () const {
     result["frames"] = this->m_videoDriver != nullptr ? this->m_videoDriver->getFrameCounter () : 0;
     result["parallax"] = !this->m_context.settings.mouse.disableparallax;
     result["particles"] = !this->m_context.settings.general.disableParticles;
+    {
+	const auto overlay = Render::OverlayLabel::current ();
+	result["overlay"] = { { "visible", overlay.visible && !overlay.text.empty () },
+			      { "corner", Render::OverlayLabel::cornerName (overlay.corner) } };
+    }
     result["fullscreen_ignore"] = this->m_context.settings.render.fullscreenPauseIgnoreAppIds;
     result["fullscreen_behavior"] = fullscreenBehaviorName (this->m_context.settings.render.fullscreenBehavior);
     // which log instruments are live right now (set-instrument). Launch-time switches are
