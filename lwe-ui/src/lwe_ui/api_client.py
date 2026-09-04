@@ -40,9 +40,16 @@ def socket_path() -> Path:
     return Path(runtime) / "lwe" / "engine.sock"
 
 
-def available() -> bool:
+def _resolve(sock: "str | os.PathLike | None") -> Path:
+    """The socket a call addresses: an explicit path (a developer exhibit's own socket) or
+    the daemon's. Every verb below takes the same optional `sock` so the exhibit path never
+    has to leak into the process environment."""
+    return Path(sock) if sock else socket_path()
+
+
+def available(sock: "str | os.PathLike | None" = None) -> bool:
     """True when something is listening on the command socket right now."""
-    path = socket_path()
+    path = _resolve(sock)
     if not path.is_socket():
         return False
     try:
@@ -75,7 +82,8 @@ def _read_reply(sock: socket.socket, buf: bytearray) -> dict[str, Any] | None:
     return reply if isinstance(reply, dict) else None
 
 
-def request(cmd: str, args: dict | None = None, wait_done: bool = True) -> dict[str, Any] | None:
+def request(cmd: str, args: dict | None = None, wait_done: bool = True,
+            sock: "str | os.PathLike | None" = None) -> dict[str, Any] | None:
     """Send one command, return its final reply dict, or None if the engine never answered.
 
     wait_done=False returns the FIRST reply instead - for `show` that is the accepted
@@ -89,7 +97,7 @@ def request(cmd: str, args: dict | None = None, wait_done: bool = True) -> dict[
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(_TIMEOUT)
-            s.connect(str(socket_path()))
+            s.connect(str(_resolve(sock)))
             s.sendall((json.dumps(req) + "\n").encode())
             buf = bytearray()
             reply = _read_reply(s, buf)
@@ -121,6 +129,7 @@ def show(
     fullscreen_behavior: str | None = None,
     skip_objects: list[int] | None = None,
     ui_id: str | None = None,
+    sock: "str | os.PathLike | None" = None,
 ) -> dict[str, Any] | None:
     """Hot-swap every output to this wallpaper id. Default waits only for the ack.
 
@@ -165,12 +174,12 @@ def show(
         # opaque identity echo: the engine stores + reports it so Now Playing can name
         # the preset TILE the user picked, not the base wallpaper the engine renders
         args["ui_id"] = str(ui_id)
-    return request("show", args, wait_done=wait_done)
+    return request("show", args, wait_done=wait_done, sock=sock)
 
 
-def status() -> dict[str, Any] | None:
+def status(sock: "str | os.PathLike | None" = None) -> dict[str, Any] | None:
     """The engine's status snapshot, or None when unreachable."""
-    reply = request("status")
+    reply = request("status", sock=sock)
     if reply is None or not reply.get("ok"):
         return None
     result = reply.get("result")
@@ -219,7 +228,7 @@ def ping() -> dict[str, Any] | None:
     return request("ping")
 
 
-def list_objects() -> dict[str, Any] | None:
+def list_objects(sock: "str | os.PathLike | None" = None) -> dict[str, Any] | None:
     """Objects of the scene the engine is ACTUALLY showing: {objects: [...], skipped: [...]}.
 
     Each object is {id, name} plus, for image objects with a chain, effects[{id, name}].
@@ -227,20 +236,20 @@ def list_objects() -> dict[str, Any] | None:
     groups share one scene), and a video or web wallpaper has no scene graph, so `objects`
     comes back empty rather than erroring.
     """
-    reply = request("list-objects")
+    reply = request("list-objects", sock=sock)
     if reply is None or not reply.get("ok"):
         return None
     result = reply.get("result")
     return result if isinstance(result, dict) else None
 
 
-def set_skip(ids: list[int]) -> dict[str, Any] | None:
+def set_skip(ids: list[int], sock: "str | os.PathLike | None" = None) -> dict[str, Any] | None:
     """Replace the render skip-list wholesale on the running scene. [] clears it.
 
     Live: the engine consults the list per frame while traversing, so this hides and
     reveals objects with no rebuild and no relaunch.
     """
-    return request("set-skip", {"ids": [int(i) for i in ids]})
+    return request("set-skip", {"ids": [int(i) for i in ids]}, sock=sock)
 
 
 def set_fps(fps: int) -> dict[str, Any] | None:
@@ -332,7 +341,8 @@ def set_fullscreen_ignore(app_ids: list[str]) -> dict[str, Any] | None:
     return request("set-fullscreen-ignore", {"app_ids": [str(a) for a in app_ids]})
 
 
-def set_instrument(name: str, enabled: bool) -> dict[str, Any] | None:
+def set_instrument(name: str, enabled: bool,
+                   sock: "str | os.PathLike | None" = None) -> dict[str, Any] | None:
     """Toggle a log instrument on the LIVE engine (engine b5fe9044 and later).
 
     Only pure log gates are settable. The engine REFUSES a name that is not in its runtime
@@ -340,7 +350,7 @@ def set_instrument(name: str, enabled: bool) -> dict[str, Any] | None:
     friends, which decide what gets built) comes back as an error naming the reason. Treat a
     failure here as information for the operator, not as a transport problem.
     """
-    return request("set-instrument", {"name": name, "enabled": bool(enabled)})
+    return request("set-instrument", {"name": name, "enabled": bool(enabled)}, sock=sock)
 
 
 def set_app_conditions(names: list[str], behavior: str) -> dict[str, Any] | None:

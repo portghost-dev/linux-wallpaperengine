@@ -74,24 +74,23 @@ Rectangle {
     }
     Component.onCompleted: refreshRotation()
 
-    // re-evaluate the dev-cockpit hold (bench / A/B) whenever it changes. abRunning()/isRunning()
-    // are slots, not NOTIFYing properties, so the rev bump is what re-reads them.
+    // re-evaluate the developer hold whenever it changes. isHolding() is a slot, not a
+    // NOTIFYing property, so the rev bump is what re-reads it.
     property int devRev: 0
     Connections { target: dev; function onStateChanged() { deck.devRev++ } }
     property int wizRev: 0
     Connections { target: wizardBridge; function onPhaseChanged() { deck.wizRev++ } }
 
     readonly property bool testing: bench.isTesting
-    readonly property bool abOn: (deck.devRev, dev.abRunning())
-    readonly property bool devHold: (deck.devRev, dev.isHolding()) && !deck.abOn && !deck.testing
+    readonly property bool devHold: (deck.devRev, dev.isHolding()) && !deck.testing
     readonly property bool wizBenching: (deck.wizRev, wizardBridge.phase() === "p3")
-    readonly property bool holding: deck.testing || deck.abOn || deck.devHold || deck.wizBenching
+    readonly property bool holding: deck.testing || deck.devHold || deck.wizBenching
     // during a hold the transport + right column dim (the bench owns the display); off/engine-down
     // dims the transport + overrides but NOT the left block (F24 - the status message stays legible).
     // all three named bench modes dim the transport to 0.45 so the center breathing BenchBar
     // (the shared "lease cover") reads identically across Workshop / Editor / Developer benching.
     readonly property real transportDim: (deck.testing || deck.wizBenching || deck.devHold) ? 0.45
-                                       : deck.abOn ? 0.4 : deck.engineOff ? 0.35 : 1
+                                       : deck.engineOff ? 0.35 : 1
     readonly property real rightDim: deck.transportDim
 
     function fmtTime(sec) {
@@ -114,7 +113,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.leftMargin: Theme.spacingLg
         spacing: Theme.spacingMd
-        visible: !deck.testing && !deck.abOn && !deck.wizBenching && !deck.devHold
+        visible: !deck.testing && !deck.wizBenching && !deck.devHold
         readonly property string showingWid: deck._field("current")
 
         Rectangle {
@@ -204,9 +203,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.leftMargin: Theme.spacingLg
         spacing: Theme.spacingMd
-        // the bridges are mutually unaware, so a Test and an A/B hold CAN coexist (both hold
-        // the same daemon standdown); the A/B face wins the render so the two rows never stack.
-        visible: deck.testing && !deck.abOn
+        visible: deck.testing
 
         Rectangle {
             width: 44; height: 28
@@ -364,18 +361,11 @@ Rectangle {
         Column {
             anchors.verticalCenter: parent.verticalCenter
             spacing: 2
-            Row {
-                spacing: Theme.spacingXs
-                Rectangle {
-                    width: 6; height: 6; radius: 3; color: Theme.warning
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-                Label {
-                    text: "Developer Benching"
-                    color: Theme.warning
-                    font.pixelSize: Theme.fontMeta
-                    anchors.verticalCenter: parent.verticalCenter
-                }
+            Label {
+                objectName: "deckDevBenchMode"
+                text: "Bench · " + (deck.devRev, dev.benchMode())
+                color: Theme.warning
+                font.pixelSize: Theme.fontMeta
             }
             Label {
                 width: Math.min(implicitWidth, 200)
@@ -393,80 +383,10 @@ Rectangle {
         }
     }
 
-    Row {
-        id: leftAB
-        objectName: "deckLeftAB"
-        anchors.verticalCenter: parent.verticalCenter
-        anchors.left: parent.left
-        anchors.leftMargin: Theme.spacingLg
-        spacing: Theme.spacingXl * 1.33
-        visible: deck.abOn
-
-        readonly property string abWid: (deck.devRev, dev.activeTargetWid())
-        readonly property string abTitle: {
-            var t = leftAB.abWid !== "" ? backend.titleOf(leftAB.abWid) : "";
-            return t !== "" ? t : (leftAB.abWid !== "" ? leftAB.abWid : "Bench target");
-        }
-        component ABSide: Column {
-            id: abSide
-            property string sideLabel: ""
-            property string monoText: ""
-            spacing: 3
-            Label { text: abSide.sideLabel; color: Theme.textTertiary; font.pixelSize: Theme.fontMeta }
-            Row {
-                spacing: Theme.spacingSm
-                Rectangle {
-                    width: 40; height: 25; radius: Theme.radiusXs
-                    color: Theme.surfaceVariant
-                    border.width: 1; border.color: Theme.border
-                    anchors.verticalCenter: parent.verticalCenter
-                    clip: true
-                    Image {
-                        anchors.fill: parent
-                        source: leftAB.abWid !== "" ? backend.thumbUrl(leftAB.abWid) : ""
-                        fillMode: Image.PreserveAspectCrop
-                        sourceSize.width: Theme.previewCap
-                        asynchronous: true
-                    }
-                }
-                Label {
-                    width: Math.min(implicitWidth, 150)
-                    elide: Text.ElideRight
-                    text: leftAB.abTitle
-                    textFormat: Text.PlainText
-                    color: Theme.textPrimary
-                    font.pixelSize: Theme.fontDeckName
-                    font.weight: Theme.weightMedium
-                    anchors.verticalCenter: parent.verticalCenter
-                }
-            }
-            Label {
-                text: abSide.monoText
-                color: Theme.textSecondary
-                font.pixelSize: Theme.fontMicro
-                font.family: Theme.monoFamily
-            }
-        }
-
-        // no positional claims here: the exhibit windows are user-draggable, so a
-        // "left half" label would lie the moment one is moved. The mono line carries the
-        // fix state; the on-window chips + border colors carry WHERE.
-        ABSide {
-            sideLabel: "Playing on A"
-            monoText: { var st = (deck.devRev, dev.abState()); return st.sideA || ""; }
-        }
-        ABSide {
-            sideLabel: "Playing on B"
-            monoText: { var st = (deck.devRev, dev.abState()); return st.sideB || ""; }
-        }
-    }
-
-
     Column {
         id: centerProgress
         anchors.centerIn: parent
         spacing: 8
-        visible: !deck.abOn
 
         // the rotation interval: the engine status when it carries one, else the
         // ACTIVE PLAYLIST's configured interval - so the right-hand MM:SS is always real
@@ -664,7 +584,7 @@ Rectangle {
                             // second implementation. Order matches the transportDim predicate.
                             if (deck.wizBenching)   wizardBridge.close();
                             else if (deck.testing)  bench.stopTest();
-                            else if (deck.devHold)  dev.stopBench();
+                            else if (deck.devHold)  dev.stop();
                         }
                     }
                 }
@@ -685,94 +605,6 @@ Rectangle {
         parent: Overlay.overlay
     }
 
-
-    Column {
-        id: centerAB
-        objectName: "deckCenterAB"
-        anchors.centerIn: parent
-        spacing: 7
-        visible: deck.abOn
-
-        property int abTick: 0
-        Timer { interval: 1000; running: centerAB.visible; repeat: true; onTriggered: centerAB.abTick++ }
-
-        Row {
-            anchors.horizontalCenter: parent.horizontalCenter
-            spacing: 7
-            Rectangle {
-                width: 6; height: 6; radius: 3; color: Theme.warning
-                anchors.verticalCenter: parent.verticalCenter
-            }
-            Label {
-                text: (centerAB.abTick, "A/B live · bench holds display · "
-                       + deck.fmtTime(dev.uptimeSeconds()))
-                color: Theme.textTertiary
-                font.pixelSize: Theme.fontMeta
-                anchors.verticalCenter: parent.verticalCenter
-            }
-            HoverHandler { cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: dev.stopHold() }
-        }
-        Row {
-            anchors.horizontalCenter: parent.horizontalCenter
-            spacing: Theme.spacingLg
-            opacity: 0.4
-            enabled: false
-
-            Canvas {   // prev outline
-                // Canvas paints ONCE and reads its Theme color AT PAINT TIME, so a theme
-                // switch changed the binding but left the pixels alone (glyphs kept the old
-                // palette until an app restart). Theme.rev ticks on every theme change.
-                property int themeRev: Theme.rev
-                onThemeRevChanged: requestPaint()
-                width: 12; height: 12; anchors.verticalCenter: parent.verticalCenter
-                onPaint: {
-                    var c = getContext("2d"); c.reset();
-                    c.fillStyle = Theme.textSecondary; c.beginPath();
-                    c.rect(0, 1, 2, 10);
-                    c.moveTo(11, 1); c.lineTo(4, 6); c.lineTo(11, 11); c.closePath();
-                    c.fill();
-                }
-            }
-            Rectangle {
-                width: 26; height: 26; radius: 13
-                color: Theme.surfaceVariant
-                border.width: 1; border.color: Theme.borderStrong
-                anchors.verticalCenter: parent.verticalCenter
-                Canvas {
-                    // Canvas paints ONCE and reads its Theme color AT PAINT TIME, so a theme
-                    // switch changed the binding but left the pixels alone (glyphs kept the old
-                    // palette until an app restart). Theme.rev ticks on every theme change.
-                    property int themeRev: Theme.rev
-                    onThemeRevChanged: requestPaint()
-                    anchors.centerIn: parent
-                    anchors.horizontalCenterOffset: 1
-                    width: 11; height: 11
-                    onPaint: {
-                        var c = getContext("2d"); c.reset();
-                        c.fillStyle = Theme.textSecondary; c.beginPath();
-                        c.moveTo(1, 0); c.lineTo(10, 5.5); c.lineTo(1, 11); c.closePath();
-                        c.fill();
-                    }
-                }
-            }
-            Canvas {   // next outline
-                // Canvas paints ONCE and reads its Theme color AT PAINT TIME, so a theme
-                // switch changed the binding but left the pixels alone (glyphs kept the old
-                // palette until an app restart). Theme.rev ticks on every theme change.
-                property int themeRev: Theme.rev
-                onThemeRevChanged: requestPaint()
-                width: 12; height: 12; anchors.verticalCenter: parent.verticalCenter
-                onPaint: {
-                    var c = getContext("2d"); c.reset();
-                    c.fillStyle = Theme.textSecondary; c.beginPath();
-                    c.moveTo(1, 1); c.lineTo(8, 6); c.lineTo(1, 11); c.closePath();
-                    c.rect(10, 1, 2, 10);
-                    c.fill();
-                }
-            }
-        }
-    }
 
     Column {
         anchors.verticalCenter: parent.verticalCenter

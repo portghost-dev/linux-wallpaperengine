@@ -7,9 +7,9 @@ each state by setting the bridges' internal fields + emitting their notify signa
 
   F2-testing  While bench.isTesting, the "Editor Benching" left block (deckLeftTesting) is visible and
               the idle / A/B blocks are not; an amber (warning) dot renders in the left region.
-  F2-ab       While dev.abRunning(), the two-side A/B block (deckLeftAB) and the amber lease line
-              (deckCenterAB) are visible and the idle progress/transport column is not; an amber dot
-              renders in the center.
+  F2-dev      While any developer exhibit is alive, the Developer Bench left block
+              (deckLeftDevBench) names the mode (Bench, A / B / A + B) and the idle block hides;
+              no filled dot renders in that block.
   F24         With the engine off (masterActive False) the left block is EXEMPT from the off-state
               dimming: deckLeftIdle keeps opacity 1 and shows the status dot + secondary text, while
               the transport column dims (< 1). That is the whole point of F24 - the status message
@@ -142,9 +142,9 @@ def main() -> None:
         deck.setProperty("width", 1280)
         left_idle = _find(deck, "deckLeftIdle")
         left_testing = _find(deck, "deckLeftTesting")
-        left_ab = _find(deck, "deckLeftAB")
-        center_ab = _find(deck, "deckCenterAB")
-        assert left_idle and left_testing and left_ab and center_ab, "deck state blocks missing objectNames"
+        left_dev = _find(deck, "deckLeftDevBench")
+        dev_mode = _find(deck, "deckDevBenchMode")
+        assert left_idle and left_testing and left_dev and dev_mode, "deck state blocks missing objectNames"
 
         def settle():
             for _ in range(3):
@@ -155,7 +155,7 @@ def main() -> None:
         deck.setProperty("engineStatus", {"state": "up", "current": "", "interval": "900", "next_in": "300"})
         settle()
         assert left_idle.property("visible") is True, "idle block should show when engine up + not holding"
-        assert left_testing.property("visible") is False and left_ab.property("visible") is False, \
+        assert left_testing.property("visible") is False and left_dev.property("visible") is False, \
             "hold blocks must be hidden in the idle face"
 
         # ---- smooth clock: elapsed interpolates BETWEEN the 2s status polls ----------------
@@ -174,8 +174,8 @@ def main() -> None:
         bench.stateChanged.emit()
         settle()
         assert left_testing.property("visible") is True, "Testing-draft block must show while bench.isTesting"
-        assert left_idle.property("visible") is False and left_ab.property("visible") is False, \
-            "idle + A/B blocks must be hidden during a test"
+        assert left_idle.property("visible") is False and left_dev.property("visible") is False, \
+            "idle + developer blocks must be hidden during a test"
         img_test = QQuickWindow.grabWindow(view)
         if img_test.isNull() or img_test.width() < 200:
             print("SKIP deck render asserts (no frame grabbed on this platform)")
@@ -188,26 +188,26 @@ def main() -> None:
         settle()
         assert left_testing.property("visible") is False, "Testing block must clear when the test stops"
 
-        dev._ab_running = True
-        dev.abReset()
-        dev.setABFix("B", "fbopool", False)
+        dev.slots["A"].alive = lambda: True
         dev.stateChanged.emit()
         settle()
-        assert left_ab.property("visible") is True, "A/B two-side block must show while dev.abRunning()"
-        assert center_ab.property("visible") is True, "A/B center lease line must show while dev.abRunning()"
-        assert left_idle.property("visible") is False, "idle block must be hidden during A/B"
-        img_ab = QQuickWindow.grabWindow(view)
-        if not (img_ab.isNull() or img_ab.width() < 200):
-            mid_amber = _count(img_ab.copy(540, 0, 220, 72), _WARNING)
-            assert mid_amber > 0, "the amber A/B lease dot must render in the center"
-        st = dev.abState()
-        assert st["sideA"] and st["sideB"] and st["sideA"] != st["sideB"], \
-            "abState must supply distinct per-side descriptions for the A/B name lines"
-        dev._ab_running = False
+        assert left_dev.property("visible") is True, "the Developer Bench block must show while an exhibit is alive"
+        assert left_idle.property("visible") is False, "idle block must be hidden during a developer bench"
+        assert dev_mode.property("text") == "Bench · A", dev_mode.property("text")
+        assert abs(float(deck.property("transportDim")) - 0.45) < 0.01
+        dev.slots["B"].alive = lambda: True
         dev.stateChanged.emit()
         settle()
-        assert left_ab.property("visible") is False and center_ab.property("visible") is False, \
-            "A/B blocks must clear when the hold stops"
+        assert dev_mode.property("text") == "Bench · A + B", dev_mode.property("text")
+        img_dev = QQuickWindow.grabWindow(view)
+        if not (img_dev.isNull() or img_dev.width() < 200):
+            assert _count(img_dev.copy(0, 0, 420, 72), _WARNING) > 0, \
+                "the amber bench subtitle must render in the left block"
+        dev.slots["A"].alive = lambda: False
+        dev.slots["B"].alive = lambda: False
+        dev.stateChanged.emit()
+        settle()
+        assert left_dev.property("visible") is False, "the developer block must clear when the last exhibit exits"
 
         deck.setProperty("masterActive", False)
         deck.setProperty("engineStatus", {"state": "up", "current": "", "interval": "", "next_in": ""})

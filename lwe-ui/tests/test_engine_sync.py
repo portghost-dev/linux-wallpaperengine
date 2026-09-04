@@ -42,8 +42,8 @@ _API.set_fps = lambda fps: None
 _API.set_parallax = lambda enabled: None
 _API.set_particles = lambda enabled: None
 _API.set_fullscreen_ignore = lambda ids: None
-_API.list_objects = lambda: None
-_API.set_skip = lambda ids: None
+_API.list_objects = lambda **kw: None
+_API.set_skip = lambda ids, **kw: None
 sys.modules["lwe_ui.api_client"] = _API
 
 from PySide6.QtCore import QCoreApplication  # noqa: E402
@@ -277,67 +277,60 @@ class EngineSyncTest(unittest.TestCase):
 
 
     def _live_dev(self):
-        """A DevBridge with the socket answering and no bench child holding the display."""
+        """A DevBridge whose slot A reads as a live, API-capable exhibit."""
         from lwe_ui import dev as devmod
         settings.save(settings.load())
         d = devmod.DevBridge()
         devmod.DevBridge._dev_outputs = lambda self: ["TEST-OUT"]
+        d.slots["A"].alive = lambda: True
+        d.slots["A"].api = True
         return d
 
-    def test_live_mode_only_when_no_bench_holds_the_display(self) -> None:
+    def test_isolator_pushes_skip_to_the_exhibit_socket(self) -> None:
         d = self._live_dev()
-        self.assertEqual(d.isolationMode(), "live")
-        d._ab_running = True
-        self.assertEqual(d.isolationMode(), "bench")
-        d._ab_running = False
-        _API.available = lambda: False
-        self.assertEqual(d.isolationMode(), "off")
-        _API.available = lambda: True
-
-    def test_object_list_comes_from_the_running_engine(self) -> None:
-        d = self._live_dev()
-        _API.list_objects = lambda: {"objects": [{"id": 12, "name": "sky"},
-                                                 {"id": 13, "name": "sun"}], "skipped": []}
-        objs = d.objectList()
-        self.assertEqual([o["objid"] for o in objs], ["12", "13"])
-        self.assertEqual(objs[0]["name"], "sky")
-
-    def test_skip_is_pushed_live_not_relaunched(self) -> None:
-        d = self._live_dev()
-        _API.list_objects = lambda: {"objects": [{"id": 12, "name": "a"},
-                                                 {"id": 13, "name": "b"}], "skipped": []}
         sent = []
-        _API.set_skip = lambda ids: sent.append(list(ids)) or {"ok": True}
-        d.setSkipObject("13", True)
-        self.assertEqual(sent, [[13]], "a skip goes straight to the engine")
+        _API.set_skip = lambda ids, sock=None: sent.append((list(ids), str(sock))) or {"ok": True}
+        d.setObjectsOn("A", ["12", "13"], False)
+        d.setObjectOn("A", "12", True)
+        self.assertEqual([s[0] for s in sent], [[12, 13], [13]])
+        self.assertTrue(all(s[1].endswith("exhibit-a.sock") for s in sent),
+                        "the isolator addresses the exhibit's own socket, never the daemon's")
+        self.assertFalse(d.liveControl("B"))
+        d.setObjectsOn("B", ["12"], False)
+        self.assertEqual(len(sent), 2, "a stopped side keeps the edit for its launch, nothing is pushed")
+        self.assertEqual(d.slots["B"].skip, {"12"})
+        _API.set_skip = lambda ids, sock=None: {"ok": False, "error": "no"}
+        d.setObjectOn("A", "13", False)
+        self.assertTrue(d.slots["A"].relaunching, "a refused push falls back to a relaunch")
+        d._relaunch_timers["A"].stop()
+        d.slots["A"].relaunching = False
+        _API.set_skip = lambda ids, **kw: None
 
-    def test_solo_is_sent_as_the_complement(self) -> None:
-        # set-skip is the only live lever; the engine's object= filter is launch-time only
+    def test_live_instrument_flips_on_the_exhibit(self) -> None:
         d = self._live_dev()
-        _API.list_objects = lambda: {"objects": [{"id": 12, "name": "a"}, {"id": 13, "name": "b"},
-                                                 {"id": 14, "name": "c"}], "skipped": []}
         sent = []
-        _API.set_skip = lambda ids: sent.append(sorted(ids)) or {"ok": True}
-        d.solo("12")
-        self.assertEqual(sent[-1], [13, 14], "soloing 12 hides everything else")
+        _API.set_instrument = lambda name, enabled, sock=None: sent.append((name, enabled, str(sock))) or {"ok": True}
+        d.setInstrument("A", "LWE_PARTSTATS", True)
+        self.assertEqual(sent, [("LWE_PARTSTATS", True, str(d.slots["A"].sock_path()))])
+        self.assertFalse(d.slots["A"].relaunching, "a live instrument never relaunches")
+        d.setInstrument("A", "LWE_LIGHTDUMP", True)
+        self.assertTrue(d.slots["A"].relaunching, "an env-class instrument relaunches the side")
+        d._relaunch_timers["A"].stop()
+        d.slots["A"].relaunching = False
+        del _API.set_instrument
 
-    def test_clear_hands_the_wallpaper_back(self) -> None:
+    def test_scene_switch_is_a_show_on_the_exhibit(self) -> None:
         d = self._live_dev()
-        _API.list_objects = lambda: {"objects": [{"id": 12, "name": "a"}], "skipped": []}
         sent = []
-        _API.set_skip = lambda ids: sent.append(list(ids)) or {"ok": True}
-        d.setSkipObject("12", True)
-        d.clearIsolation()
-        self.assertEqual(sent[-1], [], "clear must empty the engine skip-list")
-
-    def test_shutdown_never_leaves_the_desktop_isolated(self) -> None:
-        d = self._live_dev()
-        _API.list_objects = lambda: {"objects": [{"id": 12, "name": "a"}], "skipped": []}
-        sent = []
-        _API.set_skip = lambda ids: sent.append(list(ids)) or {"ok": True}
-        d.setSkipObject("12", True)
-        d.shutdown()
-        self.assertEqual(sent[-1], [], "quitting with an object hidden must restore it")
+        _API.show = lambda wid, wait_done=False, **kw: sent.append((wid, str(kw.get("sock")))) or {"ok": True}
+        d.setScene("A", "2114739882")
+        self.assertEqual(sent, [("2114739882", str(d.slots["A"].sock_path()))])
+        self.assertFalse(d.slots["A"].relaunching)
+        d.setScene("A", "probe:cal")
+        self.assertTrue(d.slots["A"].relaunching, "a probe path cannot be shown live, so it relaunches")
+        d._relaunch_timers["A"].stop()
+        d.slots["A"].relaunching = False
+        _API.show = lambda wid, wait_done=False, **kw: None
 
     def test_status_never_shells_out_to_the_retired_watcher(self) -> None:
         which_calls = []

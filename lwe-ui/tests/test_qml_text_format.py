@@ -30,13 +30,15 @@ SINKS = {
     "ModalFace.qml": ["text: face.title", "text: face.body"],
     "WizardFace.qml": ["text: face.title"],
     "RecordsFace.qml": ["text: face.title"],
-    "Deck.qml": ["text: (deck.wizRev, wizardBridge.wpTitle())", "text: leftAB.abTitle"],
+    "Deck.qml": ["text: (deck.wizRev, wizardBridge.wpTitle())"],
     "DeckSettingsPopup.qml": ["text: (pop.rev, deckPopup.title())"],
     "TombstoneManager.qml": ["text: row.modelData.title"],
     "EditorView.qml": ["text: editor.title"],
     "ObjectsPanel.qml": ["text: modelData.label", "text: rowItem.modelData.label"],
-    "ToolsPalette.qml": ["text: rowCol.modelData.name"],
-    "DevView.qml": ["Label { text: modelData.name + \"=\" + modelData.value", "text: model.line"],
+    "DevSlotCard.qml": ["text: card.st.sceneTitle"],
+    "DevIsolator.qml": ["text: rowItem.modelData.label", "text: rowItem.modelData.o ? rowItem.modelData.o.name"],
+    "DevConsole.qml": ["text: line.text"],
+    "DevRawEnv.qml": ["text: (door.rev, door.visible ? dev.launchPreview"],
 }
 WINDOW = 3  # lines on either side that still belong to the same element
 

@@ -1,11 +1,9 @@
 """Three things covered here, none of them previously tested.
 
-  1. Journal follower: the log console can follow the engine SERVICE's journal, not just
-     bench children the panel spawned. Its lines must arrive on their OWN signal, because
-     the per-lens readout splits logLine by scoped instrument tag and a journal line
-     carrying an LWE- tag would land in a lens that never ran that instrument. The
-     follower must also be reaped by handle on shutdown - never by name, since
-     `journalctl` is a shared binary name.
+  1. Journal follower: the console follows the engine SERVICE's journal beside the exhibit
+     streams, tagged with its own source so the picker can separate it. The follower must
+     be reaped by handle on shutdown - never by name, since `journalctl` is a shared
+     binary name.
   2. Presence-only escape hatches: the engine tests some switches with
      `getenv(...) != nullptr`, so assigning "0" to turn one OFF turns it ON. Those are
      removed from the environment instead of assigned.
@@ -31,156 +29,101 @@ if _SRC not in sys.path:
     sys.path.insert(0, _SRC)
 
 
-def test_toggle_off_values() -> None:
-    """Every off-value must actually turn its switch off in the engine."""
-    from lwe_ui.dev import OUR_TOGGLES
+def test_toggle_grammar() -> None:
+    """Every switch resolves to a value or an unset on each side, never an empty string."""
+    from lwe_ui.dev import FEATURE_TOGGLES, TRAIL_MODES
 
-    by_key = {t["key"]: t for t in OUR_TOGGLES}
+    for t in FEATURE_TOGGLES:
+        for side in ("on", "off"):
+            v = t[side]
+            assert v is None or (isinstance(v, str) and v != ""), \
+                f"{t['env']}: {side} must be a value to assign or None to unset"
+        assert isinstance(t["default_on"], bool)
+    assert TRAIL_MODES[0] == "Fluid", "the trail default ships as Fluid until ruled otherwise"
+    _cross_check_engine_grammar(FEATURE_TOGGLES)
 
-    assert by_key["frontface"]["off"] == "ccw", \
-        "LWE_FRONTFACE off must be the exact string the engine compares against"
 
-    import csv as _csv
-    import pathlib as _pathlib
-    # optional cross-check against a local grammar inventory, if one is present
-    grammar_csv = _pathlib.Path(__file__).resolve().parent / "env-switch-grammar.csv"
-    if grammar_csv.exists():
-        with open(grammar_csv, encoding="utf-8") as fh:
-            grammar = {r["switch"]: r["grammar"] for r in _csv.DictReader(fh)}
-        for t in OUR_TOGGLES:
-            g = grammar.get(t["env"])
-            if g == "presence":
-                assert t["off"] is None, (
-                    f'{t["env"]} is presence-only in the engine, so off must be unset (None), '
-                    f'not {t["off"]!r} - assigning any value turns it ON')
-            elif g in ("compare", "parse", "filter") and t["off"] is None:
-                assert False, (
-                    f'{t["env"]} is read as {g}, so unsetting it returns the engine DEFAULT '
-                    f'rather than the off state - it needs an explicit off value')
-    else:
-        print("   (skipped grammar cross-check: env-switch-grammar.csv not generated)")
-
-    for t in OUR_TOGGLES:
-        assert t["off"] is None or isinstance(t["off"], str), \
-            f"{t['env']}: off must be a string to assign or None to unset"
+def _cross_check_engine_grammar(toggles) -> None:
+    """Each off value must be the value the engine read actually compares against. Runs only
+    when the engine tree sits beside the panel (the publication layout)."""
+    import re
+    root = Path(__file__).resolve().parent.parent.parent / "src" / "WallpaperEngine"
+    if not root.is_dir():
+        print("   (skipped grammar cross-check: no engine tree beside lwe-ui)")
+        return
+    reads: dict[str, list[str]] = {}
+    for f in root.rglob("*.cpp"):
+        if "Testing" in f.parts:
+            continue
+        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        for i, line in enumerate(lines):
+            for env in re.findall(r'getenv *\( *"(LWE_[A-Z0-9_]+)"', line):
+                reads.setdefault(env, []).append(" ".join(x.strip() for x in lines[i:i + 4]))
+    for t in toggles:
+        lines = reads.get(t["env"])
+        assert lines, f"{t['env']} is not read anywhere in the engine"
+        joined = " ".join(lines)
+        presence = "nullptr" in joined and not re.search(r'"(0|1|ccw|exact)"|\[0\] *==', joined)
+        if presence:
+            assert None in (t["on"], t["off"]) and "1" in (t["on"], t["off"]), \
+                f"{t['env']} is presence tested: one side must be unset, the other any value"
+        else:
+            value = next((v for v in (t["on"], t["off"]) if v is not None), None)
+            assert value is not None and (f'"{value}"' in joined or f"'{value}'" in joined
+                                          or (value == "0" and "'0'" in joined)), \
+                f"{t['env']}: off value {value!r} does not appear in its engine read: {lines}"
 
 
 def test_unset_env_partition(dev) -> None:
-    """A flipped-off switch lands in exactly one of assign / unset, never both.
+    """A flipped-off switch lands in exactly one of assign / unset, never both, per side.
 
-    Uses a SYNTHETIC presence-only toggle. The two real ones (LWE_TINTFIX, LWE_SPECFIX) were
-    removed, so nothing shipped exercises the unset path any more - but the
-    machinery has to keep working, because the next presence-only switch someone adds will
-    silently turn ON if it does not. Testing it with a fixture is the difference between
-    dead code and guarded code.
+    Uses a SYNTHETIC presence-only toggle so the unset path stays guarded even if every
+    shipped presence switch is one day removed.
     """
     from lwe_ui import dev as devmod
-    synthetic = {"key": "_synthetic_presence", "env": "LWE_SYNTHETIC_PRESENCE", "off": None,
-                 "what": "test fixture: presence-only switch", "sys": "Render",
-                 "commit": "", "evidence": "", "experimental": False}
-    devmod.OUR_TOGGLES.append(synthetic)
+    synthetic = {"key": "_synthetic_presence", "label": "Synthetic", "env": "LWE_SYNTHETIC_PRESENCE",
+                 "on": "1", "off": None, "default_on": False, "tip": "test fixture", "cite": ""}
+    devmod.FEATURE_TOGGLES.append(synthetic)
     try:
         _unset_env_partition_body(dev)
     finally:
-        devmod.OUR_TOGGLES.remove(synthetic)
+        devmod.FEATURE_TOGGLES.remove(synthetic)
 
 
 def _unset_env_partition_body(dev) -> None:
-    dev.setFixOn("_synthetic_presence", False)   # presence-only -> unset
-    dev.setFixOn("frontface", False)             # value-carrying -> assign
+    dev.setToggle("A", "_synthetic_presence", False)
+    dev.setToggle("A", "frontface", False)
 
-    env = dev.compose_env()
-    unset = dev.unset_env()
-
+    env, unset = dev.compose_env("A")
     assert "LWE_SYNTHETIC_PRESENCE" not in env, "a presence-only off must never be assigned"
     assert "LWE_SYNTHETIC_PRESENCE" in unset
     assert env.get("LWE_FRONTFACE") == "ccw"
     assert "LWE_FRONTFACE" not in unset
     assert not (set(env) & set(unset)), "no key may be both assigned and unset"
 
-    preview = dev.launchPreview()
-    assert "-u LWE_SYNTHETIC_PRESENCE" in preview, \
-        "an unset must be visible in the launch preview"
+    preview = dev.launchPreview("A")
+    assert "-u LWE_SYNTHETIC_PRESENCE" in preview, "an unset must be visible in the launch preview"
     assert preview.startswith("env "), "an `-u` prefix is only valid shell after `env`"
 
-    dev.setEnvLine("LWE_SYNTHETIC_PRESENCE", "1")
-    assert "LWE_SYNTHETIC_PRESENCE" not in dev.unset_env(), \
-        "an explicit raw env line must win over the toggle's unset"
-    dev.removeEnvLine("LWE_SYNTHETIC_PRESENCE")
+    dev.setEnvText("A", "LWE_SYNTHETIC_PRESENCE=1")
+    _env, unset = dev.compose_env("A")
+    assert "LWE_SYNTHETIC_PRESENCE" not in unset, "an explicit raw env line must win over the toggle's unset"
+    dev.setEnvText("A", "")
 
-    dev.setFixOn("_synthetic_presence", True)
-    dev.setFixOn("frontface", True)
-    assert dev.unset_env() == [], "nothing is unset while every fix is on"
+    dev.setToggle("A", "_synthetic_presence", True)
+    env, _unset = dev.compose_env("A")
+    assert env.get("LWE_SYNTHETIC_PRESENCE") == "1"
 
-
-def test_ab_side_honours_unset(dev) -> None:
-    """The A/B split must apply the same off/unset rule as the single bench.
-
-    The unset fix landed on the bench launcher and MISSED
-    this path, and the failure was silent rather than loud. `off` is None for a presence-only
-    switch, and PySide6 coerces None to "" in QProcessEnvironment.insert rather than raising -
-    and "" is still a non-NULL pointer to getenv, so the exhibit meant to demonstrate the fix
-    OFF ran with it ON. The split then compared fix-on against fix-on and showed no difference:
-    a lying toggle inside the tool built to catch lying toggles.
-    """
-    from PySide6.QtCore import QProcessEnvironment
-    from lwe_ui import dev as devmod
-
-    synthetic = {"key": "_synthetic_presence", "env": "LWE_SYNTHETIC_PRESENCE", "off": None,
-                 "what": "test fixture: presence-only switch", "sys": "Render",
-                 "commit": "", "evidence": "", "experimental": False}
-    devmod.OUR_TOGGLES.append(synthetic)
-    try:
-        _ab_side_unset_body(dev, QProcessEnvironment)
-    finally:
-        devmod.OUR_TOGGLES.remove(synthetic)
-
-
-def _ab_side_unset_body(dev, QProcessEnvironment) -> None:
-    dev.abReset()
-    dev.setABFix("B", "_synthetic_presence", False)   # presence-only -> must be unset
-    dev.setABFix("B", "frontface", False)             # value-carrying -> must be assigned
-
-    env = dev._ab_side_env("B")
-    unset = dev._ab_side_unset("B")
-
-    assert "LWE_SYNTHETIC_PRESENCE" not in env, "a presence-only off must never be assigned on an A/B side"
-    assert "LWE_SYNTHETIC_PRESENCE" in unset, \
-        "the A/B side must UNSET a presence-only switch it is flipping off, or the exhibit " \
-        "runs with the fix on and the split silently compares fix-on against fix-on"
-    assert env.get("LWE_FRONTFACE") == "ccw"
-    assert "LWE_FRONTFACE" not in unset
-    assert dev._ab_side_unset("A") == [], "the untouched side unsets nothing"
-
-    # the guard that actually matters: None must never reach the child environment, because
-    # it arrives as "" and "" reads as PRESENT
-    qenv = QProcessEnvironment.systemEnvironment()
-    for k, v in env.items():
-        qenv.insert(k, v)
-    for k in unset:
-        qenv.remove(k)
-    assert not qenv.contains("LWE_SYNTHETIC_PRESENCE"), \
-        'an unset switch must be ABSENT; an empty string still reads as present to getenv'
-
-    dev.setABEnvText("B", "LWE_SYNTHETIC_PRESENCE=1")
-    assert "LWE_SYNTHETIC_PRESENCE" not in dev._ab_side_unset("B")
-    dev.setABEnvText("B", "")
-    dev.abReset()
+    envb, unsetb = dev.compose_env("B")
+    assert "LWE_FRONTFACE" not in envb and "LWE_SYNTHETIC_PRESENCE" in unsetb, \
+        "side B never inherits side A's flips"
 
 
 def test_stderr_is_never_filtered(dev) -> None:
-    """Engine diagnostics reach the console regardless of how they are worded.
+    """Engine diagnostics reach the console regardless of wording, marked as stderr."""
+    seen: list[tuple] = []
+    dev.consoleLine.connect(lambda src, line, err: seen.append((src, line, err)))
 
-    The console used to merge the engine's channels and then recover severity by searching
-    each line for the word "error". 175 of the engine's 190 sLog.error messages do not
-    contain it, so they were dropped silently - including every puppet diagnostic, e.g.
-    "Could not parse puppet X: not an MDLV container". An error that never says "error" is
-    still an error. stderr is now read on its own and passed through unfiltered.
-    """
-    seen: list[str] = []
-    dev.logLine.connect(seen.append)
-
-    # verbatim engine strings, from CImage.cpp:504/543/550 and PuppetModel.cpp:115
     real = [
         "Could not parse puppet models/tree.mdl: not an MDLV container",
         "Loaded puppet models/tree.mdl vertices=812 indices=2000 bones=12 clips=2 layers=1",
@@ -190,73 +133,67 @@ def test_stderr_is_never_filtered(dev) -> None:
 
     class _FakeProc:
         def readAllStandardError(self):
-            return ("\n".join(real)).encode()
+            return ("\n".join(real) + "\n").encode()
 
-    dev._proc = _FakeProc()
+    dev.slots["A"].proc = _FakeProc()
     try:
-        dev._drain_stderr()
+        dev._drain("A", True)
     finally:
-        dev._proc = None
+        dev.slots["A"].proc = None
 
     for line in real:
-        assert line in seen, (
-            f"stderr must pass through unfiltered; the old allowlist dropped this: {line}")
-
-    for line in real:
-        old_allowlist = ("LWE-" in line or "LWE_" in line or "error" in line.lower()
-                         or line.startswith(("FRAGSRC", "GLSL ")))
-        assert not old_allowlist, \
-            f"fixture stale: {line!r} would have passed the old filter, so it proves nothing"
+        assert ("A", line, True) in seen, f"stderr must pass through unfiltered and marked: {line}"
+    tail = dev.slots["A"].buf[-4:]
+    assert [t for t, _e in tail] == real and all(e for _t, e in tail), \
+        "the slot buffer keeps stderr for the tail, marked as stderr"
 
 
-def test_journal_signals_are_separate(dev) -> None:
-    """Journal lines must not reach the readout's signal - different pane, different tags."""
-    seen_log: list[str] = []
-    seen_journal: list[str] = []
-    dev.logLine.connect(seen_log.append)
-    dev.journalLine.connect(seen_journal.append)
+def test_journal_lines_are_tagged(dev) -> None:
+    """Daemon journal lines share the console but carry their own source tag."""
+    seen: list[tuple] = []
+    dev.consoleLine.connect(lambda src, line, err: seen.append((src, line, err)))
 
-    dev.journalLine.emit("Aug 14 08:26:10 myhost linux-wallpaperengine[1]: LWE-MODELPASS x")
-    assert seen_journal and not seen_log, \
-        "a journal line must never arrive on logLine - the lens readout listens there"
+    class _FakeProc:
+        def readAllStandardOutput(self):
+            return b"Aug 14 08:26:10 host linux-wallpaperengine[1]: LWE-MODELPASS x"
+
+    dev._journal_proc = _FakeProc()
+    try:
+        dev._drain_journal()
+    finally:
+        dev._journal_proc = None
+    assert seen == [("D", "Aug 14 08:26:10 host linux-wallpaperengine[1]: LWE-MODELPASS x", False)]
 
 
 def test_journal_follower_lifecycle(dev, qwait) -> None:
-    """Start, receive, stop. The follower is reaped by handle and leaves nothing behind."""
+    """Start, stop. The follower is reaped by handle and leaves nothing behind."""
     if shutil.which("journalctl") is None:
         print("   (skipped follower lifecycle: no journalctl on PATH)")
         return
 
-    lines: list[str] = []
-    dev.journalLine.connect(lines.append)
-
     assert dev.journalRunning() is False
-    dev.startJournal()
-    assert dev.journalRunning() is True, "startJournal must own a live follower"
+    dev.setFollowingDaemon(True)
+    assert dev.journalRunning() is True, "following must own a live follower"
 
     proc = dev._journal_proc
-    dev.startJournal()
-    assert dev._journal_proc is proc, "startJournal must be idempotent, not spawn a second"
+    dev.setFollowingDaemon(True)
+    assert dev._journal_proc is proc, "following twice must not spawn a second follower"
 
-    qwait(900)
-    assert any("following" in ln for ln in lines), \
-        "the follower must announce which unit it attached to"
-
-    dev.stopJournal()
+    qwait(300)
+    dev.setFollowingDaemon(False)
     assert dev.journalRunning() is False
     assert dev._journal_proc is None, "the handle is nulled before the reap, never after"
     from PySide6.QtCore import QProcess
-    # PySide6 enums are not ints: `state() == 0` is False even when NotRunning
     assert proc.state() == QProcess.ProcessState.NotRunning, \
         "the follower process must be dead, not orphaned"
 
-    dev.stopJournal()   # must tolerate a second stop
+    dev.setFollowingDaemon(False)
 
 
 def test_journal_flood_cap(dev) -> None:
-    """A heavy read is truncated and says so, the same guard the bench console has."""
+    """A heavy read is truncated and says so, the same guard the exhibit console has."""
     lines: list[str] = []
-    dev.journalLine.connect(lines.append)
+    dev.consoleLine.connect(lambda src, line, err: lines.append(line))
 
     class _FakeProc:
         def readAllStandardOutput(self):
@@ -268,9 +205,9 @@ def test_journal_flood_cap(dev) -> None:
     finally:
         dev._journal_proc = None
 
-    assert len(lines) == dev._JOURNAL_EMIT_MAX + 1, \
-        f"expected {dev._JOURNAL_EMIT_MAX} lines plus one notice, got {len(lines)}"
-    assert "journal heavy" in lines[0], "the truncation must be stated, not silent"
+    assert len(lines) == dev._EMIT_MAX + 1, \
+        f"expected {dev._EMIT_MAX} lines plus one notice, got {len(lines)}"
+    assert "lines this read" in lines[0], "the truncation must be stated, not silent"
     assert lines[-1] == "line 499", "the TAIL is what a live monitor must keep"
 
 
@@ -279,7 +216,7 @@ def test_shutdown_reaps_the_follower(dev) -> None:
     if shutil.which("journalctl") is None:
         print("   (skipped shutdown reap: no journalctl on PATH)")
         return
-    dev.startJournal()
+    dev.setFollowingDaemon(True)
     proc = dev._journal_proc
     dev.shutdown()
     from PySide6.QtCore import QProcess
@@ -353,11 +290,10 @@ def main() -> None:
             QTest.qWait(ms)
             app.processEvents()
 
-        test_toggle_off_values()
+        test_toggle_grammar()
         test_unset_env_partition(DevBridge())
-        test_ab_side_honours_unset(DevBridge())
         test_stderr_is_never_filtered(DevBridge())
-        test_journal_signals_are_separate(DevBridge())
+        test_journal_lines_are_tagged(DevBridge())
         test_journal_follower_lifecycle(DevBridge(), qwait)
         test_journal_flood_cap(DevBridge())
         test_shutdown_reaps_the_follower(DevBridge())
@@ -365,8 +301,8 @@ def main() -> None:
         from lwe_ui.models import Backend
         test_measured_fps_needs_a_baseline(Backend())
 
-        print("OK test_journal_and_toggles - journal follows the service on its own signal "
-              "and is reaped by handle; presence-only switches turn off by unset; "
+        print("OK test_journal_and_toggles - journal follows the service tagged D and is reaped "
+              "by handle; presence-only switches turn off by unset per side; "
               "measured fps waits for a baseline")
     finally:
         for k, v in orig.items():

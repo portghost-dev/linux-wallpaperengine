@@ -200,15 +200,12 @@ ApplicationWindow {
         onClosed: window.currentView = "library"
     }
 
-    DevView {
+    DeveloperView {
         anchors.left: rail.right
         anchors.right: parent.right
         anchors.top: header.bottom
         anchors.bottom: deck.top
         visible: window.currentView === "developer"
-        // the same 2 s status poll the header and deck already read, so the dev area can
-        // show the LIVE DAEMON instead of only whatever bench it spawned itself
-        engineStatus: window.engineStatus
         onClosed: window.currentView = "library"
     }
 
@@ -229,109 +226,6 @@ ApplicationWindow {
             font.pixelSize: Theme.fontMeta
         }
     }
-
-    // Exhibit chips for windowed A/B: two frameless label windows the DevBridge parks on
-    // each engine window via hyprctl (client-side placement is a Wayland no-op; the
-    // compositor moves them, and the bridge's follower keeps them glued through drags).
-    // The titles are the placement handles - the bridge finds them by title.
-    property int abRev: 0
-    Connections { target: dev; function onStateChanged() { window.abRev++ } }
-    component ExhibitChip: Window {
-        id: chip
-        property string side: "A"
-        title: "lwe-chip-" + side
-        visible: (window.abRev, dev.abRunning())
-        flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
-        width: 170
-        height: 44
-        color: Theme.base
-        Rectangle {
-            anchors.fill: parent
-            color: Theme.base
-            border.width: 2
-            border.color: chip.side === "A" ? Theme.accent : Theme.warning
-            Label {
-                anchors.centerIn: parent
-                text: "EXHIBIT " + chip.side
-                color: Theme.textPrimary
-                font.pixelSize: 17
-                font.weight: Theme.weightMedium
-                font.family: Theme.monoFamily
-            }
-        }
-        ExhibitGestures { side: chip.side; cursorShape: Qt.SizeAllCursor }
-    }
-
-    // Shared gesture surface: press-drag streams deltas the bridge turns into
-    // compositor-side moves (any monitor); double-click toggles maximized. The drag
-    // state is cleared BEFORE the fullscreen toggle and on grab-cancel - a toggle
-    // mid-press can eat the release, which left the follower freeze stuck and the
-    // chip orphaned (owner finding). The bridge keeps a 2s dead-man as the backstop.
-    component ExhibitGestures: MouseArea {
-        id: gest
-        property string side: "A"
-        anchors.fill: parent
-        property real accX: 0
-        property real accY: 0
-        property real lastX: 0
-        property real lastY: 0
-        function endDrag() {
-            gestFlush.stop();
-            accX = 0; accY = 0;
-            dev.exhibitDragActive(gest.side, false);
-        }
-        onPressed: (mouse) => {
-            lastX = mouse.x; lastY = mouse.y;
-            accX = 0; accY = 0;
-            dev.exhibitDragActive(gest.side, true);
-            gestFlush.start();
-        }
-        onReleased: {
-            if (accX !== 0 || accY !== 0)
-                dev.exhibitDragBy(gest.side, Math.round(accX), Math.round(accY));
-            endDrag();
-        }
-        onCanceled: endDrag()
-        onPositionChanged: (mouse) => {
-            if (!pressed) return;
-            accX += mouse.x - lastX;
-            accY += mouse.y - lastY;
-            lastX = mouse.x; lastY = mouse.y;
-        }
-        onDoubleClicked: {
-            endDrag();
-            dev.exhibitToggleFullscreen(gest.side);
-        }
-        Timer {
-            id: gestFlush
-            interval: 50; repeat: true
-            onTriggered: {
-                if (gest.accX === 0 && gest.accY === 0) return;
-                dev.exhibitDragBy(gest.side, Math.round(gest.accX), Math.round(gest.accY));
-                gest.accX = 0; gest.accY = 0;
-            }
-        }
-    }
-
-    // Transparent full-window gesture surface glued over each exhibit: the WINDOW
-    // itself takes press-drag and double-click (the original ask). The engine ignores
-    // mouse input (--disable-mouse), so stealing its clicks costs nothing. The bridge
-    // sizes + positions these; the chip rides above as the visible label.
-    component ExhibitOverlay: Window {
-        id: ovl
-        property string side: "A"
-        title: "lwe-overlay-" + side
-        visible: (window.abRev, dev.abRunning())
-        flags: Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool
-        width: 640
-        height: 360
-        color: "transparent"
-        ExhibitGestures { side: ovl.side }
-    }
-    ExhibitOverlay { side: "A" }
-    ExhibitOverlay { side: "B" }
-    ExhibitChip { side: "A" }
-    ExhibitChip { side: "B" }
 
     Rectangle {
         id: appNotice

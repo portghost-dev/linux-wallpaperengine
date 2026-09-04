@@ -32,6 +32,7 @@ _APPROVED_CODEPOINTS = (
     (0x25BE, "small down triangle"),
     (0x2699, "gear (interim glyph, pending icon pass)"),
     (0x0394, "Greek capital delta"),
+    (0x2026, "horizontal ellipsis"),
 )
 APPROVED = {chr(cp): name for cp, name in _APPROVED_CODEPOINTS}
 
