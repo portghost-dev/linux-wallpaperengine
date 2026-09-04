@@ -7,6 +7,10 @@
 #include "WallpaperEngine/Render/Drivers/GLFWOpenGLDriver.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
 
+#define GLFW_EXPOSE_NATIVE_X11
+#include <GLFW/glfw3.h>
+#include <GLFW/glfw3native.h>
+
 namespace WallpaperEngine::Render::Drivers::Detectors {
 void CustomXIOErrorExitHandler (Display* dsp, void* userdata) {
     const auto context = static_cast<X11FullScreenDetector*> (userdata);
@@ -63,19 +67,20 @@ bool X11FullScreenDetector::anythingFullscreen () const {
 	return false;
     }
 
-    const auto ourWindow = reinterpret_cast<Window> (dynamic_cast<GLFWOpenGLDriver&> (this->m_driver).getWindow ());
-    Window parentWindow;
+    const Window ourWindow = glfwGetX11Window (dynamic_cast<GLFWOpenGLDriver&> (this->m_driver).getWindow ());
+    Window parentWindow = None;
 
     {
 	Window root, *schildren = nullptr;
 	unsigned int num_children;
 
 	if (!XQueryTree (this->m_display, ourWindow, &root, &parentWindow, &schildren, &num_children)) {
+	    XFree (children);
 	    return false;
 	}
 
 	if (schildren) {
-	    XFree (children);
+	    XFree (schildren);
 	}
     }
 
@@ -137,10 +142,15 @@ void X11FullScreenDetector::initialize () {
     }
 
     for (int i = 0; i < screenResources->noutput; i++) {
-	const XRROutputInfo* info = XRRGetOutputInfo (this->m_display, screenResources, screenResources->outputs[i]);
+	XRROutputInfo* info = XRRGetOutputInfo (this->m_display, screenResources, screenResources->outputs[i]);
+
+	if (info == nullptr) {
+	    continue;
+	}
 
 	// screen not in use, ignore it
-	if (info == nullptr || info->connection != RR_Connected) {
+	if (info->connection != RR_Connected) {
+	    XRRFreeOutputInfo (info);
 	    continue;
 	}
 
@@ -148,6 +158,7 @@ void X11FullScreenDetector::initialize () {
 
 	// screen not active, ignore it
 	if (crtc == nullptr) {
+	    XRRFreeOutputInfo (info);
 	    continue;
 	}
 
@@ -155,6 +166,7 @@ void X11FullScreenDetector::initialize () {
 	this->m_screens.emplace (std::string (info->name), glm::ivec4 (crtc->x, crtc->y, crtc->width, crtc->height));
 
 	XRRFreeCrtcInfo (crtc);
+	XRRFreeOutputInfo (info);
     }
 
     XRRFreeScreenResources (screenResources);

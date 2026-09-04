@@ -6,6 +6,8 @@
 #include <X11/Xlib.h>
 #include <X11/extensions/Xrandr.h>
 
+#include <cstdlib>
+
 using namespace WallpaperEngine::Render::Drivers::Output;
 
 void CustomXIOErrorExitHandler (Display* dsp, void* userdata) {
@@ -60,12 +62,29 @@ void X11Output::free () {
     this->m_screens.clear ();
     this->m_viewports.clear ();
 
-    // free all the resources we've got
-    XDestroyImage (this->m_image);
-    XFreeGC (this->m_display, this->m_gc);
-    XFreePixmap (this->m_display, this->m_pixmap);
-    delete this->m_imageData;
-    XCloseDisplay (this->m_display);
+    // the image owns its data once created; until then the buffer is ours
+    if (this->m_image != nullptr) {
+	XDestroyImage (this->m_image);
+	this->m_image = nullptr;
+	this->m_imageData = nullptr;
+    }
+    ::free (this->m_imageData);
+    this->m_imageData = nullptr;
+    this->m_imageSize = 0;
+
+    if (this->m_display != nullptr) {
+	if (this->m_gc != None) {
+	    XFreeGC (this->m_display, this->m_gc);
+	}
+	if (this->m_pixmap != None) {
+	    XFreePixmap (this->m_display, this->m_pixmap);
+	}
+	XCloseDisplay (this->m_display);
+    }
+    this->m_gc = None;
+    this->m_pixmap = None;
+    this->m_root = None;
+    this->m_display = nullptr;
 }
 
 void* X11Output::getImageBuffer () const { return this->m_imageData; }
@@ -74,7 +93,7 @@ bool X11Output::renderVFlip () const { return false; }
 
 bool X11Output::renderMultiple () const { return this->m_viewports.size () > 1; }
 
-bool X11Output::haveImageBuffer () const { return true; }
+bool X11Output::haveImageBuffer () const { return this->m_image != nullptr; }
 
 uint32_t X11Output::getImageBufferSize () const { return this->m_imageSize; }
 
@@ -110,10 +129,15 @@ void X11Output::loadScreenInfo () {
 
 void X11Output::discoverOutputs (XRRScreenResources* screenResources) {
     for (int i = 0; i < screenResources->noutput; i++) {
-	const XRROutputInfo* info = XRRGetOutputInfo (this->m_display, screenResources, screenResources->outputs[i]);
+	XRROutputInfo* info = XRRGetOutputInfo (this->m_display, screenResources, screenResources->outputs[i]);
+
+	if (info == nullptr) {
+	    continue;
+	}
 
 	// screen not in use, ignore it
-	if (info == nullptr || info->connection != RR_Connected) {
+	if (info->connection != RR_Connected) {
+	    XRRFreeOutputInfo (info);
 	    continue;
 	}
 
@@ -121,6 +145,7 @@ void X11Output::discoverOutputs (XRRScreenResources* screenResources) {
 
 	// screen not active, ignore it
 	if (crtc == nullptr) {
+	    XRRFreeOutputInfo (info);
 	    continue;
 	}
 
@@ -155,6 +180,7 @@ void X11Output::discoverOutputs (XRRScreenResources* screenResources) {
 	}
 
 	XRRFreeCrtcInfo (crtc);
+	XRRFreeOutputInfo (info);
     }
 }
 
@@ -214,16 +240,26 @@ void X11Output::initX11Background () {
     XSetWindowBackgroundPixmap (this->m_display, this->m_root, this->m_pixmap);
     // allocate space for the image's data
     this->m_imageSize = this->m_fullWidth * this->m_fullHeight * 4;
-    this->m_imageData = new char[this->m_fullWidth * this->m_fullHeight * 4];
+    this->m_imageData = static_cast<char*> (malloc (this->m_imageSize));
+    if (this->m_imageData == nullptr) {
+	sLog.exception ("Cannot allocate the X11 image buffer");
+    }
     // create an image so we can copy it over
     this->m_image = XCreateImage (
 	this->m_display, CopyFromParent, 24, ZPixmap, 0, this->m_imageData, this->m_fullWidth, this->m_fullHeight, 32, 0
     );
+    if (this->m_image == nullptr) {
+	sLog.error ("Cannot create the X11 image, the root window will not be updated");
+    }
     // setup driver's render changing the window's size
     this->m_driver.resizeWindow ({ this->m_fullWidth, this->m_fullHeight });
 }
 
 void X11Output::updateRender () const {
+    if (this->m_image == nullptr) {
+	return;
+    }
+
     // put the image back into the screen
     XPutImage (
 	this->m_display, this->m_pixmap, this->m_gc, this->m_image, 0, 0, 0, 0, this->m_fullWidth, this->m_fullHeight

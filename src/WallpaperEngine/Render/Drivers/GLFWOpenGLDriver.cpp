@@ -78,7 +78,10 @@ GLFWOpenGLDriver::GLFWOpenGLDriver (const char* windowTitle, ApplicationContext&
 #endif
 }
 
-GLFWOpenGLDriver::~GLFWOpenGLDriver () { glfwTerminate (); }
+GLFWOpenGLDriver::~GLFWOpenGLDriver () {
+    delete this->m_output;
+    glfwTerminate ();
+}
 
 Output::Output& GLFWOpenGLDriver::getOutput () { return *this->m_output; }
 
