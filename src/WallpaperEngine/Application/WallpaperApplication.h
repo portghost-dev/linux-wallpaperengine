@@ -66,6 +66,10 @@ public:
      * @param signal
      */
     void signal (int signal);
+    /** Records a signal from handler context; only lock-free atomics are touched here. */
+    void requestSignal (int signal);
+    /** Runs the handlers for every signal recorded since the last pass, on the main thread. */
+    void dispatchSignals ();
     void checkPropertyReload ();
     [[nodiscard]] std::string resolveWallpaperLookupKey (const std::string& backgroundKey) const;
     /**
@@ -352,6 +356,7 @@ private:
     bool m_isPaused = false;
     bool m_screenShotTaken = false;
     std::atomic<bool> m_reloadPropertiesRequested { false };
+    std::atomic<uint32_t> m_pendingSignals { 0 };
     uint32_t m_nextFrameScreenshot = 0;
     std::chrono::steady_clock::time_point m_pauseStart {};
     GLuint m_destinationFramebuffer = 0;

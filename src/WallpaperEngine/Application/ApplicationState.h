@@ -2,6 +2,8 @@
 
 #include "ApplicationContext.h"
 
+#include <atomic>
+
 namespace WallpaperEngine::Application {
 /**
  * Represents current application state
@@ -9,7 +11,7 @@ namespace WallpaperEngine::Application {
 class ApplicationState {
 public:
     struct {
-	bool keepRunning;
+	std::atomic<bool> keepRunning;
     } general {};
 
     struct {

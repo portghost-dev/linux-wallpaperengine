@@ -1,3 +1,4 @@
+#include <atomic>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -14,14 +15,12 @@
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/WebHelper/SpawnGate.h"
 
-WallpaperEngine::Application::WallpaperApplication* app;
+std::atomic<WallpaperEngine::Application::WallpaperApplication*> app { nullptr };
 
 void signalhandler (const int sig) {
-    if (app == nullptr) {
-	return;
+    if (auto* instance = app.load (std::memory_order_relaxed); instance != nullptr) {
+	instance->requestSignal (sig);
     }
-
-    app->signal (sig);
 }
 
 void crashHandler (const int sig, siginfo_t* info, void*) {
@@ -42,6 +41,10 @@ void crashHandler (const int sig, siginfo_t* info, void*) {
 }
 
 void installCrashHandler () {
+    // the first backtrace loads the unwinder; that must not happen inside a crash
+    void* warmup[1];
+    backtrace (warmup, 1);
+
     struct sigaction sa {};
     sa.sa_sigaction = crashHandler;
     sa.sa_flags = SA_SIGINFO | SA_RESETHAND;
@@ -77,28 +80,32 @@ int main (int argc, char* argv[]) {
 
 	appContext.loadSettingsFromArgv ();
 
-	app = new WallpaperEngine::Application::WallpaperApplication (appContext);
+	auto* application = new WallpaperEngine::Application::WallpaperApplication (appContext);
 
 	// halt if the list-properties option was specified
 	if (appContext.settings.general.onlyListProperties) {
-	    delete app;
+	    delete application;
 	    return 0;
 	}
 
 	// attach signals to gracefully stop
+	app = application;
 	std::signal (SIGINT, signalhandler);
 	std::signal (SIGTERM, signalhandler);
 	std::signal (SIGUSR1, signalhandler);
 	std::signal (SIGUSR2, signalhandler);
 
 	// show the wallpaper application
-	app->show ();
+	application->show ();
 
 	// remove signal handlers before destroying app
 	std::signal (SIGINT, SIG_DFL);
 	std::signal (SIGTERM, SIG_DFL);
+	std::signal (SIGUSR1, SIG_DFL);
+	std::signal (SIGUSR2, SIG_DFL);
+	app = nullptr;
 
-	delete app;
+	delete application;
 
 	return 0;
     } catch (const std::exception& e) {

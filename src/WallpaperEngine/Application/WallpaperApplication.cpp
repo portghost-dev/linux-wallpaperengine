@@ -3009,6 +3009,7 @@ void WallpaperApplication::show () {
     setup ();
     this->restoreRuntimeState ();
     while (this->m_context.state.general.keepRunning) {
+	this->dispatchSignals ();
 	this->checkPropertyReload ();
 	this->processApiRequests ();
 	this->markBootSurvived ();
@@ -3075,6 +3076,24 @@ void WallpaperApplication::signal (int signal) {
 
     sLog.out ("Stop requested by signal ", signal);
     this->m_context.state.general.keepRunning = false;
+}
+
+void WallpaperApplication::requestSignal (int signal) {
+    if (signal < 0 || signal >= 32) {
+	return;
+    }
+
+    this->m_pendingSignals.fetch_or (1u << signal, std::memory_order_relaxed);
+}
+
+void WallpaperApplication::dispatchSignals () {
+    uint32_t pending = this->m_pendingSignals.exchange (0, std::memory_order_relaxed);
+
+    for (int signal = 0; pending != 0; signal++, pending >>= 1) {
+	if (pending & 1u) {
+	    this->signal (signal);
+	}
+    }
 }
 
 std::string WallpaperApplication::resolveWallpaperLookupKey (const std::string& backgroundKey) const {
