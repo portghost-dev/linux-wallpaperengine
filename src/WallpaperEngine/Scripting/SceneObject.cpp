@@ -129,7 +129,7 @@ JSValue get_skylightcolor (JSContext* ctx, JSValueConst this_val, int argc, JSVa
     auto* container = get_opaque (this_val);
 
     return container->getEngine ().getAdapters ().vec3->instantiate (
-	*container->getScene ().getScene ().colors.ambient->value
+	*container->getScene ().getScene ().colors.skylight->value
     );
 }
 

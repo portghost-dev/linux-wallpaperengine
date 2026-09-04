@@ -372,6 +372,22 @@ template JSValue vector_length<2> (JSContext* ctx, JSValueConst this_val, int ar
 template JSValue vector_length<3> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 template JSValue vector_length<4> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 
+template <int components> JSValue vector_length_sqr (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    JSClassID classId = 0;
+
+    auto* container = static_cast<VectorOpaqueContainer<components>*> (JS_GetAnyOpaque (this_val, &classId));
+
+    VEC_MAGIC_CHECK_EXCEPTION (container, components);
+
+    const auto value = vector_get<components> (container->value);
+
+    return JS_NewFloat64 (ctx, glm::dot (value, value));
+}
+
+template JSValue vector_length_sqr<2> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+template JSValue vector_length_sqr<3> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+template JSValue vector_length_sqr<4> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+
 template <int components>
 JSValue vector_constructor (JSContext* ctx, JSValueConst new_target, int argc, JSValueConst* argv, int magic) {
     if (argc == 0) {
@@ -486,7 +502,7 @@ JSValue vector_subtract (JSContext* ctx, JSValueConst this_val, int argc, JSValu
     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
 
     newContainer->value.update (
-	vector_get<components> (ctx, argv[0]) - vector_get<components> (container->value),
+	vector_get<components> (container->value) - vector_get<components> (ctx, argv[0]),
 	DynamicValue::UpdateSource::Initialization
     );
 
@@ -541,7 +557,7 @@ template <int components> JSValue vector_divide (JSContext* ctx, JSValueConst th
     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
 
     newContainer->value.update (
-	vector_get<components> (ctx, argv[0]) / vector_get<components> (container->value),
+	vector_get<components> (container->value) / vector_get<components> (ctx, argv[0]),
 	DynamicValue::UpdateSource::Initialization
     );
 
@@ -562,17 +578,9 @@ template <int components> JSValue vector_dot (JSContext* ctx, JSValueConst this_
 
     VEC_MAGIC_CHECK_EXCEPTION (container, components);
 
-    JSValue newVector = container->adapter.instantiate ();
-    const auto* newContainer = static_cast<VectorOpaqueContainer<components>*> (JS_GetAnyOpaque (newVector, &classId));
-
-    VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
-
-    newContainer->value.update (
-	glm::dot (vector_get<components> (ctx, argv[0]), vector_get<components> (container->value)),
-	DynamicValue::UpdateSource::Initialization
+    return JS_NewFloat64 (
+	ctx, glm::dot (vector_get<components> (container->value), vector_get<components> (ctx, argv[0]))
     );
-
-    return newVector;
 }
 
 template JSValue vector_dot<2> (JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
@@ -595,7 +603,7 @@ template <int components> JSValue vector_cross (JSContext* ctx, JSValueConst thi
     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
 
     newContainer->value.update (
-	glm::cross (vector_get<components> (ctx, argv[0]), vector_get<components> (container->value)),
+	glm::cross (vector_get<components> (container->value), vector_get<components> (ctx, argv[0])),
 	DynamicValue::UpdateSource::Initialization
     );
 
@@ -628,7 +636,7 @@ template <int components> JSValue vector_mix (JSContext* ctx, JSValueConst this_
     VEC_MAGIC_CHECK_EXCEPTION (newContainer, components);
 
     newContainer->value.update (
-	glm::mix (vector_get<components> (ctx, argv[0]), vector_get<components> (container->value), amount),
+	glm::mix (vector_get<components> (container->value), vector_get<components> (ctx, argv[0]), amount),
 	DynamicValue::UpdateSource::Initialization
     );
 
@@ -859,7 +867,7 @@ VectorAdapter<components>::VectorAdapter (ScriptEngine& engine) :
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), m_prototype, "lengthSqr",
-	JS_NewCFunction (this->m_engine.getContext (), vector_length<components>, "lengthSqr", 0), JS_PROP_ENUMERABLE
+	JS_NewCFunction (this->m_engine.getContext (), vector_length_sqr<components>, "lengthSqr", 0), JS_PROP_ENUMERABLE
     );
     JS_DefinePropertyValueStr (
 	this->m_engine.getContext (), m_prototype, "normalize",

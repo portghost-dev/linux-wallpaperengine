@@ -129,6 +129,7 @@ static void jsToDynamicValue (JSContext* ctx, JSValue val, DynamicValue& source)
 
     if (tag == JS_TAG_BOOL) {
 	source.update (static_cast<bool> (JS_VALUE_GET_BOOL (val)), DynamicValue::UpdateSource::Script);
+	return;
     }
 
     if (JS_TAG_IS_FLOAT64 (tag)) {
