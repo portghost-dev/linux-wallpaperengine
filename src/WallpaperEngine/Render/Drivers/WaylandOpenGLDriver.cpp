@@ -582,7 +582,7 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 
 	    const bool scene = this->getApp ().willRenderScene (viewport);
 
-	    if (scene) {
+	    if (scene && !sceneRendered) {
 		this->paceRender (minimumTime);
 	    }
 
