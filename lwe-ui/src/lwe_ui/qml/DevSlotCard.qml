@@ -392,11 +392,12 @@ Rectangle {
             }
         }
 
-        Item { width: 1; height: 7 }
-
         Item {
+            // a failed run keeps its exit code in view; a clean one shows nothing
+            readonly property bool shown: card.st.legacy === true || (card.st.lastCode || 0) > 0
             width: parent.width
-            height: 20
+            height: shown ? 27 : 0
+            visible: shown
             Label {
                 objectName: "devSlotResidue"
                 anchors.left: parent.left

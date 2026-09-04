@@ -1,7 +1,7 @@
 """DevBridge: two exhibit slots, launch composition, env partition, residue, isolator.
 
-SAFETY: every engine here is a shell script under the sandbox HOME; bench_courier is
-stubbed so no daemon is touched and no display is released.
+SAFETY: every engine here is a shell script under the sandbox HOME; the compositor
+queries are stubbed so no window is placed and no daemon is touched.
 
 Run: PYTHONPATH=src QT_QPA_PLATFORM=offscreen python3 tests/test_dev_bridge.py
 """
@@ -30,7 +30,6 @@ from PySide6.QtCore import QProcess  # noqa: E402
 from PySide6.QtGui import QGuiApplication  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
 
-from lwe_ui import bench_courier  # noqa: E402
 from lwe_ui import dev as devmod  # noqa: E402
 from lwe_ui.storage import paths, settings  # noqa: E402
 
@@ -107,15 +106,17 @@ def test_compose(d, fake_engine, wp_root) -> None:
 
     argv = d.compose_argv("A")
     assert argv[0] == fake_engine
-    assert "--screen-root" in argv and argv[argv.index("--screen-root") + 1] == "TEST-OUT"
-    assert "--window" not in argv
+    assert argv[argv.index("--window") + 1] == "0x0x1272x692", "the slot's quadrant size"
+    assert "--screen-root" not in argv, "exhibits are windows, never the outputs"
+    assert d._quadrant("A") == (5, 45, 1272, 692) and d._quadrant("B") == (1282, 45, 1272, 692), \
+        "top-left and top-right of the usable area, the bar's reserved strip and the gaps kept clear"
     assert "--api-socket" in argv
     assert argv[argv.index("--render-debug") + 1] == "pass-log"
     assert argv[argv.index("--set-property") + 1] == "rain=0.5"
     assert argv[-2:] == ["--bg", os.path.join(wp_root, "111")]
 
     win = d.compose_argv("A", "0x0x100x100")
-    assert "--window" in win and "--screen-root" not in win
+    assert win[win.index("--window") + 1] == "0x0x100x100", "an explicit geometry wins"
 
     env, unset = d.compose_env("A")
     assert env["LWE_NOBLOOM"] == "1", "bloom off assigns the kill switch"
@@ -267,18 +268,12 @@ def test_refusals(d) -> None:
 def test_launch_and_residue(app, d) -> None:
     lines = []
     d.consoleLine.connect(lambda s, t, e: lines.append((s, t, e)))
-    calls = {"standdown": 0, "resume": 0}
-    bench_courier.standdown = lambda *a, **k: calls.__setitem__("standdown", calls["standdown"] + 1) or True
-    bench_courier.resume = lambda *a, **k: calls.__setitem__("resume", calls["resume"] + 1) or True
-
     os.environ["FAKE_EXIT"] = "3"
     d.launch("A")
-    assert calls["standdown"] == 1, "a bench launch stands the daemon down"
-    assert d.runMode() == "bench"
+    assert d.runMode() == "window"
     _wait_finished(app, d, "A")
     st = d.slotState("A")
     assert st["lastCode"] == 3 and st["state"] == "exit 3", st
-    assert calls["resume"] == 1, "the last exhibit's exit hands the outputs back"
     assert d.runMode() == "" and d.isHolding() is False
     out = [t for s, t, e in lines if s == "A" and not e]
     err = [t for s, t, e in lines if s == "A" and e]
@@ -353,57 +348,53 @@ def test_stop_reaps_everything(app, d) -> None:
     os.environ.pop("FAKE_SLEEP")
 
 
-def test_relaunch_keeps_the_hold_and_changes_the_pid(app, d) -> None:
-    calls = {"standdown": 0, "resume": 0}
-    bench_courier.standdown = lambda *a, **k: calls.__setitem__("standdown", calls["standdown"] + 1) or True
-    bench_courier.resume = lambda *a, **k: calls.__setitem__("resume", calls["resume"] + 1) or True
+def test_relaunch_changes_the_pid(app, d) -> None:
     os.environ["FAKE_SLEEP"] = "1"
     d.launch("A")
     pid1 = int(d.slots["A"].proc.processId())
     d.setToggle("A", "bloom", True)
-    assert d.slots["A"].relaunching and d.isHolding(), "a relaunch-class edit queues a restart and still holds"
+    assert d.slots["A"].relaunching and d.isHolding(), "a relaunch-class edit queues a restart"
     for _ in range(60):
         app.processEvents()
         QTest.qWait(25)
         if d.alive("A") and not d.slots["A"].relaunching and int(d.slots["A"].proc.processId()) != pid1:
             break
     assert d.alive("A") and int(d.slots["A"].proc.processId()) != pid1, "the side came back on a new pid"
-    assert calls == {"standdown": 1, "resume": 0}, "the relaunch never resumed or re-released"
+    assert d.runMode() == "window"
     d.stop()
     os.environ.pop("FAKE_SLEEP")
-    bench_courier.standdown = lambda *a, **k: True
-    bench_courier.resume = lambda *a, **k: True
 
 
-def test_bench_to_bench_keeps_the_hold(app, d) -> None:
-    calls = {"standdown": 0, "resume": 0}
-    bench_courier.standdown = lambda *a, **k: calls.__setitem__("standdown", calls["standdown"] + 1) or True
-    bench_courier.resume = lambda *a, **k: calls.__setitem__("resume", calls["resume"] + 1) or True
+def test_launch_b_beside_a(app, d) -> None:
     os.environ["FAKE_SLEEP"] = "1"
     d.launch("A")
+    pid_a = int(d.slots["A"].proc.processId())
     d.launch("B")
-    assert calls == {"standdown": 1, "resume": 0}, "a verb to verb swap keeps the daemon stood down"
-    assert d.alive("B") and not d.alive("A")
-    d.stop()
-    assert calls == {"standdown": 1, "resume": 1}
-    os.environ.pop("FAKE_SLEEP")
-    bench_courier.standdown = lambda *a, **k: True
-    bench_courier.resume = lambda *a, **k: True
-
-
-def test_unconfirmed_release_refuses(app, d) -> None:
-    seen = []
-    d.consoleLine.connect(lambda s, t, e: seen.append((s, t, e)))
-    bench_courier.available = lambda: True
-    bench_courier.standdown = lambda *a, **k: False
+    assert d.alive("A") and d.alive("B"), "Launch B leaves A running"
+    assert int(d.slots["A"].proc.processId()) == pid_a, "A was not restarted by B's launch"
+    assert d.benchMode() == "A + B" and d.runMode() == "window"
     d.launch("A")
-    assert d.anyAlive() is False and seen[-1][2] is True, "no launch over a daemon that kept its outputs"
-    bench_courier.standdown = lambda *a, **k: True
+    assert d.alive("A") and d.alive("B") and int(d.slots["A"].proc.processId()) != pid_a, \
+        "Launch A restarts A alone"
+    d.stopSide("A")
+    assert not d.alive("A") and d.alive("B") and d.runMode() == "window", "a side stops alone"
+    d.stopSide("B")
+    assert not d.anyAlive() and d.runMode() == "", "the last side out clears the run"
+    d.launchBoth()
+    assert d.alive("A") and not d.alive("B"), "B follows A, it does not race it"
+    d._b_due = 0.0
+    for _ in range(80):
+        app.processEvents()
+        QTest.qWait(25)
+        if d.alive("A") and d.alive("B"):
+            break
+    assert d.alive("A") and d.alive("B"), "the fallback spawns B once A's window has had its chance"
+    d.stop()
+    assert not d.anyAlive() and d.runMode() == ""
+    os.environ.pop("FAKE_SLEEP")
 
 
-def test_failed_start_releases_the_hold(app, d, wp_root) -> None:
-    calls = {"resume": 0}
-    bench_courier.resume = lambda *a, **k: calls.__setitem__("resume", calls["resume"] + 1) or True
+def test_failed_start_retires(app, d, wp_root) -> None:
     dead = os.path.join(_TMP, "not-executable")
     with open(dead, "w") as fh:
         fh.write("#!/bin/sh\nexit 0\n")
@@ -417,9 +408,8 @@ def test_failed_start_releases_the_hold(app, d, wp_root) -> None:
             break
     st = d.slotState("A")
     assert st["lastCode"] == 126 and st["alive"] is False, st
-    assert calls["resume"] == 1 and d.runMode() == "", "a start failure hands the outputs back"
+    assert d.runMode() == "", "a start failure leaves no run behind"
     d.setBinary("A", "")
-    bench_courier.resume = lambda *a, **k: True
 
 
 def main() -> None:
@@ -447,10 +437,10 @@ def main() -> None:
     s["WALLPAPERS_DIR"] = wp_root
     settings.save(s)
 
-    devmod.DevBridge._dev_outputs = lambda self: ["TEST-OUT"]
-    bench_courier.available = lambda: True
-    bench_courier.standdown = lambda *a, **k: True
-    bench_courier.resume = lambda *a, **k: True
+    devmod.DevBridge._layout = lambda self: {"x": 0, "y": 0, "w": 2560, "h": 1440,
+                                             "reserved": [0, 40, 0, 0], "gap": 5}
+    devmod.DevBridge._hyprctl_clients = lambda self: []
+    devmod.DevBridge._hypr_dispatch = lambda self, expr: True
 
     d = devmod.DevBridge()
     test_tables(d)
@@ -464,10 +454,9 @@ def main() -> None:
     test_legacy_binary(app, d, legacy_engine)
     test_isolator(d)
     test_stop_reaps_everything(app, d)
-    test_relaunch_keeps_the_hold_and_changes_the_pid(app, d)
-    test_bench_to_bench_keeps_the_hold(app, d)
-    test_unconfirmed_release_refuses(app, d)
-    test_failed_start_releases_the_hold(app, d, wp_root)
+    test_relaunch_changes_the_pid(app, d)
+    test_launch_b_beside_a(app, d)
+    test_failed_start_retires(app, d, wp_root)
     d.shutdown()
     print("OK test_dev_bridge - two slots compose, partition env, persist, record residue, "
           "launch a legacy build on the old line, and stop clean")

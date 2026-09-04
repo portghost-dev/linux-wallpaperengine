@@ -36,7 +36,6 @@ from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signa
 
 from . import constants as C
 from . import api_client
-from . import bench_courier
 from . import procstats
 from .engine import daemon_unit
 from .discovery import objects as objects_disc
@@ -494,10 +493,8 @@ class DevBridge(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.slots: dict[str, _Slot] = {s: _Slot(s) for s in SIDES}
-        self._held = False
         self._in_flight = False
         self._b_pending = False
-        self._transition = False
         self._mode = ""
         self._objects_cache: dict[str, tuple[float, list]] = {}
         self._journal_proc: QProcess | None = None
@@ -931,30 +928,55 @@ class DevBridge(QObject):
     def _binary_for(self, s: _Slot) -> str:
         return s.binary or _engine_bin()
 
-    def _dev_outputs(self) -> list[str]:
-        """Compositor output names for a fullscreen bench. LWE_DEV_MONITOR pins one; empty
-        means unresolvable and the launch refuses."""
-        mon = os.environ.get("LWE_DEV_MONITOR", "")
-        if mon:
-            return [mon]
+    def _layout(self) -> dict | None:
+        """The focused output as the compositor lays it out: logical geometry, the edges it
+        keeps reserved right now (a bar that is present, none when it is hidden or absent)
+        and its outer gap. None when the compositor cannot be queried."""
         try:
-            return [n for n in daemon_unit.enumerate_outputs() if n]
-        except Exception:
-            return []
-
-    def _window_geometry(self) -> str | None:
-        """--window geometry for one exhibit: a monitor-ratio quadrant of the focused output.
-        The position part is ignored on Wayland; the compositor places both windows."""
-        geo = self._primary_geometry()
-        if not geo:
+            out = self._hyprctl(["-j", "monitors"])
+            mons = json.loads(out) if out.strip() else []
+            m = next((x for x in mons if x.get("focused")), mons[0]) if mons else None
+            if not m:
+                return None
+            scale = float(m.get("scale") or 1.0) or 1.0
+            res = [int(v) for v in (m.get("reserved") or [])[:4]]
+            res += [0] * (4 - len(res))
+            gap = 0
+            opt = self._hyprctl(["getoption", "general:gaps_out", "-j"])
+            if opt.strip():
+                css = str(json.loads(opt).get("css", "")).split()
+                if css and css[0].isdigit():
+                    gap = int(css[0])
+            return {"x": int(m.get("x", 0)), "y": int(m.get("y", 0)),
+                    "w": int(int(m["width"]) / scale), "h": int(int(m["height"]) / scale),
+                    "reserved": res, "gap": gap}
+        except (ValueError, KeyError, TypeError, IndexError):
             return None
-        _x, _y, w, h = geo
-        return f"0x0x{w // 2}x{h // 2}"
+
+    def _quadrant(self, side: str, layout: dict | None = None) -> tuple[int, int, int, int] | None:
+        """(x, y, w, h) of the top-left (A) or top-right (B) quadrant of the usable area, laid
+        out like a two by two tiling: reserved edges and the outer gap stay clear."""
+        lay = layout or self._layout()
+        if not lay:
+            return None
+        left, top, right, bottom = lay["reserved"]
+        gap = lay["gap"]
+        qw = max(320, (lay["w"] - left - right - 3 * gap) // 2)
+        qh = max(180, (lay["h"] - top - bottom - 3 * gap) // 2)
+        qx = lay["x"] + left + gap + (0 if side == "A" else qw + gap)
+        qy = lay["y"] + top + gap
+        return qx, qy, qw, qh
+
+    def _window_geometry(self, side: str = "A") -> str | None:
+        """--window geometry for one exhibit: its quadrant's size. The position part is
+        ignored on Wayland; the compositor maps the window and _place_tick moves it."""
+        q = self._quadrant(side)
+        return f"0x0x{q[2]}x{q[3]}" if q else None
 
     def compose_argv(self, side: str, window: str | None = None) -> list[str]:
-        """Engine argv for one slot. `window` forces a --window geometry (Launch both); None
-        renders to the real outputs via --screen-root (Launch A / Launch B). Returns [] when
-        the slot has no scene or no output resolves, so callers refuse instead of launching blind."""
+        """Engine argv for one slot, always windowed. `window` overrides the slot's quadrant
+        geometry. Returns [] when the slot has no scene or no output resolves, so callers
+        refuse instead of launching blind."""
         s = self._slot(side)
         if s is None:
             return []
@@ -964,14 +986,10 @@ class DevBridge(QObject):
         argv = [self._binary_for(s), "--assets-dir", _assets_dir(), "--fps", "30",
                 "--scaling", "default", "--silent", "--no-audio-processing",
                 "--disable-mouse", "--no-fullscreen-pause"]
-        if window:
-            argv += ["--window", window]
-        else:
-            outs = self._dev_outputs()
-            if not outs:
-                return []
-            for o in outs:
-                argv += ["--screen-root", o]
+        window = window or self._window_geometry(s.side)
+        if not window:
+            return []
+        argv += ["--window", window]
         if s.api:
             argv.append("--api-socket")
         else:
@@ -1028,8 +1046,7 @@ class DevBridge(QObject):
         assign = " ".join(f"{k}={v}" for k, v in sorted(env.items()))
         un = " ".join(f"-u {k}" for k in sorted(unset))
         prefix = f"env {un} {assign}".strip() if un else assign
-        window = self._window_geometry() if self._mode == "window" else None
-        return (prefix + " " + " ".join(self.compose_argv(side, window))).strip()
+        return (prefix + " " + " ".join(self.compose_argv(side))).strip()
 
     @Slot(result=bool)
     def verbsBusy(self) -> bool:
@@ -1046,7 +1063,7 @@ class DevBridge(QObject):
 
     @Slot(result=str)
     def runMode(self) -> str:
-        """The presentation of the current run: "bench", "window" or ""."""
+        """"window" while any exhibit runs, "" otherwise."""
         return self._mode
 
     @Slot(result=str)
@@ -1064,47 +1081,36 @@ class DevBridge(QObject):
     def engineBusy(self) -> bool:
         return self.anyAlive() or self._in_flight
 
-    def _peer_conflict(self) -> bool:
-        for p in self._engine_peers:
-            try:
-                if p.engineBusy():
-                    return True
-            except Exception:
-                continue
-        return False
-
     @Slot(str)
     def launch(self, side: str) -> None:
-        """Launch A / Launch B: bench that slot fullscreen over a daemon standdown. The verb
-        defines the whole state, so whatever ran before is stopped first."""
+        """Launch A / Launch B: that slot alone, windowed in its quadrant of the focused
+        output while the daemon keeps the desktop. A running exhibit on the same side
+        restarts; the other side is left as it is."""
         s = self._slot(side)
         if s is None or self._in_flight:
             return
-        if self._peer_conflict():
-            self.consoleLine.emit(s.side, "another bench holds the display", True)
-            return
         s.api = self._binary_is_api(s.binary)
-        if not self.compose_argv(s.side, None):
-            self.consoleLine.emit(s.side, "no scene or no display output to launch on", True)
+        geo = self._window_geometry(s.side)
+        if not geo or not self.compose_argv(s.side, geo):
+            self.consoleLine.emit(s.side, "no scene chosen or no display output to place the window on", True)
             return
         if self._orphan_answers(s):
             return
         self._in_flight = True
         self.stateChanged.emit()
-        self._cancel_pending()
-        self._transition = True
-        self._reap_all()
-        self._transition = False
-        if not self._held and bench_courier.available():
-            self._held = bench_courier.standdown()
-            if not self._held:
-                self._in_flight = False
-                self.consoleLine.emit(s.side, "the daemon did not release the outputs", True)
-                self.stateChanged.emit()
-                return
-        self._mode = "bench"
-        self._spawn(s, None)
+        self._relaunch_timers[s.side].stop()
+        s.gen += 1
+        s.relaunching = False
+        if s.side == "B":
+            self._b_pending = False
+        self._reap(s, deliberate=True)
+        self._mode = "window"
+        s.placed = False
+        s.place_tries = 0
+        self._spawn(s, geo)
         self._in_flight = False
+        if not self._place_timer.isActive():
+            self._place_timer.start()
         self.stateChanged.emit()
 
     @Slot()
@@ -1113,12 +1119,9 @@ class DevBridge(QObject):
         B follows once A's window maps, because two cold loads of one heavy scene serialise."""
         if self._in_flight:
             return
-        if self._peer_conflict():
-            self.consoleLine.emit("A", "another bench holds the display", True)
-            return
         for side in SIDES:
             self.slots[side].api = self._binary_is_api(self.slots[side].binary)
-        geo = self._window_geometry()
+        geo = self._window_geometry("A")
         if not geo:
             self.consoleLine.emit("A", "no display output to place the windows on", True)
             return
@@ -1132,9 +1135,6 @@ class DevBridge(QObject):
         self.stateChanged.emit()
         self._cancel_pending()
         self._reap_all()
-        if self._held:
-            bench_courier.resume()
-            self._held = False
         self._mode = "window"
         for side in SIDES:
             self.slots[side].placed = False
@@ -1147,14 +1147,29 @@ class DevBridge(QObject):
 
     @Slot()
     def stop(self) -> None:
-        """Stop every exhibit; the daemon resumes if it stood down."""
+        """Stop every exhibit."""
         self._cancel_pending()
         self._reap_all()
-        if self._held:
-            bench_courier.resume()
-            self._held = False
         self._mode = ""
         self._in_flight = False
+        self.stateChanged.emit()
+
+    @Slot(str)
+    def stopSide(self, side: str) -> None:
+        """Stop one exhibit and leave the other side as it is."""
+        s = self._slot(side)
+        if s is None:
+            return
+        self._relaunch_timers[s.side].stop()
+        s.gen += 1
+        s.relaunching = False
+        if s.side == "B":
+            self._b_pending = False
+        self._reap(s, deliberate=True)
+        if not self.anyAlive():
+            self._place_timer.stop()
+            self._mode = ""
+            self._in_flight = False
         self.stateChanged.emit()
 
     def _orphan_answers(self, s: _Slot) -> bool:
@@ -1207,7 +1222,7 @@ class DevBridge(QObject):
             except OSError:
                 pass
         s.proc = proc
-        s.mode = "window" if window else "bench"
+        s.mode = "window"
         s.stopping = False
         self.runStarted.emit(s.side)
         bar = "=" * 33
@@ -1415,23 +1430,12 @@ class DevBridge(QObject):
         the slot generation and the stale respawn does nothing."""
         if s.gen != gen or s.proc is not None:
             return
-        if self._mode == "window":
-            geo = self._window_geometry() or "0x0x1280x720"
-            s.placed = False
-            s.place_tries = 0
-            self._spawn(s, geo)
-            if not self._place_timer.isActive():
-                self._place_timer.start()
-        elif self._mode == "bench":
-            if not self._held and bench_courier.available():
-                self._held = bench_courier.standdown()
-                if not self._held:
-                    self.consoleLine.emit(s.side, "the daemon did not release the outputs", True)
-                    s.relaunching = False
-                    self._mode = "" if not self.anyAlive() else self._mode
-                    self._changed()
-                    return
-            self._spawn(s, None)
+        geo = self._window_geometry(s.side) or "0x0x1280x720"
+        s.placed = False
+        s.place_tries = 0
+        self._spawn(s, geo)
+        if not self._place_timer.isActive():
+            self._place_timer.start()
         s.relaunching = False
         self.stateChanged.emit()
 
@@ -1480,11 +1484,7 @@ class DevBridge(QObject):
                 pass
             self._b_pending = False
             self._in_flight = False
-            if self._held and not self._transition:
-                bench_courier.resume()
-                self._held = False
-            if not self._transition:
-                self._mode = ""
+            self._mode = ""
         self._changed()
 
     def _drain(self, side: str, stderr: bool) -> None:
@@ -1687,21 +1687,6 @@ class DevBridge(QObject):
                 return s.scene.split(":", 1)[1] if s.scene.startswith("probe:") else s.scene
         return ""
 
-    def _primary_geometry(self) -> tuple[int, int, int, int] | None:
-        """(x, y, w, h) of the focused output, or None if the compositor cannot be queried."""
-        try:
-            out = subprocess.run(["hyprctl", "-j", "monitors"],
-                                 capture_output=True, text=True, timeout=2, check=False)
-            if out.returncode == 0 and out.stdout.strip():
-                mons = json.loads(out.stdout)
-                if mons:
-                    m = next((x for x in mons if x.get("focused")), mons[0])
-                    return (int(m.get("x", 0)), int(m.get("y", 0)),
-                            int(m["width"]), int(m["height"]))
-        except (OSError, subprocess.SubprocessError, ValueError, KeyError):
-            pass
-        return None
-
     @staticmethod
     def _hyprctl(args: list[str]) -> str:
         try:
@@ -1741,25 +1726,22 @@ class DevBridge(QObject):
         if self._b_pending and not b.alive() and (
                 by_pid.get(pid_a) is not None or time.monotonic() > self._b_due):
             self._b_pending = False
-            geo = self._window_geometry() or "0x0x1280x720"
+            geo = self._window_geometry("B") or "0x0x1280x720"
             self._spawn(b, geo)
             self._in_flight = False
             self.stateChanged.emit()
         if not clients:
             return
-        geo = self._primary_geometry()
-        if not geo:
+        lay = self._layout()
+        if not lay:
             return
-        mx, my, mw, mh = geo
-        qw, qh = mw // 2, mh // 2
-        qy = my + mh // 4
         for s in (a, b):
             if not s.alive() or s.placed:
                 continue
             win = by_pid.get(int(s.proc.processId()))
             if not win:
                 continue
-            qx = mx if s.side == "A" else mx + qw
+            qx, qy, qw, qh = self._quadrant(s.side, lay)
             at = win.get("at") or [0, 0]
             if abs(int(at[0]) - qx) <= 4 and abs(int(at[1]) - qy) <= 4:
                 s.placed = True

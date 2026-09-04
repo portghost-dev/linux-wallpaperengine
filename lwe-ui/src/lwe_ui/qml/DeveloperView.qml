@@ -31,28 +31,33 @@ Rectangle {
     readonly property bool aliveB: (rev, dev.alive("B"))
     readonly property string runMode: (rev, dev.runMode())
     readonly property bool busy: (rev, dev.verbsBusy())
-    readonly property string primaryVerb: runMode === "window" ? "both"
-                                        : runMode === "bench" ? (aliveA ? "A" : aliveB ? "B" : "")
-                                        : ""
+    readonly property string primaryVerb: runMode !== "window" ? ""
+                                        : aliveA && aliveB ? "both" : aliveA ? "A" : aliveB ? "B" : ""
 
+    // A launch verb is a toggle: it reads Stop while its exhibit runs. The width is the wider
+    // of its two labels, fixed, so the row never shifts when a verb flips.
     component VerbButton: Rectangle {
         id: vb
         property string text: ""
+        property string activeText: "Stop"
+        property bool active: false
         property bool primary: false
         property bool dim: false
         property string tip: ""
         signal clicked()
         height: 26
-        width: vbLabel.implicitWidth + 24
+        width: Math.ceil(Math.max(idleMetrics.width, activeMetrics.width)) + 24
         radius: 5
         color: vb.primary ? Theme.segmentWash : "transparent"
         border.width: 1
         border.color: Theme.hairlineStrong
         opacity: vb.enabled ? 1 : 0.55
+        TextMetrics { id: idleMetrics; font.pixelSize: 11; text: vb.text }
+        TextMetrics { id: activeMetrics; font.pixelSize: 11; text: vb.activeText }
         Label {
             id: vbLabel
             anchors.centerIn: parent
-            text: vb.text
+            text: vb.active ? vb.activeText : vb.text
             font.pixelSize: 11
             color: vb.dim ? Theme.textTertiary : Theme.textPrimary
         }
@@ -68,30 +73,31 @@ Rectangle {
         property bool short: false
         spacing: 8
         VerbButton {
+            objectName: "devVerbA"
             text: verbs.short ? "A" : "Launch A"
-            primary: view.primaryVerb === "A"
+            active: view.aliveA
+            primary: view.aliveA
             enabled: !view.busy
-            tip: "Benches fullscreen. Blanks every monitor until Stop."
-            onClicked: dev.launch("A")
+            tip: view.aliveA ? "Stops A." : "Opens A as a window in the top-left quadrant of the focused monitor. The desktop stays."
+            onClicked: view.aliveA ? dev.stopSide("A") : dev.launch("A")
         }
         VerbButton {
+            objectName: "devVerbB"
             text: verbs.short ? "B" : "Launch B"
-            primary: view.primaryVerb === "B"
+            active: view.aliveB
+            primary: view.aliveB
             enabled: !view.busy
-            tip: "Benches fullscreen. Blanks every monitor until Stop."
-            onClicked: dev.launch("B")
+            tip: view.aliveB ? "Stops B." : "Opens B as a window in the top-right quadrant of the focused monitor. The desktop stays."
+            onClicked: view.aliveB ? dev.stopSide("B") : dev.launch("B")
         }
         VerbButton {
+            objectName: "devVerbBoth"
             text: verbs.short ? "Both" : "Launch both"
-            primary: view.primaryVerb === "both"
+            active: view.aliveA && view.aliveB
+            primary: view.aliveA && view.aliveB
             enabled: !view.busy
-            onClicked: dev.launchBoth()
-        }
-        VerbButton {
-            text: "Stop"
-            enabled: view.aliveA || view.aliveB
-            dim: !(view.aliveA || view.aliveB)
-            onClicked: dev.stop()
+            tip: (view.aliveA && view.aliveB) ? "Stops both." : "Opens A top-left and B top-right, side by side."
+            onClicked: (view.aliveA && view.aliveB) ? dev.stop() : dev.launchBoth()
         }
     }
 
