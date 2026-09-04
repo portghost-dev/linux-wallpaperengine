@@ -4,6 +4,7 @@
 #include <ostream>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace WallpaperEngine::Render::Shaders {
@@ -23,5 +24,8 @@ public:
 
 private:
     static std::unique_ptr<GLSLContext> sInstance;
+
+    std::unordered_map<std::string, std::pair<std::string, std::string>> m_translations;
+    size_t m_translationBytes = 0;
 };
 } // namespace WallpaperEngine::Render::Shaders

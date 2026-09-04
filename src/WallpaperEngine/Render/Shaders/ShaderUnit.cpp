@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <optional>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -234,75 +235,88 @@ void ShaderUnit::preprocessVariables () {
     }
 }
 
+static constexpr int MAX_INCLUDE_EXPANSIONS = 32;
+
+static std::optional<std::string> includeName (const std::string& source, size_t start) {
+    const size_t lineEnd = source.find ('\n', start);
+    const size_t quoteStart = source.find ('"', start);
+
+    if (quoteStart == std::string::npos || quoteStart > lineEnd) {
+	return std::nullopt;
+    }
+
+    const size_t quoteEnd = source.find ('"', quoteStart + 1);
+
+    if (quoteEnd == std::string::npos || quoteEnd > lineEnd) {
+	return std::nullopt;
+    }
+
+    return source.substr (quoteStart + 1, quoteEnd - quoteStart - 1);
+}
+
+std::string ShaderUnit::resolveInclude (const std::string& filename) {
+    std::string content;
+
+    // some includes might not be present
+    // and that should not be treated as an error mainly because these could come from
+    // commented out content
+    try {
+	content = "// begin of include from file ";
+	content += filename;
+	content += "\n";
+	content += this->m_assetLocator.includeShader (filename);
+	content += "\n// end of included from file ";
+	content += filename;
+	content += "\n";
+    } catch (AssetLoadException&) {
+	content = "// tried including file ";
+	content += filename;
+	content += " but was not found\n";
+    }
+
+    return content;
+}
+
 void ShaderUnit::preprocessIncludes () {
     size_t start = 0, end = 0;
     // prepare the include content
     while ((start = this->m_preprocessed.find ("#include", end)) != std::string::npos) {
-	// TODO: CHECK FOR ERRORS HERE, MALFORMED INCLUDES WILL NOT BE PROPERLY HANDLED
-	const size_t quoteStart = this->m_preprocessed.find_first_of ('"', start) + 1;
-	const size_t quoteEnd = this->m_preprocessed.find_first_of ('"', quoteStart);
-	const std::string filename = this->m_preprocessed.substr (quoteStart, quoteEnd - quoteStart);
+	// replace the first two letters with a comment so the filelength doesn't change
+	this->m_preprocessed.replace (start, 2, "//");
+	end = start;
 
-	// some includes might not be present
-	// and that should not be treated as an error mainly because these could come from
-	// commented out content
-	std::string content;
+	const auto filename = includeName (this->m_preprocessed, start);
 
-	try {
-	    content += "// begin of include from file ";
-	    content += filename;
-	    content += "\n";
-	    content += this->m_assetLocator.includeShader (filename);
-	    content += "\n// end of included from file ";
-	    content += filename;
-	    content += "\n";
-	} catch (AssetLoadException&) {
-	    content += "// tried including file ";
-	    content += filename;
-	    content += " but was not found\n";
+	if (!filename.has_value ()) {
+	    sLog.error ("Malformed #include in shader ", this->m_file, ", ignoring it");
+	    continue;
 	}
 
-	// replace the first two letters with a comment so the filelength doesn't change
-	this->m_preprocessed = this->m_preprocessed.replace (start, 2, "//");
-
-	this->m_includes += content;
-
-	// go to the end of the line
-	end = start;
+	this->m_includes += this->resolveInclude (*filename);
     }
 
-    // ensure the included files do not include other files
+    // included files may include others; each file expands a bounded number of times so two
+    // files including each other cannot grow this forever
+    std::map<std::string, int> expansions;
     end = 0;
 
-    // then apply includes in-place
     while ((start = this->m_includes.find ("#include", end)) != std::string::npos) {
-	const size_t lineEnd = this->m_includes.find_first_of ('\n', start);
-	// TODO: CHECK FOR ERRORS HERE, MALFORMED INCLUDES WILL NOT BE PROPERLY HANDLED
-	const size_t quoteStart = this->m_includes.find_first_of ('"', start) + 1;
-	const size_t quoteEnd = this->m_includes.find_first_of ('"', quoteStart);
-	const std::string filename = this->m_includes.substr (quoteStart, quoteEnd - quoteStart);
-
-	// some includes might not be present
-	// and that should not be treated as an error mainly because these could come from
-	// commented out content
+	const size_t lineEnd = this->m_includes.find ('\n', start);
+	const size_t lineLength = lineEnd == std::string::npos ? std::string::npos : lineEnd - start;
+	const auto filename = includeName (this->m_includes, start);
 	std::string content;
 
-	try {
-	    content = "// begin of include from file ";
-	    content += filename;
-	    content += "\n";
-	    content += this->m_assetLocator.includeShader (filename);
-	    content += "\n// end of included from file ";
-	    content += filename;
-	    content += "\n";
-	} catch (AssetLoadException&) {
-	    content = "// tried including file ";
-	    content += filename;
-	    content += " but was not found\n";
+	if (!filename.has_value ()) {
+	    sLog.error ("Malformed #include in an include of shader ", this->m_file, ", ignoring it");
+	    content = "// malformed include ignored\n";
+	} else if (++expansions[*filename] > MAX_INCLUDE_EXPANSIONS) {
+	    sLog.error ("Include of ", *filename, " in shader ", this->m_file, " repeats too often, stopping");
+	    content = "// include of " + *filename + " skipped\n";
+	} else {
+	    content = this->resolveInclude (*filename);
 	}
 
-	// file contents ready, replace things
-	this->m_includes = this->m_includes.replace (start, lineEnd - start, content);
+	this->m_includes.replace (start, lineLength, content);
 
 	// go back to the beginning of the line to properly continue detecting things
 	end = start;
@@ -807,7 +821,7 @@ void ShaderUnit::parseParameterConfiguration (
 			const std::string& macro = item.key ();
 			const auto it = this->m_combos.find (macro);
 
-			// if any of the values matched, this option is required
+			// required unless every listed value matches
 			if (it == this->m_combos.end () || this->m_overrideCombos.contains (macro)
 			    || it->second != item.value ()) {
 			    isRequired = true;
@@ -817,7 +831,7 @@ void ShaderUnit::parseParameterConfiguration (
 		} else {
 		    isRequired = true;
 
-		    // all values must match for it to be required
+		    // required unless one listed value matches
 		    for (const auto& item : require->items ()) {
 			const std::string& macro = item.key ();
 			const auto it = this->m_combos.find (macro);
@@ -971,57 +985,26 @@ const std::string& ShaderUnit::compile () {
 	}
     }
 
-    for (const auto& [name, value] : this->m_overrideCombos) {
-	std::string uppercase;
-	std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
+    const auto addCombos = [this, &addedCombos] (const ComboMap& combos) {
+	for (const auto& [name, value] : combos) {
+	    std::string uppercase;
+	    std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
 
-	if (!addedCombos.contains (uppercase)) {
-	    this->m_final += DEFINE_COMBO (uppercase, value);
-	    addedCombos.emplace (uppercase, true);
+	    if (!addedCombos.contains (uppercase)) {
+		this->m_final += DEFINE_COMBO (uppercase, value);
+		addedCombos.emplace (uppercase, true);
+	    }
 	}
-    }
+    };
 
+    addCombos (this->m_overrideCombos);
     // now add all the combos to the source
-    for (const auto& [name, value] : this->m_combos) {
-	std::string uppercase;
-	std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
-
-	if (!addedCombos.contains (uppercase)) {
-	    this->m_final += DEFINE_COMBO (uppercase, value);
-	    addedCombos.emplace (uppercase, true);
-	}
-    }
-
-    for (const auto& [name, value] : this->m_discoveredCombos) {
-	std::string uppercase;
-	std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
-
-	if (!addedCombos.contains (uppercase)) {
-	    this->m_final += DEFINE_COMBO (uppercase, value);
-	    addedCombos.emplace (uppercase, true);
-	}
-    }
+    addCombos (this->m_combos);
+    addCombos (this->m_discoveredCombos);
 
     if (this->m_link != nullptr) {
-	for (const auto& [name, value] : this->m_link->getCombos ()) {
-	    std::string uppercase;
-	    std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
-
-	    if (!addedCombos.contains (uppercase)) {
-		this->m_final += DEFINE_COMBO (uppercase, value);
-		addedCombos.emplace (uppercase, true);
-	    }
-	}
-
-	for (const auto& [name, value] : this->m_link->getDiscoveredCombos ()) {
-	    std::string uppercase;
-	    std::ranges::transform (name, std::back_inserter (uppercase), ::toupper);
-
-	    if (!addedCombos.contains (uppercase)) {
-		this->m_final += DEFINE_COMBO (uppercase, value);
-		addedCombos.emplace (uppercase, true);
-	    }
-	}
+	addCombos (this->m_link->getCombos ());
+	addCombos (this->m_link->getDiscoveredCombos ());
     }
 
     // this should be the rest of the shader

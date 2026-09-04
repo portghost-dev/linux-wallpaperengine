@@ -85,6 +85,8 @@ private:
      * Parses the input shader looking for include directives to extract the full list of included files
      */
     void preprocessIncludes ();
+    /** Fetches one included file wrapped in begin/end markers, or a not-found comment */
+    std::string resolveInclude (const std::string& filename);
     /**
      * Parses the input shader looking for require directives and resolves them into generated code
      */

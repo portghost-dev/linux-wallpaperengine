@@ -132,7 +132,15 @@ GLSLContext& GLSLContext::get () {
     return *sInstance;
 }
 
+static constexpr size_t MAX_TRANSLATION_BYTES = 8 * 1024 * 1024;
+
 std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vertex, const std::string& fragment) {
+    const std::string key = vertex + '\0' + fragment;
+
+    if (const auto cached = this->m_translations.find (key); cached != this->m_translations.end ()) {
+	return cached->second;
+    }
+
     glslang::TShader vertexShader (EShLangVertex);
 
     const char* vertexSource = vertex.c_str ();
@@ -145,8 +153,7 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
     vertexShader.setAutoMapBindings (true);
 
     if (!vertexShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
-	sLog.error ("GLSL vertex unit parsing Failed: ", vertexShader.getInfoLog ());
-	return { "", "" };
+	sLog.exception ("GLSL vertex unit parsing Failed: ", vertexShader.getInfoLog ());
     }
     glslang::TShader fragmentShader (EShLangFragment);
 
@@ -160,7 +167,6 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
     fragmentShader.setAutoMapBindings (true);
 
     if (!fragmentShader.parse (&BuiltInResource, 100, false, EShMsgDefault)) {
-	sLog.error ("GLSL fragment unit parsing Failed: ", fragmentShader.getInfoLog ());
 	// env LWE_SHADERDUMP=1: dump the assembled source with line numbers for diagnosis
 	if (getenv ("LWE_SHADERDUMP") != nullptr) {
 	    std::istringstream src (fragment);
@@ -170,15 +176,14 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
 		sLog.error ("FRAGSRC ", ++n, ": ", line);
 	    }
 	}
-	return { "", "" };
+	sLog.exception ("GLSL fragment unit parsing Failed: ", fragmentShader.getInfoLog ());
     }
     glslang::TProgram program;
     program.addShader (&vertexShader);
     program.addShader (&fragmentShader);
 
     if (!program.link (EShMsgDefault)) {
-	sLog.error ("Program Linking Failed: ", program.getInfoLog ());
-	return { "", "" };
+	sLog.exception ("Program Linking Failed: ", program.getInfoLog ());
     }
 
     std::vector<uint32_t> spirv;
@@ -198,8 +203,21 @@ std::pair<std::string, std::string> GLSLContext::toGlsl (const std::string& vert
     options.es = false;
     fragmentCompiler.set_common_options (options);
 
-    return { vertexCompiler.compile () + "#if 0\n" + vertex + "\n#endif",
-	     fragmentCompiler.compile () + "#if 0\n" + fragment + "\n#endif" };
+    std::pair<std::string, std::string> translated {
+	vertexCompiler.compile () + "#if 0\n" + vertex + "\n#endif",
+	fragmentCompiler.compile () + "#if 0\n" + fragment + "\n#endif"
+    };
+
+    const size_t bytes = key.size () + translated.first.size () + translated.second.size ();
+
+    if (this->m_translationBytes + bytes > MAX_TRANSLATION_BYTES) {
+	this->m_translations.clear ();
+	this->m_translationBytes = 0;
+    }
+
+    this->m_translationBytes += bytes;
+
+    return this->m_translations.emplace (key, std::move (translated)).first->second;
 }
 
 std::unique_ptr<GLSLContext> GLSLContext::sInstance = nullptr;
