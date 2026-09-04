@@ -3034,6 +3034,10 @@ void WallpaperApplication::update (Render::Drivers::Output::OutputViewport* view
     this->m_lastRender.store (std::chrono::steady_clock::now ().time_since_epoch ().count ());
 }
 
+bool WallpaperApplication::willRenderScene (const Render::Drivers::Output::OutputViewport* viewport) const {
+    return m_renderContext != nullptr && m_renderContext->willRenderScene (viewport);
+}
+
 void WallpaperApplication::setColorCorrection (const glm::vec4& cc) {
     this->m_colorCorrection = { std::clamp (cc.x, 0.0f, 4.0f), std::clamp (cc.y, 0.0f, 4.0f),
 				std::clamp (cc.z, 0.0f, 4.0f), std::clamp (cc.w, -6.4f, 6.4f) };

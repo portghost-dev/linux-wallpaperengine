@@ -66,6 +66,10 @@ public:
      */
     [[nodiscard]] virtual uint32_t getFrameCounter () const = 0;
     /**
+     * @return A key that advances once per driver loop pass, whether or not a scene rendered
+     */
+    [[nodiscard]] virtual uint32_t getPassCounter () const = 0;
+    /**
      * @param name
      * @return GetProcAddress for this video driver
      */

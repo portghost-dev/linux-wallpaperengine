@@ -220,6 +220,12 @@ void CWallpaper::setMirrorOwner (const std::string& screen) { this->m_mirrorOwne
 
 const std::string& CWallpaper::getMirrorOwner () const { return this->m_mirrorOwner; }
 
+bool CWallpaper::sceneRenderPending (const std::string& screenName) const {
+    const uint32_t currentFrame = this->getContext ().getDriver ().getPassCounter ();
+    return this->m_mirrorOwner.empty () ? (currentFrame != this->m_lastRenderedFrame)
+					: (screenName == this->m_mirrorOwner);
+}
+
 void CWallpaper::updateUVs (const glm::ivec4& viewport, const bool vflip) {
     // update UVs if something has changed, otherwise use old values
     if (this->m_state.hasChanged (viewport, vflip, this->getWidth (), this->getHeight ())) {
@@ -232,10 +238,9 @@ void CWallpaper::render (
     const glm::ivec4& viewport, const bool vflip, const glm::ivec2& globalPosition, const glm::ivec2& logicalSize,
     const std::string& screenName
 ) {
-    // Get current frame counter from the driver to avoid redundant scene renders
-    const uint32_t currentFrame = this->getContext ().getDriver ().getFrameCounter ();
-    const bool needsSceneRender = this->m_mirrorOwner.empty () ? (currentFrame != this->m_lastRenderedFrame)
-							       : (screenName == this->m_mirrorOwner);
+    // one scene render per driver pass, however many viewports present it
+    const uint32_t currentFrame = this->getContext ().getDriver ().getPassCounter ();
+    const bool needsSceneRender = this->sceneRenderPending (screenName);
     const glm::ivec4 sceneViewport = this->m_spanInfo.has_value ()
 	? glm::ivec4 { 0, 0, this->m_spanInfo->totalBounds.z, this->m_spanInfo->totalBounds.w }
 	: viewport;

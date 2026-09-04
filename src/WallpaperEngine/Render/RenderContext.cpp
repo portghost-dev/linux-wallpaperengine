@@ -60,6 +60,11 @@ void RenderContext::render (Drivers::Output::OutputViewport* viewport) {
     viewport->swapOutput ();
 }
 
+bool RenderContext::willRenderScene (const Drivers::Output::OutputViewport* viewport) const {
+    const auto ref = this->m_wallpapers.find (viewport->name);
+    return ref != this->m_wallpapers.end () && ref->second->sceneRenderPending (viewport->name);
+}
+
 void RenderContext::setWallpaper (const std::string& display, std::shared_ptr<CWallpaper> wallpaper) {
     wallpaper->setDestinationFramebuffer (this->m_app.getDestinationFramebuffer ());
     this->m_wallpapers.insert_or_assign (display, wallpaper);

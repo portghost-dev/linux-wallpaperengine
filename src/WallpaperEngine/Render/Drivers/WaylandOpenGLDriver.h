@@ -63,6 +63,8 @@ public:
 
     [[nodiscard]] Output::Output& getOutput () override;
     float getRenderTime () const override;
+    [[nodiscard]] uint32_t getPassCounter () const override;
+    void paceRender (float minimumTime);
     bool closeRequested () override;
     void resizeWindow (glm::ivec2 size) override;
     void resizeWindow (glm::ivec4 sizeandpos) override;
@@ -113,6 +115,8 @@ private:
     void finishEGL () const;
 
     uint32_t m_frameCounter = 0;
+    uint32_t m_passCounter = 0;
+    float m_lastRenderStart = -1.0f;
     ApplicationContext& m_context;
     WaylandMouseInput m_mouseInput;
 

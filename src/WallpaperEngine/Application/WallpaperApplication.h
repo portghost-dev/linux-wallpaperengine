@@ -84,6 +84,7 @@ public:
      * Renders a frame
      */
     void update (Render::Drivers::Output::OutputViewport* viewport);
+    [[nodiscard]] bool willRenderScene (const Render::Drivers::Output::OutputViewport* viewport) const;
     [[nodiscard]] double secondsSinceLastRender () const;
 
     [[nodiscard]] glm::vec4 getColorCorrection () const { return this->m_colorCorrection; }

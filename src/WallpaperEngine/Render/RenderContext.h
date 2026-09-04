@@ -38,6 +38,7 @@ namespace Render {
 	RenderContext (Drivers::VideoDriver& driver, WallpaperApplication& app, Media::MediaSource& mediaSource);
 
 	void render (Drivers::Output::OutputViewport* viewport);
+	[[nodiscard]] bool willRenderScene (const Drivers::Output::OutputViewport* viewport) const;
 	void setWallpaper (const std::string& display, std::shared_ptr<CWallpaper> wallpaper);
 	void clearWallpapers ();
 	/** drop sole-owner texture cache entries; see TextureCache::evictUnused. Needs a current GL context */

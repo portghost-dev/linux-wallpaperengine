@@ -28,6 +28,7 @@ public:
     void hideWindow () override;
     [[nodiscard]] glm::ivec2 getFramebufferSize () const override;
     [[nodiscard]] uint32_t getFrameCounter () const override;
+    [[nodiscard]] uint32_t getPassCounter () const override;
     void dispatchEventQueue () override;
 
 private:

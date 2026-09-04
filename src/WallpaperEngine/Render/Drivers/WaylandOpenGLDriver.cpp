@@ -510,10 +510,9 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
     // TODO: FRAMETIME CONTROL SHOULD GO BACK TO THE CWALLPAPAERAPPLICATION ONCE ACTUAL PARTICLES ARE IMPLEMENTED
     // TODO: AS THOSE, MORE THAN LIKELY, WILL REQUIRE OF A DIFFERENT PROCESSING RATE
 
-    static float startTime, endTime;
     const float minimumTime = 1.0f / static_cast<float> (std::max (1, this->m_context.settings.render.maximumFPS));
-    // get the start time of the frame
-    startTime = this->getRenderTime ();
+
+    m_passCounter++;
 
     wl_display* display = m_waylandContext.display;
 
@@ -571,33 +570,57 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 	m_requestedExit = true;
     }
 
+    bool sceneRendered = false;
+
     if (!m_requestedExit) {
 	for (const auto& viewport : this->getOutput ().getViewports () | std::views::values) {
 	    auto* wlViewport = dynamic_cast<Output::WaylandOutputViewport*> (viewport);
 
-	    if (wlViewport != nullptr && wlViewport->framePending) {
-		wlViewport->framePending = false;
-		wlViewport->rendering = true;
-		this->getApp ().update (viewport);
-		wlViewport->rendering = false;
+	    if (wlViewport == nullptr || !wlViewport->framePending) {
+		continue;
 	    }
+
+	    const bool scene = this->getApp ().willRenderScene (viewport);
+
+	    if (scene) {
+		this->paceRender (minimumTime);
+	    }
+
+	    wlViewport->framePending = false;
+	    wlViewport->rendering = true;
+	    this->getApp ().update (viewport);
+	    wlViewport->rendering = false;
+	    sceneRendered = sceneRendered || scene;
 	}
     }
 
     if (!m_requestedExit && this->getApp ().secondsSinceLastRender () > 2.0) {
 	for (const auto& viewport : this->getOutput ().getViewports () | std::views::values) {
+	    const bool scene = this->getApp ().willRenderScene (viewport);
+
+	    if (scene && !sceneRendered) {
+		this->paceRender (minimumTime);
+	    }
+
 	    this->getApp ().update (viewport);
+	    sceneRendered = sceneRendered || scene;
 	}
     }
 
-    m_frameCounter++;
-
-    endTime = this->getRenderTime ();
-
-    // ensure the frame time is correct to not overrun FPS
-    if ((endTime - startTime) < minimumTime) {
-	usleep ((minimumTime - (endTime - startTime)) * CLOCKS_PER_SEC);
+    if (sceneRendered) {
+	m_frameCounter++;
     }
+}
+
+// the cap spaces scene renders: viewports that only present a shared frame never sleep or count
+void WaylandOpenGLDriver::paceRender (const float minimumTime) {
+    const float since = this->getRenderTime () - m_lastRenderStart;
+
+    if (m_lastRenderStart >= 0.0f && since < minimumTime) {
+	usleep (static_cast<useconds_t> ((minimumTime - since) * 1000000.0f));
+    }
+
+    m_lastRenderStart = this->getRenderTime ();
 }
 
 Output::Output& WaylandOpenGLDriver::getOutput () { return this->m_output; }
@@ -623,6 +646,8 @@ void WaylandOpenGLDriver::hideWindow () { }
 glm::ivec2 WaylandOpenGLDriver::getFramebufferSize () const { return glm::ivec2 { 0, 0 }; }
 
 uint32_t WaylandOpenGLDriver::getFrameCounter () const { return m_frameCounter; }
+
+uint32_t WaylandOpenGLDriver::getPassCounter () const { return m_passCounter; }
 
 WaylandOpenGLDriver::SEGLContext* WaylandOpenGLDriver::getEGLContext () { return &this->m_eglContext; }
 

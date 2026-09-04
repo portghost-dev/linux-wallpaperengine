@@ -137,6 +137,11 @@ public:
     [[nodiscard]] const std::string& getMirrorOwner () const;
 
     /**
+     * @return Whether rendering for the given screen would run renderFrame() right now
+     */
+    [[nodiscard]] bool sceneRenderPending (const std::string& screenName) const;
+
+    /**
      * @return The width of this wallpaper
      */
     [[nodiscard]] virtual glm::vec2 clampToCap (glm::vec2 size) const { return size; }

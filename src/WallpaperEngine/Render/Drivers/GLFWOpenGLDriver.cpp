@@ -110,6 +110,8 @@ glm::ivec2 GLFWOpenGLDriver::getFramebufferSize () const {
 
 uint32_t GLFWOpenGLDriver::getFrameCounter () const { return this->m_frameCounter; }
 
+uint32_t GLFWOpenGLDriver::getPassCounter () const { return this->m_frameCounter; }
+
 void GLFWOpenGLDriver::dispatchEventQueue () {
     // recomputed every pass so `set-fps` is honored live (see WaylandOpenGLDriver)
     static float startTime, endTime;
