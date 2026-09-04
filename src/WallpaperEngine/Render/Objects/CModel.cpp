@@ -29,6 +29,13 @@ CModel::CModel (Wallpapers::CScene& scene, const ModelObject& model) :
 }
 
 CModel::~CModel () {
+    if (m_shadowProgram != GL_NONE) {
+	glDeleteProgram (m_shadowProgram);
+    }
+    if (m_shadowVao != GL_NONE) {
+	glDeleteVertexArrays (1, &m_shadowVao);
+    }
+
     for (auto& submesh : m_submeshes) {
 	delete submesh.pass;
 
@@ -187,7 +194,12 @@ bool CModel::loadMesh () {
 	submesh.stride = static_cast<GLsizei> (vertexStride);
 	submesh.uvOffset = uvOffset;
 	// submesh 0 uses the object's material (also the renderable's); the rest carry their own
-	submesh.material = index == 0 ? m_model.material.get () : m_model.extraMaterials[index - 1].get ();
+	submesh.material = nullptr;
+	if (index == 0) {
+	    submesh.material = m_model.material.get ();
+	} else if (index - 1 < m_model.extraMaterials.size ()) {
+	    submesh.material = m_model.extraMaterials[index - 1].get ();
+	}
 
 	if (submesh.material == nullptr || submesh.material->passes.empty ()) {
 	    sLog.error ("Submesh ", index, " of ", m_model.modelFile, " has no material passes - skipping submesh");
@@ -487,7 +499,7 @@ void CModel::updateMatrices () {
 }
 
 void CModel::renderShadow (const glm::mat4& lightViewProjection) {
-    if (!m_initialized || !m_model.visible->value->getBool ()) {
+    if (!m_initialized || m_shadowFailed || !m_model.visible->value->getBool ()) {
 	return;
     }
 
@@ -518,6 +530,9 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	const GLuint fragment = compile (GL_FRAGMENT_SHADER, fragmentSource);
 	if (vertex == GL_NONE || fragment == GL_NONE) {
 	    sLog.error ("CModel shadow program failed to compile for ", m_model.modelFile);
+	    glDeleteShader (vertex);
+	    glDeleteShader (fragment);
+	    m_shadowFailed = true;
 	    return;
 	}
 	this->m_shadowProgram = glCreateProgram ();
@@ -526,6 +541,15 @@ void CModel::renderShadow (const glm::mat4& lightViewProjection) {
 	glLinkProgram (this->m_shadowProgram);
 	glDeleteShader (vertex);
 	glDeleteShader (fragment);
+	GLint linked = GL_FALSE;
+	glGetProgramiv (this->m_shadowProgram, GL_LINK_STATUS, &linked);
+	if (linked != GL_TRUE) {
+	    sLog.error ("CModel shadow program failed to link for ", m_model.modelFile);
+	    glDeleteProgram (this->m_shadowProgram);
+	    this->m_shadowProgram = GL_NONE;
+	    m_shadowFailed = true;
+	    return;
+	}
 	this->m_shadowLightViewProjection = glGetUniformLocation (this->m_shadowProgram, "uLightViewProjection");
 	this->m_shadowModel = glGetUniformLocation (this->m_shadowProgram, "uModel");
 	glGenVertexArrays (1, &this->m_shadowVao);

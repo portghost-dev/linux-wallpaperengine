@@ -60,6 +60,7 @@ private:
     glm::mat4 m_modelMatrix = glm::mat4 (1.0f);
     GLuint m_shadowProgram = GL_NONE;
     GLuint m_shadowVao = GL_NONE;
+    bool m_shadowFailed = false;
     GLint m_shadowLightViewProjection = -1;
     GLint m_shadowModel = -1;
     glm::mat4 m_viewProjectionMatrix = glm::mat4 (1.0f);
