@@ -2,9 +2,9 @@
 maps each terminal human action to a records event. Exposed to QML as `wizardBridge`.
 
 Flow: open(wid) -> phase p1 (opt-out gate) -> runWizard() runs the static census (missing dep short-
-circuits to the 16e modal via depNeeded) -> phase p2 (expectation-setter) -> proceedToBench() pauses
-the live wallpaper and launches a NON-silent windowed engine, feeding LWE-PRESENT/fatal lines and a
-poll timer into the BenchSession -> verdict phase (pass | fixable | fail). approve/deny/cancel/
+circuits to the 16e modal via depNeeded) -> phase p2 (expectation-setter) -> proceedToBench()
+launches a NON-silent windowed engine beside the live wallpaper, feeding LWE-PRESENT/fatal lines and
+a poll timer into the BenchSession -> verdict phase (pass | fixable | fail). approve/deny/cancel/
 importUntested each write the right record event and graduate or trash via the existing backend.
 
 Constitution wiring: the machine only ever asserts crash-vs-alive (BenchSession); the human's eyes
@@ -19,16 +19,52 @@ and event emission are provable with no GPU. The real QProcess path is exercised
 """
 from __future__ import annotations
 
+import math
+import os
 import threading
 import time
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal, Slot
 
-from . import bench_courier
+from . import api_client
+from . import placement
 from . import texcomp
-from .dev import _assets_dir, _engine_bin
+from .dev import _assets_dir, _engine_bin, overlay_text, sample_exhibit
 from .storage import paths, records, settings, wizard
 from .storage.bench_verdict import BenchSession, is_fatal_line, is_first_frame_line
+
+OVERLAY_CORNER = "top-left"
+
+
+def bench_sock_path() -> Path:
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "").strip() or f"/run/user/{os.getuid()}"
+    return Path(runtime) / "lwe" / "wizard-bench.sock"
+
+
+def bench_env(title: str) -> dict[str, str]:
+    """The bench engine's environment: its label, its socket, and the present trace that
+    prints the first-frame marker the verdict listens for."""
+    return {"LWE_OVERLAY_TEXT": title or "Workshop Benching",
+            "LWE_SOCKET": str(bench_sock_path()),
+            "LWE_PRESENTTRACE": "1"}
+
+
+def bench_overlay_text(title: str, sample: dict | None, run_remaining: float | None,
+                       load_remaining: float | None) -> str:
+    """The bench overlay: the item's stats block, a blank line, then the countdown. After the
+    first frame it counts the run window down; before it, the load window."""
+    def secs(v: float) -> str:
+        n = max(0, math.ceil(v))
+        return f"{n} second" if n == 1 else f"{n} seconds"
+
+    if run_remaining is not None:
+        tail = f"Bench Testing In Progress. Scene ends in {secs(run_remaining)}."
+    elif load_remaining is not None:
+        tail = f"Bench Testing In Progress. Waiting for the first frame, {secs(load_remaining)} left."
+    else:
+        tail = "Bench Testing In Progress."
+    return overlay_text(title, sample) + "\n\n" + tail
 
 _ENGINE_COMM = "linux-wallpaper"
 
@@ -39,9 +75,11 @@ class WizardBridge(QObject):
     depNeeded = Signal(str, str)
     note = Signal(str)
     graduated = Signal(str)
-    benchBlocked = Signal(str)
     trashedUnsub = Signal(str, str)
-    _vramSampled = Signal(int)
+    # worker results carry the session they were sampled for; a late result from a finished
+    # bench must never land on the next one
+    _vramSampled = Signal(object, int)
+    _benchFrames = Signal(object, int)
 
     def __init__(self, backend, workshop, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -75,6 +113,15 @@ class WizardBridge(QObject):
         self._vram_ticks = 0
         self._vram_busy = False
         self._vramSampled.connect(self._on_vram_sampled)
+        self._overlay_busy = False
+        self._overlay_prev: dict = {}
+        self._benchFrames.connect(self._on_bench_frames)
+        self._placed = False
+        self._place_tries = 0
+        self._cell = "A"
+        self._place_timer = QTimer(self)
+        self._place_timer.setInterval(400)
+        self._place_timer.timeout.connect(self._place_tick)
 
     @Slot(result=str)
     def phase(self) -> str:
@@ -114,7 +161,7 @@ class WizardBridge(QObject):
     @Slot()
     def killBench(self) -> None:
         """Lock-up escape hatch: if a Workshop bench never comes alive within the load
-        lease, force it down - kill the windowed preview, resume live rotation, dismiss. The backend
+        lease, force it down - kill the windowed preview and dismiss. The backend
         already fails a no-first-frame bench at LOAD_TIMEOUT (poll -> 'crashed'/fail verdict); this is
         the belt for a wedge where that resolution never fires. Guarded to p3 so a late call after a
         real verdict is a no-op."""
@@ -139,15 +186,6 @@ class WizardBridge(QObject):
     def engineBusy(self) -> bool:
         return self._phase == "p3" or (self._proc is not None
                                        and self._proc.state() != QProcess.ProcessState.NotRunning)
-
-    def _peer_conflict(self) -> bool:
-        for p in self._peers:
-            try:
-                if p.engineBusy():
-                    return True
-            except Exception:
-                pass
-        return False
 
     @Slot(str, str)
     def open(self, wid: str, title: str) -> None:
@@ -303,56 +341,142 @@ class WizardBridge(QObject):
             self.note.emit("Wallpaper files not found")
             self.close()
             return
-        if self._peer_conflict():
-            # another engine owner (dev bench / A-B / preview) holds the GPU; launching a second
-            # 4K engine is the two-engine crash risk. Refuse, show it IN the modal, back to P2.
-            self.benchBlocked.emit("Developer bench already running")
-            self._set_phase("p2")
-            return
         try:
             self._chash = records.content_hash(d)
         except Exception:
             self._chash = ""
         self._saw_fatal = False
         self._session = BenchSession()
-        if not bench_courier.available():
-            self._session = None
-            self.note.emit("The engine is not running - turn it on first (Settings > Engine)")
-            self._set_phase("p2")
-            return
-        ok = bench_courier.standdown()
-        if not ok:
-            bench_courier.resume()
-            self._session = None   # let a retry past the re-entrancy guard
-            self.note.emit("The rotation service is busy - try the bench again")
-            self._set_phase("p2")
-            return
         geo = self._spawn_geometry()
-        # NON-silent (no --silent) so the engine prints one LWE-PRESENT line per presented frame.
+        try:
+            bench_sock_path().unlink()
+        except OSError:
+            pass
+        # NON-silent (no --silent) so the engine prints one LWE-PRESENT line per presented frame;
+        # the socket is how the overlay text reaches the window while it runs.
         argv = [_engine_bin(), "--assets-dir", _assets_dir(), "--fps", "30", "--scaling", "default",
                 "--no-audio-processing", "--disable-mouse", "--no-fullscreen-pause",
-                "--window", geo, "--bg", d]
+                "--window", geo, "--api-socket", "--bg", d]
         try:
             (paths.state_dir() / "wizard-bench.log").write_text(
                 "=== bench " + self._wid + " ===\n" + " ".join(argv) + "\n", encoding="utf-8")
         except OSError:
             pass
+        self._overlay_prev = {}
+        self._placed = False
+        self._place_tries = 0
         self._session.on_launch(self._clock())
         self._launcher(argv)
         self._timer.start()
+        self._place_timer.start()
+
+    def _bench_cell(self) -> str:
+        """Top-left unless a Developer exhibit already holds it and the top-right is free, so the
+        window the human judges is the bench and not an exhibit stacked on it."""
+        for p in self._peers:
+            try:
+                if p.alive("A") and not p.alive("B"):
+                    return "B"
+            except Exception:
+                continue
+        return "A"
 
     def _spawn_geometry(self) -> str:
+        """The bench's cell of the focused output, the same size the Developer exhibits use;
+        the workshop's monitor-ratio quadrant when the compositor cannot be asked."""
+        self._cell = self._bench_cell()
+        geo = placement.window_geometry(self._cell, placement.layout())
+        if geo:
+            return geo
         try:
             return self._workshop._spawn_geometry()
         except Exception:
             return "0x0x1280x720"
 
+    def _place_tick(self) -> None:
+        """Move the bench window into the top-left cell once it maps, verifying the placement
+        stuck; give up after a few tries and leave it where the user put it."""
+        if self._proc is None or self._placed:
+            self._place_timer.stop()
+            return
+        try:
+            pid = int(self._proc.processId())
+        except Exception:
+            return
+        win = next((c for c in placement.clients() if c.get("pid") == pid), None)
+        if win is None:
+            return
+        lay = placement.layout()
+        if not lay:
+            self._place_timer.stop()
+            return
+        cell = placement.quadrant(self._cell, lay)
+        if placement.placed(win, cell) or self._place_tries >= placement.PLACE_TRIES:
+            self._placed = True
+            self._place_timer.stop()
+            return
+        self._place_tries += 1
+        placement.place(win, cell)
+
+    @Slot(result=int)
+    def benchRunRemaining(self) -> int:
+        """Seconds left in the run window once the scene has presented; -1 before that."""
+        s = self._session
+        if s is None or not s.presented or s.done:
+            return -1
+        return max(0, math.ceil(s.run_seconds - s.running_seconds(self._clock())))
+
+    def _push_overlay(self) -> None:
+        """Once a second while the bench runs: sample the bench process on a worker thread and
+        push the stats block plus the countdown through its socket. Silent until the socket is up."""
+        s = self._session
+        if self._proc is None or s is None or s.done or self._overlay_busy:
+            return
+        try:
+            pid = int(self._proc.processId())
+        except Exception:
+            return
+        if pid <= 0:
+            return
+        sock = bench_sock_path()
+        if not api_client.available(sock):
+            return
+        title, prev, clock = self._title or "Workshop Benching", dict(self._overlay_prev), self._clock
+        self._overlay_busy = True
+
+        def work() -> None:
+            try:
+                sample, nxt = sample_exhibit(pid, sock, prev)
+                if s is not self._session:
+                    return
+                self._overlay_prev = nxt
+                if isinstance(nxt.get("frames"), int) and nxt["frames"] > 0:
+                    self._benchFrames.emit(s, nxt["frames"])
+                # the countdown is read right before the push, after the sampling forks
+                t = clock()
+                run_rem = (s.run_seconds - s.running_seconds(t)) if s.presented else None
+                load_rem = s.load_remaining(t) if not s.presented else None
+                api_client.set_overlay(text=bench_overlay_text(title, sample, run_rem, load_rem),
+                                       corner=OVERLAY_CORNER, sock=sock)
+            except Exception:
+                pass
+            finally:
+                self._overlay_busy = False
+
+        self._async(work)
+
+    def _on_bench_frames(self, session: object, frames: int) -> None:
+        """The socket's frame counter is the second liveness signal: a scene that has rendered
+        frames has presented, whether or not its log line was seen."""
+        s = self._session
+        if session is s and s is not None and not s.done and not s.presented and frames > 0:
+            s.on_first_frame(self._clock())
+
     def _qprocess_launch(self, argv: list[str]) -> None:
         proc = QProcess(self)
         env = QProcessEnvironment.systemEnvironment()
-        # engine-composited label [workshop-bench R2]: the bench window names itself
-        # in the engine's own render - no second window, any wallpaper type
-        env.insert("LWE_OVERLAY_TEXT", "Workshop Benching")
+        for k, v in bench_env(self._title).items():
+            env.insert(k, v)
         proc.setProcessEnvironment(env)
         proc.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
         proc.readyReadStandardOutput.connect(lambda: self._drain_output())
@@ -400,6 +524,7 @@ class WizardBridge(QObject):
         self._vram_ticks += 1
         if self._vram_ticks % 4 == 0:
             self._sample_vram()
+            self._push_overlay()
         self._session.poll(self._clock())
         if self._session.done:
             self._finish_bench()
@@ -436,6 +561,7 @@ class WizardBridge(QObject):
     def _on_proc_error(self, err) -> None:
         if err == QProcess.ProcessError.FailedToStart:
             self._teardown_bench()
+            self._session = None
             self.note.emit("The engine failed to start - check Settings > Engine")
             self._set_phase("p2")
 
@@ -450,6 +576,7 @@ class WizardBridge(QObject):
         if pid <= 0:
             return
         self._vram_busy = True
+        session = self._session
 
         def work() -> None:
             mb = -1
@@ -467,22 +594,22 @@ class WizardBridge(QObject):
                 mb = -1
             finally:
                 self._vram_busy = False
-            self._vramSampled.emit(mb)
+            self._vramSampled.emit(session, mb)
 
         self._async(work)
 
-    def _on_vram_sampled(self, mb: int) -> None:
-        if self._session is not None and mb >= 0:
+    def _on_vram_sampled(self, session: object, mb: int) -> None:
+        if session is self._session and session is not None and mb >= 0:
             self._session.on_vram(mb)
 
     def _finish_bench(self) -> None:
-        """Verdict reached: stop the timer, kill the engine, resume the live wallpaper, set phase."""
+        """Verdict reached: stop the timers, kill the engine, set the phase."""
         s = self._session
         if s is None or not s.done:
             return
         self._timer.stop()
+        self._place_timer.stop()
         self._kill_proc()
-        bench_courier.resume()
         if s.verdict == "ran":
             self._set_phase("pass")
         elif s.verdict == "crashed":
@@ -491,6 +618,8 @@ class WizardBridge(QObject):
                                                  else "no_first_frame"]
             self._set_phase("fixable" if (self._fixable() and not self._fixed) else "fail")
         else:
+            # inconclusive: the session is spent, so a re-bench must be allowed past the guard
+            self._session = None
             self._set_phase("p2")
 
     def _kill_proc(self) -> None:
@@ -503,12 +632,15 @@ class WizardBridge(QObject):
                 self._proc.kill()
             self._proc.deleteLater()
             self._proc = None
+        try:
+            bench_sock_path().unlink()
+        except OSError:
+            pass
 
     def _teardown_bench(self) -> None:
         self._timer.stop()
-        if self._proc is not None:
-            self._kill_proc()
-            bench_courier.resume()
+        self._place_timer.stop()
+        self._kill_proc()
 
     def _default_fixable(self) -> bool:
         """Whether a deterministic fix exists for this crash. The reviewer's fix catalog (R16 etc.)

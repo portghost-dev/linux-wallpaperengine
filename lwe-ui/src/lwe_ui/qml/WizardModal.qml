@@ -7,7 +7,6 @@ Popup {
     objectName: "wizardModal"
 
     property string ph: ""
-    property string blockedMsg: ""
     readonly property bool isBefore: ph === "p1" || ph === "p2"
     readonly property bool isVerdict: ph === "pass" || ph === "fixable" || ph === "fail"
     readonly property bool isCrash: ph === "fixable" || ph === "fail"
@@ -22,7 +21,6 @@ Popup {
     Connections {
         target: wizardBridge
         function onPhaseChanged() {
-            wizardModal.blockedMsg = "";
             wizardModal.ph = wizardBridge.phase();
             if (wizardModal.ph === "" || wizardModal.ph === "p3") {
                 noteField.text = "";
@@ -33,9 +31,7 @@ Popup {
             }
         }
         function onCompChanged() { wizardModal.compRev++ }
-        function onBenchBlocked(msg) { wizardModal.blockedMsg = msg; blockTimer.restart(); }
     }
-    Timer { id: blockTimer; interval: 2500; onTriggered: wizardModal.blockedMsg = "" }
 
     anchors.centerIn: parent
     // sec 3 modal guard: every face is already <=620 and none was width-responsive, so
@@ -96,8 +92,7 @@ Popup {
                 ? "It crashed at the bench. Some scenes come right with a fix in the editor. Keep it and dig in, or trash it."
              : ""
 
-        primaryText: wizardModal.blockedMsg !== "" ? wizardModal.blockedMsg
-                   : wizardModal.ph === "c0" || wizardModal.ph === "c2" ? ""
+        primaryText: wizardModal.ph === "c0" || wizardModal.ph === "c2" ? ""
                    : wizardModal.ph === "c1"
                      ? (wizardModal.compHasWork ? "Start Compression" : "Continue")
                    : wizardModal.isBefore ? "Start bench test"
@@ -105,9 +100,7 @@ Popup {
                    : wizardModal.ph === "fixable" ? "Apply fixes and retry"
                    : wizardModal.ph === "fail" ? "Trash it"
                    : ""
-        primaryColor: wizardModal.blockedMsg !== "" ? Theme.danger
-                    : wizardModal.ph === "fail" ? Theme.danger
-                    : Theme.accent
+        primaryColor: wizardModal.ph === "fail" ? Theme.danger : Theme.accent
         secondaryText: wizardModal.ph === "c1" && wizardModal.compHasWork
                        ? "Skip, do not compress"
                      : wizardModal.isBefore ? "Skip, import untested"
@@ -117,7 +110,6 @@ Popup {
         secondaryDanger: wizardModal.ph === "pass"
 
         onPrimaryClicked: {
-            if (wizardModal.blockedMsg !== "") return;
             if (wizardModal.ph === "c1") {
                 if (wizardModal.compHasWork) wizardBridge.startCompression();
                 else wizardBridge.skipCompression();

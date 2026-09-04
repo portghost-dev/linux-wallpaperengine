@@ -329,8 +329,8 @@ is to be the daemon API's reference client and the system's owner:
   crash-loop guard).
 - It **owns the library workflow**: browse/search, playlists, per-wallpaper editor
   (autosaving, presence-as-setness conf model), a bench that test-renders new workshop
-  items on a throwaway engine while the desktop engine stands down
-  (`release-outputs`), and an import wizard that by default requires a human verdict
+  items on a throwaway windowed engine beside the desktop engine, and an import
+  wizard that by default requires a human verdict
   before an item becomes rotation-eligible; turning off `REVIEW_REQUIRED`
   (`lwe-ui/src/lwe_ui/constants.py::REVIEW_REQUIRED`) lands items automatically.
 - Display policy lives in the engine, not the panel: the fullscreen gate and the

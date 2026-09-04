@@ -195,6 +195,27 @@ def main() -> None:
         assert left_idle.property("visible") is False, "idle block must be hidden during a developer bench"
         assert dev_mode.property("text") == "Bench · A", dev_mode.property("text")
         assert abs(float(deck.property("transportDim")) - 0.45) < 0.01
+
+        left_wiz = _find(deck, "deckLeftWizBench")
+        wizard.set_phase("p3")
+        settle()
+        assert left_wiz.property("visible") is True and left_dev.property("visible") is False, \
+            "a Workshop bench takes the left block while a Developer exhibit is alive"
+        wizard.set_phase("p1")
+        settle()
+        assert left_dev.property("visible") is True, "the Developer block returns when the bench ends"
+        bench._is_testing = True
+        bench._test_state = "testing"
+        bench.stateChanged.emit()
+        wizard.set_phase("p3")
+        settle()
+        assert left_wiz.property("visible") is True and left_testing.property("visible") is False, \
+            "a Workshop bench takes the left block over an Editor test as well"
+        wizard.set_phase("p1")
+        bench._is_testing = False
+        bench._test_state = "idle"
+        bench.stateChanged.emit()
+        settle()
         dev.slots["B"].alive = lambda: True
         dev.stateChanged.emit()
         settle()

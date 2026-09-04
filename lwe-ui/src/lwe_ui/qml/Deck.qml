@@ -82,7 +82,8 @@ Rectangle {
     Connections { target: wizardBridge; function onPhaseChanged() { deck.wizRev++ } }
 
     readonly property bool testing: bench.isTesting
-    readonly property bool devHold: (deck.devRev, dev.isHolding()) && !deck.testing
+    // the Workshop bench is the transient one, so its block takes the slot while it runs
+    readonly property bool devHold: (deck.devRev, dev.isHolding()) && !deck.testing && !deck.wizBenching
     readonly property bool wizBenching: (deck.wizRev, wizardBridge.phase() === "p3")
     readonly property bool holding: deck.testing || deck.devHold || deck.wizBenching
     // during a hold the transport + right column dim (the bench owns the display); off/engine-down
@@ -203,7 +204,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.leftMargin: Theme.spacingLg
         spacing: Theme.spacingMd
-        visible: deck.testing
+        visible: deck.testing && !deck.wizBenching
 
         Rectangle {
             width: 44; height: 28
@@ -296,10 +297,6 @@ Rectangle {
             spacing: 2
             Row {
                 spacing: Theme.spacingXs
-                Rectangle {
-                    width: 6; height: 6; radius: 3; color: Theme.warning
-                    anchors.verticalCenter: parent.verticalCenter
-                }
                 Label {
                     text: "Workshop Benching"
                     color: Theme.warning

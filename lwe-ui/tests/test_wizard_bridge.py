@@ -3,8 +3,8 @@
 The engine launch (`_launcher`) and clock (`_clock`) are seams: we inject a no-op launcher and a
 controlled clock, then drive the observation handlers (_on_line / _on_finished / _poll) directly.
 That makes the phase machine and the record events provable with no real engine. The live QProcess
-path is covered by manual visual testing, not this suite. bench_courier standdown/resume is stubbed so
-_begin_bench proceeds.
+path is covered by manual visual testing, not this suite. The compositor queries are stubbed, so the
+bench falls back to the workshop's geometry and places nothing.
 """
 from __future__ import annotations
 
@@ -55,20 +55,18 @@ class FakeWorkshop:
 
 def main() -> None:
     from PySide6.QtGui import QGuiApplication
-    from lwe_ui import bench_courier, wizard_bridge as WB
+    from lwe_ui import wizard_bridge as WB
     from lwe_ui.storage import paths, records
     from PySide6.QtCore import QProcess
 
     app = QGuiApplication.instance() or QGuiApplication(["t"])  # noqa: F841
     paths.ensure_dirs()
 
-    WB.bench_courier.available = lambda: True
-    WB.bench_courier.standdown = lambda *a, **k: True
-    WB.bench_courier.resume = lambda *a, **k: True
-    WB.bench_courier.renew = lambda *a, **k: None
-    bench_courier.standdown = lambda *a, **k: True
-    bench_courier.wait_clear = lambda *a, **k: True
-    bench_courier.resume = lambda *a, **k: True
+    # no compositor in the sandbox: the bench falls back to the workshop's geometry and places
+    # nothing; no socket ever comes up, so the overlay push stays silent
+    WB.placement.layout = lambda query=None: None
+    WB.placement.clients = lambda: []
+    WB.placement.dispatch = lambda expr: True
 
     NORMAL = QProcess.ExitStatus.NormalExit
     CRASH = QProcess.ExitStatus.CrashExit
@@ -117,6 +115,113 @@ def main() -> None:
     bp.open("200", "Preset")
     bp.runWizard()
     assert dep_seen == ["200"] and bp.phase() == "", "missing dep routes to the modal, closes the wizard"
+
+    b, be, ws, clk = new_bridge()
+    launched = []
+    b._launcher = lambda argv: launched.append(list(argv))
+    b.runWizard(); b.proceedToBench(); app.processEvents()
+    argv = launched[-1]
+    assert "--api-socket" in argv, "the bench listens so the overlay can be pushed"
+    assert argv[argv.index("--window") + 1] == "0x0x100x100", "no compositor: the workshop geometry"
+    assert argv[-2:] == ["--bg", str(item)] and "--screen-root" not in argv
+    env = WB.bench_env("Clean")
+    assert env["LWE_PRESENTTRACE"] == "1", "the first-frame marker only prints under the present trace"
+    assert env["LWE_OVERLAY_TEXT"] == "Clean" and env["LWE_SOCKET"].endswith("/lwe/wizard-bench.sock")
+    assert b.benchRunRemaining() == -1, "no run window before the first frame"
+    clk["t"] = 2.0; b._on_line("LWE-PRESENT viewport=100x100")
+    clk["t"] = 10.0
+    assert b.benchRunRemaining() == 7
+    text = WB.bench_overlay_text("Clean", None, 7.2, None)
+    assert text.startswith("Clean\nstats pending\n\n") and \
+        text.endswith("Bench Testing In Progress. Scene ends in 8 seconds.")
+    assert WB.bench_overlay_text("Clean", None, None, 12.5).endswith(
+        "Waiting for the first frame, 13 seconds left.")
+    assert WB.bench_overlay_text("Clean", None, -0.5, None).endswith("Scene ends in 0 seconds.")
+    b.close()
+    assert b.phase() == ""
+
+    b, be, ws, clk = new_bridge()
+    b._launcher = lambda argv: None
+    b.runWizard(); b.proceedToBench(); app.processEvents()
+    stale = WB.BenchSession()
+    clk["t"] = 3.0; b._on_bench_frames(stale, 300)
+    assert b.benchRunRemaining() == -1, "a sample from another bench's session never lands"
+    b._on_vram_sampled(stale, 900)
+    assert b._session.peak_mb < 0, "a stale VRAM sample never lands"
+    b._on_bench_frames(b._session, 12)
+    assert b.benchRunRemaining() == 15, "frames on the socket count as the first frame"
+    clk["t"] = 17.5; b._poll()
+    assert b.phase() == "p3"
+    clk["t"] = 18.1; b._poll()
+    assert b.phase() == "pass", "the run window is anchored at the socket's first frame"
+    b.close()
+
+    # inconclusive close, then a re-bench must be allowed
+    b, be, ws, clk = new_bridge()
+    b._launcher = lambda argv: None
+    b.runWizard(); b.proceedToBench(); app.processEvents()
+    clk["t"] = 2.0; b._on_line("LWE-PRESENT viewport=100x100")
+    clk["t"] = 5.0; b._on_finished(NORMAL, 0)
+    assert b.phase() == "p2", "a presented window closed early is inconclusive"
+    b.proceedToBench(); app.processEvents()
+    assert b.phase() == "p3", "the expectation screen's Bench button works again after an inconclusive close"
+    b.close()
+
+    # a failed start, then a re-bench
+    b, be, ws, clk = new_bridge()
+    b._launcher = lambda argv: None
+    b.runWizard(); b.proceedToBench(); app.processEvents()
+    b._on_proc_error(QProcess.ProcessError.FailedToStart)
+    assert b.phase() == "p2"
+    b.proceedToBench(); app.processEvents()
+    assert b.phase() == "p3", "the Bench button works again after a failed start"
+    b.close()
+
+    # the socket file never outlives the bench, and the window lands in its cell
+    b, be, ws, clk = new_bridge()
+    b._launcher = lambda argv: None
+    b.runWizard(); b.proceedToBench(); app.processEvents()
+    WB.bench_sock_path().parent.mkdir(parents=True, exist_ok=True)
+    WB.bench_sock_path().write_text("stale")
+
+    class FakeProc:
+        def processId(self): return 4242
+        def state(self): return QProcess.ProcessState.Running
+        def kill(self): pass
+        def deleteLater(self): pass
+        class _S:
+            def disconnect(self): pass
+        finished = _S()
+    b._proc = FakeProc()
+    at = {"v": [0, 0]}
+    calls = []
+    WB.placement.layout = lambda query=None: {"x": 0, "y": 0, "w": 2560, "h": 1440,
+                                              "reserved": [0, 40, 0, 0], "gap": 5}
+    WB.placement.clients = lambda: [{"pid": 4242, "at": at["v"], "address": "0xabc", "floating": False}]
+    WB.placement.dispatch = lambda expr: calls.append(expr) or True
+    b._place_tick()
+    assert len(calls) == 3 and b._place_tries == 1 and not b._placed, "float, resize, move"
+    at["v"] = [5, 45]
+    b._place_tick()
+    assert b._placed and not b._place_timer.isActive(), "a verified placement ends the corrections"
+    WB.placement.layout = lambda query=None: None
+    b.close()
+    assert not WB.bench_sock_path().exists(), "close removes the socket file"
+
+    class PeerA:
+        def alive(self, side): return side == "A"
+        def engineBusy(self): return True
+    b.set_engine_peers([PeerA()])
+    assert b._bench_cell() == "B", "the bench steps aside when a Developer exhibit holds the top-left cell"
+    b.set_engine_peers([])
+    assert b._bench_cell() == "A"
+
+    title = "Café “Night” 東京 · x"
+    wire = WB.api_client.overlay_wire_text(WB.bench_overlay_text(title, None, 7.0, None))
+    assert wire.isascii() and wire.startswith('Caf? "Night" ?? - x\n') and wire.endswith("Scene ends in 7 seconds.")
+    long = WB.api_client.overlay_wire_text("T" * 600 + "\nCPU: 1.0%\n\nBench Testing In Progress. Scene ends in 3 seconds.")
+    assert len(long) <= 512 and long.endswith("Scene ends in 3 seconds."), "an over-long block loses its heading, not its countdown"
+    assert WB.bench_overlay_text("x", None, 0.4, None).endswith("Scene ends in 1 second.")
 
     b, be, ws, clk = new_bridge()
     grad = []

@@ -36,6 +36,7 @@ from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signa
 
 from . import constants as C
 from . import api_client
+from . import placement
 from . import procstats
 from .engine import daemon_unit
 from .discovery import objects as objects_disc
@@ -153,6 +154,49 @@ OVERLAY_TICK_MS = 1000
 def _overlay_unknown(reply: dict | None) -> bool:
     """True when the engine answered but does not know set-overlay (a build older than the verb)."""
     return bool(reply) and not reply.get("ok") and "unknown command" in str(reply.get("error", ""))
+
+
+def overlay_text(label: str, sample: dict | None) -> str:
+    """The label as a heading, then one figure per line. CPU is the share of the whole
+    machine, GPU the whole GPU, RAM resident plus swapped."""
+    if not sample:
+        return f"{label}\nstats pending"
+    fps, cpu = sample.get("fps"), sample.get("cpu")
+    rss, swap = sample.get("rss", -1), sample.get("swap", -1)
+    vram, gpu = sample.get("vram", -1), sample.get("gpu", -1)
+    ram = "--" if rss < 0 else f"{rss} MB" + (f" + {swap} MB swap" if swap >= 0 else "")
+    return "\n".join([
+        label,
+        "CPU: " + (f"{cpu:.1f}%" if cpu is not None else "--"),
+        "GPU: " + (f"{gpu:.1f}%" if gpu >= 0 else "--"),
+        "RAM: " + ram,
+        "VRAM: " + (f"{vram} MB" if vram >= 0 else "--"),
+        "FPS: " + (f"{fps:.1f}" if fps is not None else "--"),
+    ])
+
+
+def sample_exhibit(pid: int, sock: Path, prev: dict) -> tuple[dict, dict]:
+    """One stats sample for a test engine: (sample, baseline for the next call). FPS and
+    CPU are deltas against the previous baseline, so the first call reports neither."""
+    now = time.monotonic()
+    frames = None
+    try:
+        st = api_client.status(sock)
+        if st and isinstance(st.get("frames"), int):
+            frames = st["frames"]
+    except Exception:
+        frames = None
+    ticks = procstats.cpu_ticks([pid])
+    sample: dict = {"fps": None, "cpu": None}
+    if prev and frames is not None and prev.get("frames") is not None \
+            and now > prev["t"] and frames >= prev["frames"]:
+        sample["fps"] = round((frames - prev["frames"]) / (now - prev["t"]), 1)
+    if prev and ticks >= 0 and prev.get("ticks", -1) >= 0 and now > prev["t"]:
+        sample["cpu"] = procstats.cpu_percent_of_machine(ticks - prev["ticks"], now - prev["t"])
+    sample["rss"], sample["swap"] = procstats.rss_swap_mb([pid])
+    sample["vram"] = procstats.vram_mb([pid])
+    sample["gpu"] = procstats.gpu_sample()[0]
+    return sample, {"t": now, "frames": frames, "ticks": ticks}
 TRAIL_TIP = "Exact reproduces authored trail segments; Fluid interpolates between them."
 
 RENDER_DEBUG_FLAGS = [
@@ -515,7 +559,6 @@ class DevBridge(QObject):
         self._overlay_timer = QTimer(self)
         self._overlay_timer.setInterval(OVERLAY_TICK_MS)
         self._overlay_timer.timeout.connect(self._overlay_tick)
-        self._overlay_timer.start()
         self._b_due = 0.0
         self._restore()
         self._seed_scenes()
@@ -929,49 +972,18 @@ class DevBridge(QObject):
         return s.binary or _engine_bin()
 
     def _layout(self) -> dict | None:
-        """The focused output as the compositor lays it out: logical geometry, the edges it
-        keeps reserved right now (a bar that is present, none when it is hidden or absent)
-        and its outer gap. None when the compositor cannot be queried."""
-        try:
-            out = self._hyprctl(["-j", "monitors"])
-            mons = json.loads(out) if out.strip() else []
-            m = next((x for x in mons if x.get("focused")), mons[0]) if mons else None
-            if not m:
-                return None
-            scale = float(m.get("scale") or 1.0) or 1.0
-            res = [int(v) for v in (m.get("reserved") or [])[:4]]
-            res += [0] * (4 - len(res))
-            gap = 0
-            opt = self._hyprctl(["getoption", "general:gaps_out", "-j"])
-            if opt.strip():
-                css = str(json.loads(opt).get("css", "")).split()
-                if css and css[0].isdigit():
-                    gap = int(css[0])
-            return {"x": int(m.get("x", 0)), "y": int(m.get("y", 0)),
-                    "w": int(int(m["width"]) / scale), "h": int(int(m["height"]) / scale),
-                    "reserved": res, "gap": gap}
-        except (ValueError, KeyError, TypeError, IndexError):
-            return None
+        """The focused output as the compositor lays it out (placement.layout)."""
+        return placement.layout(self._hyprctl)
 
     def _quadrant(self, side: str, layout: dict | None = None) -> tuple[int, int, int, int] | None:
-        """(x, y, w, h) of the top-left (A) or top-right (B) quadrant of the usable area, laid
-        out like a two by two tiling: reserved edges and the outer gap stay clear."""
+        """The slot's cell of the usable area: A top-left, B top-right (placement.quadrant)."""
         lay = layout or self._layout()
-        if not lay:
-            return None
-        left, top, right, bottom = lay["reserved"]
-        gap = lay["gap"]
-        qw = max(320, (lay["w"] - left - right - 3 * gap) // 2)
-        qh = max(180, (lay["h"] - top - bottom - 3 * gap) // 2)
-        qx = lay["x"] + left + gap + (0 if side == "A" else qw + gap)
-        qy = lay["y"] + top + gap
-        return qx, qy, qw, qh
+        return placement.quadrant(side, lay) if lay else None
 
     def _window_geometry(self, side: str = "A") -> str | None:
-        """--window geometry for one exhibit: its quadrant's size. The position part is
-        ignored on Wayland; the compositor maps the window and _place_tick moves it."""
-        q = self._quadrant(side)
-        return f"0x0x{q[2]}x{q[3]}" if q else None
+        """--window geometry for one exhibit: its cell's size. The position part is ignored
+        on Wayland; the compositor maps the window and _place_tick moves it."""
+        return placement.window_geometry(side, self._layout())
 
     def compose_argv(self, side: str, window: str | None = None) -> list[str]:
         """Engine argv for one slot, always windowed. `window` overrides the slot's quadrant
@@ -1238,6 +1250,8 @@ class DevBridge(QObject):
             s.overlay_refused = False
             s.overlay_told = False
             self._push_overlay_when_ready(s, proc, time.monotonic() + 20.0)
+            if not self._overlay_timer.isActive():
+                self._overlay_timer.start()
 
     def _push_overlay_when_ready(self, s: _Slot, proc: QProcess, deadline: float) -> None:
         """The corner and the stats text ride the socket, so they follow the launch as soon
@@ -1282,48 +1296,8 @@ class DevBridge(QObject):
                 s.side, "this build has no set-overlay command; the stats overlay needs an engine "
                 "built from the current tree", True)
 
-    @staticmethod
-    def overlay_text(label: str, sample: dict | None) -> str:
-        """The label as a heading, then one figure per line. CPU is the share of the whole
-        machine, GPU the whole GPU, RAM resident plus swapped."""
-        if not sample:
-            return f"{label}\nstats pending"
-        fps, cpu = sample.get("fps"), sample.get("cpu")
-        rss, swap = sample.get("rss", -1), sample.get("swap", -1)
-        vram, gpu = sample.get("vram", -1), sample.get("gpu", -1)
-        ram = "--" if rss < 0 else f"{rss} MB" + (f" + {swap} MB swap" if swap >= 0 else "")
-        return "\n".join([
-            label,
-            "CPU: " + (f"{cpu:.1f}%" if cpu is not None else "--"),
-            "GPU: " + (f"{gpu:.1f}%" if gpu >= 0 else "--"),
-            "RAM: " + ram,
-            "VRAM: " + (f"{vram} MB" if vram >= 0 else "--"),
-            "FPS: " + (f"{fps:.1f}" if fps is not None else "--"),
-        ])
-
-    @staticmethod
-    def sample_exhibit(pid: int, sock: Path, prev: dict) -> tuple[dict, dict]:
-        """One stats sample for an exhibit: (sample, baseline for the next call). FPS and
-        CPU are deltas against the previous baseline, so the first call reports neither."""
-        now = time.monotonic()
-        frames = None
-        try:
-            st = api_client.status(sock)
-            if st and isinstance(st.get("frames"), int):
-                frames = st["frames"]
-        except Exception:
-            frames = None
-        ticks = procstats.cpu_ticks([pid])
-        sample: dict = {"fps": None, "cpu": None}
-        if prev and frames is not None and prev.get("frames") is not None \
-                and now > prev["t"] and frames >= prev["frames"]:
-            sample["fps"] = round((frames - prev["frames"]) / (now - prev["t"]), 1)
-        if prev and ticks >= 0 and prev.get("ticks", -1) >= 0 and now > prev["t"]:
-            sample["cpu"] = procstats.cpu_percent_of_machine(ticks - prev["ticks"], now - prev["t"])
-        sample["rss"], sample["swap"] = procstats.rss_swap_mb([pid])
-        sample["vram"] = procstats.vram_mb([pid])
-        sample["gpu"] = procstats.gpu_sample()[0]
-        return sample, {"t": now, "frames": frames, "ticks": ticks}
+    overlay_text = staticmethod(overlay_text)
+    sample_exhibit = staticmethod(sample_exhibit)
 
     def _overlay_tick(self) -> None:
         """Once a second per live exhibit with stats on: sample on a worker thread and push
@@ -1342,13 +1316,16 @@ class DevBridge(QObject):
             if pid <= 0:
                 continue
             s.overlay_busy = True
-            sock, label, prev = s.sock_path(), s.label, dict(s.overlay_prev)
+            sock, label, prev, gen = s.sock_path(), s.label, dict(s.overlay_prev), s.gen
 
-            def work(s=s, pid=pid, sock=sock, label=label, prev=prev) -> None:
+            def work(s=s, pid=pid, sock=sock, label=label, prev=prev, gen=gen) -> None:
                 try:
-                    sample, nxt = self.sample_exhibit(pid, sock, prev)
+                    sample, nxt = sample_exhibit(pid, sock, prev)
+                    # a relaunch bumps the generation: a late sample belongs to the old process
+                    if s.gen != gen:
+                        return
                     s.overlay_prev = nxt
-                    reply = api_client.set_overlay(text=self.overlay_text(label, sample), sock=sock)
+                    reply = api_client.set_overlay(text=overlay_text(label, sample), sock=sock)
                     if _overlay_unknown(reply):
                         s.overlay_refused = True
                 except Exception:
@@ -1485,6 +1462,7 @@ class DevBridge(QObject):
             self._b_pending = False
             self._in_flight = False
             self._mode = ""
+            self._overlay_timer.stop()
         self._changed()
 
     def _drain(self, side: str, stderr: bool) -> None:
@@ -1741,22 +1719,15 @@ class DevBridge(QObject):
             win = by_pid.get(int(s.proc.processId()))
             if not win:
                 continue
-            qx, qy, qw, qh = self._quadrant(s.side, lay)
-            at = win.get("at") or [0, 0]
-            if abs(int(at[0]) - qx) <= 4 and abs(int(at[1]) - qy) <= 4:
+            cell = self._quadrant(s.side, lay)
+            if placement.placed(win, cell):
                 s.placed = True
                 continue
-            if s.place_tries >= 5:
+            if s.place_tries >= placement.PLACE_TRIES:
                 s.placed = True
                 continue
             s.place_tries += 1
-            addr = f"address:{win['address']}"
-            if not win.get("floating"):
-                self._hypr_dispatch(f'hl.dsp.window.float({{ window = "{addr}" }})')
-            self._hypr_dispatch(
-                f'hl.dsp.window.resize({{ x = {qw}, y = {qh}, window = "{addr}" }})')
-            self._hypr_dispatch(
-                f'hl.dsp.window.move({{ x = {qx}, y = {qy}, window = "{addr}" }})')
+            placement.place(win, cell, self._hypr_dispatch)
         if not self._b_pending and all(sl.placed or not sl.alive() for sl in (a, b)):
             self._place_timer.stop()
 

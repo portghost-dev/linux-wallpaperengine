@@ -200,8 +200,8 @@ def main(argv: list[str] | None = None) -> int:
     wizard_bridge = WizardBridge(backend, workshop)
     engine.rootContext().setContextProperty("wizardBridge", wizard_bridge)
     app.aboutToQuit.connect(wizard_bridge.close)
-    # the wizard bench joins the one-engine-at-a-time conflict gate: its 4K bench must not
-    # launch alongside a dev-bench / A-B / preview engine (two-engine GPU-crash risk).
+    # peers answer engineBusy() for the Editor bench's refusal, and tell the wizard which
+    # Developer cell is free so its bench window does not land on an exhibit
     dev.set_engine_peers([workshop, bench, wizard_bridge])
     bench.set_engine_peers([workshop, dev, wizard_bridge])
     wizard_bridge.set_engine_peers([workshop, dev, bench])

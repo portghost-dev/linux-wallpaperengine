@@ -211,13 +211,13 @@ def test_overlay(d) -> None:
             "a corner change rides alone"
         assert sent[-1][2].endswith("/lwe/exhibit-a.sock")
         d.setOverlayStats("A", False)
-        assert sent[-1][1] == {"text": s.label, "corner": "top-right"}, \
+        assert sent[-1][1] == {"text": devmod.api_client.overlay_wire_text(s.label), "corner": "top-right"}, \
             "stats off restores the label as the text"
         d.setLabel("A", "A · live label")
-        assert sent[-1][1]["text"] == "A · live label" and not s.relaunching, \
-            "a label edit on a live exhibit rides the socket instead of a relaunch"
+        assert sent[-1][1]["text"] == "A - live label" and not s.relaunching, \
+            "a label edit on a live exhibit rides the socket, folded to what the engine accepts"
         d.setOverlayStats("A", True)
-        assert sent[-1][1]["text"] == "A · live label\nstats pending", \
+        assert sent[-1][1]["text"] == "A - live label\nstats pending", \
             "stats on shows the pending text until the first sample lands"
         del s.live_control
         del s.alive
