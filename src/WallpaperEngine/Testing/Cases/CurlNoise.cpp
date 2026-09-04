@@ -44,3 +44,14 @@ TEST_CASE ("Analytic curl matches the finite difference curl of the same fields"
 	CHECK_THAT (analytic.z, WithinAbs (numeric.z, 2e-3));
     }
 }
+
+TEST_CASE ("Analytic curl holds at large coordinates") {
+    for (int i = 0; i < 200; i++) {
+	const glm::vec3 p (3000.0f + i * 0.47f, -2500.0f + i * 0.29f, 4000.0f + i * 0.61f);
+	const glm::vec3 analytic = curlNoise (p);
+	const glm::vec3 numeric = finiteDifferenceCurl (glm::dvec3 (p));
+	CHECK_THAT (analytic.x, WithinAbs (numeric.x, 5e-3));
+	CHECK_THAT (analytic.y, WithinAbs (numeric.y, 5e-3));
+	CHECK_THAT (analytic.z, WithinAbs (numeric.z, 5e-3));
+    }
+}
