@@ -30,8 +30,8 @@ This fork turns that into a small system of cooperating processes:
                                         │ ($XDG_RUNTIME_DIR/lwe/engine.sock)
                                         ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  linux-wallpaperengine  (the engine; one process, one thread that        │
-│  matters)                                                                │
+│  linux-wallpaperengine  (the engine; one process, one thread owns the    │
+│  loop, a worker pool simulates particles inside the frame)               │
 │                                                                          │
 │  - daemon mode: boots with surfaces up, restores its own persisted       │
 │    state (wallpaper, rotation, settings), or waits idle for work         │
@@ -111,6 +111,15 @@ is re-kicked (keepalive, WaylandOpenGLDriver.cpp::secondsSinceLastRender with th
 `WallpaperApplication.cpp::m_lastRender`) - this restarts the callback chain after
 DPMS-on or hotplug - and `eglSwapInterval(0)` is forced per surface
 (`Render/Drivers/Output/WaylandOutputViewport.cpp::makeCurrent`) so a DPMS-off output can never wedge the swap.
+
+The frame cap paces scene renders, not loop passes. Before updating a viewport the loop
+asks whether that update will run the scene (`WallpaperApplication.cpp::willRenderScene`);
+the first such update in a pass waits out the remainder of `1/cap` since the previous
+pass's first scene render (WaylandOpenGLDriver.cpp::paceRender), and viewports that only
+present a shared mirror frame never sleep. Two counters follow: the pass counter advances
+every pass and keys the once-per-pass scene render (`VideoDriver.h::getPassCounter`); the
+frame counter advances only when a scene rendered and is what `status` reports as
+`frames` (WaylandOpenGLDriver.cpp::getFrameCounter).
 
 At the top of every loop pass, before rendering, the app services its control surface
 (`WallpaperApplication::show()` at WallpaperApplication.cpp::show): the property-reload check, pending socket commands, the rotation
@@ -392,9 +401,14 @@ These are the rules the system depends on; breaking any of them is a bug even if
 compiles:
 
 1. **One thread owns the loop.** Rendering, command execution, and all engine-state
-   changes happen on the main thread. The inherited SDL audio reader thread and
-   callback are the exception; both cross into a stream under its own mutex and
-   leave through a reader-done flag (`Audio/AudioStream.h::markReaderDone`).
+   changes happen on the main thread. Two exceptions: the inherited SDL audio reader
+   thread and callback, which cross into a stream under its own mutex and leave
+   through a reader-done flag (`Audio/AudioStream.h::markReaderDone`); and the
+   particle worker pool (`Render/Utils/WorkPool.cpp::WorkPool`), which the scene hands
+   a batch of particle simulations after the script and animation ticks and joins
+   before any object renders (`Render/Wallpapers/CScene.cpp::simulateParticles`).
+   Workers touch only their own system's particles and never GL, so the loop still
+   owns every frame.
    Nothing in the command path may block the loop: poll timeouts are bounded,
    replies are budgeted, respawns are one-attempt-per-pass. External services are
    polled, never awaited: PulseAudio, the media player over DBus, and the
