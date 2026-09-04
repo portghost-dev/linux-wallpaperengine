@@ -500,6 +500,12 @@ The fork turns the render core into a VRAM-conscious pipeline built on retained 
 - **Coupling**: header-only templates, additive; behavior change is global to all JSON consumers. Self-contained to lift, but it changes semantics everywhere it's included (silent defaulting instead of exceptions).
 - **Tests**: none directly.
 
+### CSS hex colour parsing
+- **What it does**: the colour builder reads `#rgb`, `#rgba`, `#rrggbb` and `#rrggbbaa` through `stoul` with width-aware shifts (Data/Builders/ColorBuilder.cpp::hasAlpha); upstream overflowed `stoi` on any first channel of 0x80 or more and applied eight-digit shifts to six-digit input, so white threw and every six-digit colour lost its red channel.
+- **Where it lives**: modified `Data/Builders/ColorBuilder.cpp`.
+- **Coupling**: self-contained.
+- **Tests**: `Testing/Cases/CssHexColors.cpp`.
+
 ### BinaryReader fail-fast reads + stream-size bounds
 - **What it does**: New private `readExact` (src/WallpaperEngine/Data/Utils/BinaryReader.cpp::readExact) throws via `sLog.exception` when a short read occurs, instead of upstream's silent partially-uninitialized buffers. New `remaining()` (BinaryReader.cpp::remaining) reports bytes left (0 for non-seekable streams). `nextSizedString` rejects a declared length larger than `remaining()` before allocating (BinaryReader.cpp::nextSizedString). `nextNullTerminatedString` was rewritten to read byte-wise via `get()` so a missing terminator stops at EOF instead of spinning on an indeterminate byte (BinaryReader.cpp::nextNullTerminatedString). `nextInt` is now implemented as a cast of `nextUInt32` (BinaryReader.cpp::nextInt).
 - **Where it lives**: modified src/WallpaperEngine/Data/Utils/BinaryReader.cpp/.h (new members declared at BinaryReader.h::BinaryReader).

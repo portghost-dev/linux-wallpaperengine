@@ -604,6 +604,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/PointerMoveGate.cpp
         src/WallpaperEngine/Testing/Cases/WebHelperStartupCost.cpp
         src/WallpaperEngine/Testing/Cases/PropertyParser.cpp
+        src/WallpaperEngine/Testing/Cases/CssHexColors.cpp
         src/WallpaperEngine/Testing/Cases/BinaryParserHardening.cpp
         src/WallpaperEngine/Testing/Cases/InstrumentRegistry.cpp
         src/WallpaperEngine/Testing/Cases/CommandSocket.cpp
