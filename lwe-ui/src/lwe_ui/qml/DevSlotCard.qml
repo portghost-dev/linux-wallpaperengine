@@ -295,6 +295,103 @@ Rectangle {
             }
         }
 
+        Item { width: 1; height: 6 }
+
+        Item {
+            width: parent.width
+            height: 23
+            Label {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+                width: 42
+                text: "Stats"
+                font.pixelSize: 10
+                color: Theme.textTertiary
+            }
+            ThemedSwitch {
+                id: statsSwitch
+                objectName: "devSlotStats"
+                anchors.left: parent.left
+                anchors.leftMargin: 42
+                anchors.verticalCenter: parent.verticalCenter
+                pillWidth: 26
+                pillHeight: 15
+                enabled: card.st.legacy !== true
+                opacity: enabled ? 1 : 0.5
+                checked: card.st.overlayStats === true
+                onToggled: dev.setOverlayStats(card.side, checked)
+                ToolTip.visible: hovered
+                ToolTip.delay: 600
+                ToolTip.text: "Draws FPS, CPU, RAM, VRAM and GPU on the exhibit in place of its label. Applies live."
+            }
+            Rectangle {
+                id: cornerDrop
+                objectName: "devSlotCorner"
+                anchors.left: statsSwitch.right
+                anchors.leftMargin: 8
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                height: 23
+                radius: 5
+                color: Theme.inputWell
+                border.width: 1
+                border.color: Theme.border
+                enabled: card.st.legacy !== true
+                opacity: enabled ? 1 : 0.5
+                Label {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 8
+                    anchors.right: cornerCaret.left
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: card.st.overlayCornerLabel || "Top left"
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    font.pixelSize: 10
+                    font.family: Theme.monoFamily
+                    color: Theme.textPrimary
+                }
+                IconChevron {
+                    id: cornerCaret
+                    anchors.right: parent.right
+                    anchors.rightMargin: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    direction: "down"
+                    size: 10
+                    color: Theme.textSecondary
+                }
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                TapHandler {
+                    onTapped: {
+                        if (cornerMenu.visible) { cornerMenu.close(); return; }
+                        cornerMenu.choices = dev.overlayCorners();
+                        cornerMenu.open();
+                    }
+                }
+                Menu {
+                    id: cornerMenu
+                    property var choices: []
+                    parent: cornerDrop
+                    closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+                    y: cornerDrop.height + 2
+                    width: cornerDrop.width
+                    background: Rectangle {
+                        color: Theme.surfaceVariant
+                        radius: Theme.radiusSm
+                        border.width: 1
+                        border.color: Theme.borderStrong
+                    }
+                    Repeater {
+                        model: cornerMenu.choices
+                        delegate: ThemedMenuItem {
+                            required property var modelData
+                            text: modelData.label
+                            onTriggered: dev.setOverlayCorner(card.side, modelData.value)
+                        }
+                    }
+                }
+            }
+        }
+
         Item { width: 1; height: 7 }
 
         Item {

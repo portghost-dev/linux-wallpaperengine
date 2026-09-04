@@ -1744,17 +1744,9 @@ class Backend(QObject):
         if not pids:
             self._cpu_last = None
             return out
-        # RAM: resident MB summed across the family - the drawn fraction runs against
-        # MemoryHigh, whose cgroup covers exactly these processes
-        try:
-            page_kb = os.sysconf("SC_PAGE_SIZE") // 1024
-            rss_kb = 0
-            for pid in pids:
-                with open(f"/proc/{pid}/statm", "r", encoding="utf-8") as fh:
-                    rss_kb += int(fh.read().split()[1]) * page_kb
-            out["rss"] = rss_kb // 1024
-        except (OSError, ValueError, IndexError):
-            pass
+        # RAM: resident plus swapped MB summed across the family, one total; the drawn
+        # fraction runs against MemoryHigh, whose cgroup covers exactly these processes
+        out["rss"] = sum(_engine_mb_from_proc(pid) for pid in pids)
         # CPU: sum utime+stime ticks across the engine pids, delta over monotonic time
         import time as _time
         ticks = 0

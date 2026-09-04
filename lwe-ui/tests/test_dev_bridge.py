@@ -180,10 +180,71 @@ def test_choices(d) -> None:
     assert any(b["label"] == "alt-engine" for b in bins), "the dev-binaries dir is discovered"
 
 
+def test_overlay(d) -> None:
+    sent: list = []
+    real_request = devmod.api_client.request
+
+    def fake_request(cmd, args=None, wait_done=True, sock=None):
+        sent.append((cmd, dict(args or {}), str(sock)))
+        return {"id": 1, "ok": True, "status": "done", "result": {}}
+
+    devmod.api_client.request = fake_request
+    try:
+        st = d.slotState("A")
+        assert st["overlayStats"] is False and st["overlayCorner"] == "top-left"
+        assert st["overlayCornerLabel"] == "Top left"
+        assert [c["value"] for c in d.overlayCorners()] == \
+            ["top-left", "top-right", "bottom-left", "bottom-right"]
+
+        d.setOverlayCorner("A", "middle")
+        assert d.slotState("A")["overlayCorner"] == "top-left", "unknown corners are refused"
+        d.setOverlayCorner("A", "bottom-right")
+        d.setOverlayStats("A", True)
+        assert not sent, "a slot with no exhibit pushes nothing"
+
+        s = d.slots["A"]
+        s.alive = lambda: True
+        s.live_control = lambda: True
+        d.setOverlayCorner("A", "top-right")
+        assert sent[-1][0] == "set-overlay" and sent[-1][1] == {"corner": "top-right"}, \
+            "a corner change rides alone"
+        assert sent[-1][2].endswith("/lwe/exhibit-a.sock")
+        d.setOverlayStats("A", False)
+        assert sent[-1][1] == {"text": s.label, "corner": "top-right"}, \
+            "stats off restores the label as the text"
+        d.setLabel("A", "A · live label")
+        assert sent[-1][1]["text"] == "A · live label" and not s.relaunching, \
+            "a label edit on a live exhibit rides the socket instead of a relaunch"
+        d.setOverlayStats("A", True)
+        assert sent[-1][1]["text"] == "A · live label\nstats pending", \
+            "stats on shows the pending text until the first sample lands"
+        del s.live_control
+        del s.alive
+
+        text = devmod.DevBridge.overlay_text("A", {"fps": 59.94, "cpu": 3.14, "rss": 412,
+                                                   "swap": 40, "vram": 1210, "gpu": 41})
+        assert text.split("\n") == ["A", "CPU: 3.1%", "GPU: 41.0%", "RAM: 412 MB + 40 MB swap",
+                                    "VRAM: 1210 MB", "FPS: 59.9"]
+        text = devmod.DevBridge.overlay_text("A", {"fps": None, "cpu": None, "rss": -1,
+                                                   "swap": -1, "vram": -1, "gpu": -1})
+        assert text.split("\n")[1:] == ["CPU: --", "GPU: --", "RAM: --", "VRAM: --", "FPS: --"]
+
+        sample, nxt = devmod.DevBridge.sample_exhibit(os.getpid(), "/nonexistent.sock", {})
+        assert sample["fps"] is None and sample["cpu"] is None, "no baseline, no rates"
+        assert sample["rss"] > 0 and sample["swap"] >= 0 and nxt["ticks"] >= 0 and nxt["frames"] is None
+        sample, _ = devmod.DevBridge.sample_exhibit(os.getpid(), "/nonexistent.sock", nxt)
+        assert sample["cpu"] is not None and sample["cpu"] >= 0.0
+    finally:
+        devmod.api_client.request = real_request
+    d.setOverlayStats("A", False)
+    d.setLabel("A", "A · realsync off")
+
+
 def test_persistence(d) -> None:
     d2 = devmod.DevBridge()
     st = d2.slotState("A")
     assert st["label"] == "A · realsync off" and st["scene"] == "111"
+    assert st["overlayCorner"] == "top-right" and st["overlayStats"] is False
     assert d2.trailMode("A") == "Exact"
     assert d2.toggleOn("A", "bloom") is False and d2.toggleOn("A", "prewarm") is True
     assert d2.instrumentOn("A", "LWE_PRESENTTRACE") is True
@@ -396,6 +457,7 @@ def main() -> None:
     test_compose(d, fake_engine, wp_root)
     test_empty_slots_take_the_now_playing_scene(d)
     test_choices(d)
+    test_overlay(d)
     test_persistence(d)
     test_refusals(d)
     test_launch_and_residue(app, d)

@@ -353,6 +353,43 @@ def set_instrument(name: str, enabled: bool,
     return request("set-instrument", {"name": name, "enabled": bool(enabled)}, sock=sock)
 
 
+_OVERLAY_MAX = 512
+_OVERLAY_FOLD = {"\u00b7": "-", "\u2013": "-", "\u2014": "-", "\u2018": "'", "\u2019": "'",
+                 "\u201c": '"', "\u201d": '"', "\u2026": "...", "\u00a0": " ", "\t": " "}
+
+
+def overlay_wire_text(text: str) -> str:
+    """The engine accepts printable ASCII and newlines only, 512 chars at most. Common
+    punctuation folds to its ASCII twin, anything else becomes '?', and an over-long block
+    loses its heading's tail rather than its last line, so a countdown always survives."""
+    folded = "".join(_OVERLAY_FOLD.get(c, c) for c in text)
+    clean = "".join(c if c == "\n" or 0x20 <= ord(c) <= 0x7E else "?" for c in folded)
+    if len(clean) <= _OVERLAY_MAX:
+        return clean
+    lines = clean.split("\n")
+    rest = "\n".join(lines[1:])
+    room = _OVERLAY_MAX - len(rest) - (1 if rest else 0)
+    lines[0] = lines[0][:max(8, room)]
+    out = "\n".join(lines)
+    return out if len(out) <= _OVERLAY_MAX else out[:_OVERLAY_MAX]
+
+
+def set_overlay(text: str | None = None, corner: str | None = None, visible: bool | None = None,
+                sock: "str | os.PathLike | None" = None) -> dict[str, Any] | None:
+    """Change the engine's text overlay on the fly: any subset of text (printable ASCII and
+    newlines, 512 max), corner (top-left, top-right, bottom-left, bottom-right), visible."""
+    args: dict[str, Any] = {}
+    if text is not None:
+        args["text"] = overlay_wire_text(str(text))
+    if corner is not None:
+        args["corner"] = str(corner)
+    if visible is not None:
+        args["visible"] = bool(visible)
+    if not args:
+        return None
+    return request("set-overlay", args, sock=sock)
+
+
 def set_app_conditions(names: list[str], behavior: str) -> dict[str, Any] | None:
     """Replace the engine's running-apps condition wholesale (names are /proc comm)."""
     return request("set-app-conditions",

@@ -28,6 +28,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -36,6 +37,7 @@ from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signa
 from . import constants as C
 from . import api_client
 from . import bench_courier
+from . import procstats
 from .engine import daemon_unit
 from .discovery import objects as objects_disc
 from .discovery import project as project_disc
@@ -140,6 +142,18 @@ FEATURE_TOGGLES = [
 
 TRAIL_MODES = ("Fluid", "Exact")
 TRAIL_ENV = "LWE_TRAILMODE"
+
+# stats overlay corners, wire value and display label; the first is the default
+OVERLAY_CORNERS = (
+    ("top-left", "Top left"), ("top-right", "Top right"),
+    ("bottom-left", "Bottom left"), ("bottom-right", "Bottom right"),
+)
+OVERLAY_TICK_MS = 1000
+
+
+def _overlay_unknown(reply: dict | None) -> bool:
+    """True when the engine answered but does not know set-overlay (a build older than the verb)."""
+    return bool(reply) and not reply.get("ok") and "unknown command" in str(reply.get("error", ""))
 TRAIL_TIP = "Exact reproduces authored trail segments; Fluid interpolates between them."
 
 RENDER_DEBUG_FLAGS = [
@@ -382,10 +396,17 @@ class _Slot:
         self.partial: dict[str, str] = {}
         self.placed = False
         self.place_tries = 0
+        self.overlay_stats = False
+        self.overlay_corner = OVERLAY_CORNERS[0][0]
+        self.overlay_busy = False
+        self.overlay_prev: dict = {}
+        self.overlay_refused = False
+        self.overlay_told = False
 
     def to_json(self) -> dict:
         return {
             "scene": self.scene, "binary": self.binary, "label": self.label,
+            "overlayStats": self.overlay_stats, "overlayCorner": self.overlay_corner,
             "toggles": dict(self.toggles), "trail": self.trail,
             "renderDebug": sorted(self.render_debug), "instruments": sorted(self.instruments),
             "env": [[k, v] for k, v in self.env_lines], "props": [[k, v] for k, v in self.props],
@@ -430,6 +451,9 @@ class _Slot:
                               else (str(x), False) for x in tail][-400:]
         self.last_stopped = bool(d.get("lastStopped"))
         self.api = d.get("api") is not False
+        self.overlay_stats = bool(d.get("overlayStats"))
+        corner = str(d.get("overlayCorner") or "")
+        self.overlay_corner = corner if corner in dict(OVERLAY_CORNERS) else OVERLAY_CORNERS[0][0]
 
     def alive(self) -> bool:
         return self.proc is not None and self.proc.state() != QProcess.ProcessState.NotRunning
@@ -491,6 +515,10 @@ class DevBridge(QObject):
         self._place_timer = QTimer(self)
         self._place_timer.setInterval(400)
         self._place_timer.timeout.connect(self._place_tick)
+        self._overlay_timer = QTimer(self)
+        self._overlay_timer.setInterval(OVERLAY_TICK_MS)
+        self._overlay_timer.timeout.connect(self._overlay_tick)
+        self._overlay_timer.start()
         self._b_due = 0.0
         self._restore()
         self._seed_scenes()
@@ -591,6 +619,8 @@ class DevBridge(QObject):
             "lastStopped": s.last_stopped,
             "lastTs": s.last_ts, "hasResidue": bool(s.last_tail) or s.last_code is not None,
             "trail": s.trail,
+            "overlayStats": s.overlay_stats, "overlayCorner": s.overlay_corner,
+            "overlayCornerLabel": dict(OVERLAY_CORNERS)[s.overlay_corner],
         }
 
     @Slot(str, str)
@@ -641,8 +671,34 @@ class DevBridge(QObject):
         if text == s.label:
             return
         s.label = text
-        if s.alive():
+        if s.alive() and not self._push_overlay(s):
             self._schedule_relaunch(s)
+        self._changed()
+
+    @Slot(result="QVariantList")
+    def overlayCorners(self) -> list:
+        return [{"value": v, "label": lbl} for v, lbl in OVERLAY_CORNERS]
+
+    @Slot(str, bool)
+    def setOverlayStats(self, side: str, on: bool) -> None:
+        s = self._slot(side)
+        if s is None or bool(on) == s.overlay_stats:
+            return
+        s.overlay_stats = bool(on)
+        s.overlay_prev = {}
+        self._push_overlay(s)
+        self._changed()
+        if s.overlay_stats:
+            self._overlay_tick()
+
+    @Slot(str, str)
+    def setOverlayCorner(self, side: str, corner: str) -> None:
+        s = self._slot(side)
+        corner = str(corner or "")
+        if s is None or corner not in dict(OVERLAY_CORNERS) or corner == s.overlay_corner:
+            return
+        s.overlay_corner = corner
+        self._push_overlay(s, corner_only=True)
         self._changed()
 
     @Slot(str, str, result=bool)
@@ -1162,6 +1218,130 @@ class DevBridge(QObject):
         s.relaunching = False
         if s.api and s.skip:
             self._push_skip_when_ready(s, proc, time.monotonic() + 20.0)
+        if s.api:
+            s.overlay_prev = {}
+            s.overlay_refused = False
+            s.overlay_told = False
+            self._push_overlay_when_ready(s, proc, time.monotonic() + 20.0)
+
+    def _push_overlay_when_ready(self, s: _Slot, proc: QProcess, deadline: float) -> None:
+        """The corner and the stats text ride the socket, so they follow the launch as soon
+        as the exhibit answers; the label itself is already in its environment."""
+        if s.proc is not proc or not s.alive():
+            return
+        try:
+            ready = api_client.available(s.sock_path())
+        except Exception:
+            ready = False
+        if ready:
+            self._push_overlay(s, corner_only=not s.overlay_stats)
+            return
+        if time.monotonic() < deadline:
+            QTimer.singleShot(300, lambda: self._push_overlay_when_ready(s, proc, deadline))
+
+    def _push_overlay(self, s: _Slot, corner_only: bool = False) -> bool:
+        """Send the slot's overlay corner, and its label as the text unless the stats
+        sampler owns the text. True when the exhibit took it."""
+        if not s.live_control():
+            return False
+        try:
+            if corner_only:
+                reply = api_client.set_overlay(corner=s.overlay_corner, sock=s.sock_path())
+            elif s.overlay_stats:
+                reply = api_client.set_overlay(text=self.overlay_text(s.label, None),
+                                               corner=s.overlay_corner, sock=s.sock_path())
+            else:
+                reply = api_client.set_overlay(text=s.label, corner=s.overlay_corner,
+                                               sock=s.sock_path())
+        except Exception:
+            reply = None
+        if _overlay_unknown(reply):
+            s.overlay_refused = True
+            self._tell_overlay_refused(s)
+        return bool(reply and reply.get("ok"))
+
+    def _tell_overlay_refused(self, s: _Slot) -> None:
+        if not s.overlay_told:
+            s.overlay_told = True
+            self.consoleLine.emit(
+                s.side, "this build has no set-overlay command; the stats overlay needs an engine "
+                "built from the current tree", True)
+
+    @staticmethod
+    def overlay_text(label: str, sample: dict | None) -> str:
+        """The label as a heading, then one figure per line. CPU is the share of the whole
+        machine, GPU the whole GPU, RAM resident plus swapped."""
+        if not sample:
+            return f"{label}\nstats pending"
+        fps, cpu = sample.get("fps"), sample.get("cpu")
+        rss, swap = sample.get("rss", -1), sample.get("swap", -1)
+        vram, gpu = sample.get("vram", -1), sample.get("gpu", -1)
+        ram = "--" if rss < 0 else f"{rss} MB" + (f" + {swap} MB swap" if swap >= 0 else "")
+        return "\n".join([
+            label,
+            "CPU: " + (f"{cpu:.1f}%" if cpu is not None else "--"),
+            "GPU: " + (f"{gpu:.1f}%" if gpu >= 0 else "--"),
+            "RAM: " + ram,
+            "VRAM: " + (f"{vram} MB" if vram >= 0 else "--"),
+            "FPS: " + (f"{fps:.1f}" if fps is not None else "--"),
+        ])
+
+    @staticmethod
+    def sample_exhibit(pid: int, sock: Path, prev: dict) -> tuple[dict, dict]:
+        """One stats sample for an exhibit: (sample, baseline for the next call). FPS and
+        CPU are deltas against the previous baseline, so the first call reports neither."""
+        now = time.monotonic()
+        frames = None
+        try:
+            st = api_client.status(sock)
+            if st and isinstance(st.get("frames"), int):
+                frames = st["frames"]
+        except Exception:
+            frames = None
+        ticks = procstats.cpu_ticks([pid])
+        sample: dict = {"fps": None, "cpu": None}
+        if prev and frames is not None and prev.get("frames") is not None \
+                and now > prev["t"] and frames >= prev["frames"]:
+            sample["fps"] = round((frames - prev["frames"]) / (now - prev["t"]), 1)
+        if prev and ticks >= 0 and prev.get("ticks", -1) >= 0 and now > prev["t"]:
+            sample["cpu"] = procstats.cpu_percent_of_machine(ticks - prev["ticks"], now - prev["t"])
+        sample["rss"], sample["swap"] = procstats.rss_swap_mb([pid])
+        sample["vram"] = procstats.vram_mb([pid])
+        sample["gpu"] = procstats.gpu_sample()[0]
+        return sample, {"t": now, "frames": frames, "ticks": ticks}
+
+    def _overlay_tick(self) -> None:
+        """Once a second per live exhibit with stats on: sample on a worker thread and push
+        the text over that exhibit's socket from the same thread."""
+        for side in SIDES:
+            s = self.slots[side]
+            if not s.overlay_stats or s.overlay_busy or not s.live_control():
+                continue
+            if s.overlay_refused:
+                self._tell_overlay_refused(s)
+                continue
+            try:
+                pid = int(s.proc.processId())
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if pid <= 0:
+                continue
+            s.overlay_busy = True
+            sock, label, prev = s.sock_path(), s.label, dict(s.overlay_prev)
+
+            def work(s=s, pid=pid, sock=sock, label=label, prev=prev) -> None:
+                try:
+                    sample, nxt = self.sample_exhibit(pid, sock, prev)
+                    s.overlay_prev = nxt
+                    reply = api_client.set_overlay(text=self.overlay_text(label, sample), sock=sock)
+                    if _overlay_unknown(reply):
+                        s.overlay_refused = True
+                except Exception:
+                    pass
+                finally:
+                    s.overlay_busy = False
+
+            threading.Thread(target=work, daemon=True).start()
 
     def _push_skip_when_ready(self, s: _Slot, proc: QProcess, deadline: float) -> None:
         """Isolator flags at launch would keep the objects from being built at all, so an

@@ -154,7 +154,7 @@ Rectangle {
         return (mb > 0 && t > 0) ? Math.min(1, mb / t) : 0;
     }
 
-    // --- RAM: resident MB across the engine family, filled against the unit's MemoryHigh
+    // --- RAM: resident plus swapped MB across the engine family, filled against the unit's MemoryHigh
     // (read from systemd at runtime, never hardcoded; no cap = the bar draws empty) ---
     function ramMb() {
         var s = header.liveStats;
