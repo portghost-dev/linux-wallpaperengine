@@ -614,13 +614,15 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 
 // the cap spaces scene renders: viewports that only present a shared frame never sleep or count
 void WaylandOpenGLDriver::paceRender (const float minimumTime) {
-    const float since = this->getRenderTime () - m_lastRenderStart;
+    if (m_lastRenderStart.has_value ()) {
+	const double since = std::chrono::duration<double> (std::chrono::steady_clock::now () - *m_lastRenderStart).count ();
 
-    if (m_lastRenderStart >= 0.0f && since < minimumTime) {
-	usleep (static_cast<useconds_t> ((minimumTime - since) * 1000000.0f));
+	if (since < minimumTime) {
+	    usleep (static_cast<useconds_t> ((minimumTime - since) * 1000000.0));
+	}
     }
 
-    m_lastRenderStart = this->getRenderTime ();
+    m_lastRenderStart = std::chrono::steady_clock::now ();
 }
 
 Output::Output& WaylandOpenGLDriver::getOutput () { return this->m_output; }

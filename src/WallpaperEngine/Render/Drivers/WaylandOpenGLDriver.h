@@ -9,6 +9,9 @@
 #include <wayland-cursor.h>
 #include <wayland-egl.h>
 
+#include <chrono>
+#include <optional>
+
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Input/Drivers/WaylandMouseInput.h"
@@ -116,7 +119,7 @@ private:
 
     uint32_t m_frameCounter = 0;
     uint32_t m_passCounter = 0;
-    float m_lastRenderStart = -1.0f;
+    std::optional<std::chrono::steady_clock::time_point> m_lastRenderStart;
     ApplicationContext& m_context;
     WaylandMouseInput m_mouseInput;
 
