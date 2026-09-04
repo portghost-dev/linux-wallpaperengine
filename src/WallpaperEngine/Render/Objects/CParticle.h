@@ -152,8 +152,6 @@ public:
     void update (float dt);
 
     [[nodiscard]] bool isChildSystem () const { return m_parentSystem != nullptr; }
-    /** Live particles in this system and its children, as of the last simulation */
-    [[nodiscard]] uint32_t liveParticleCount () const;
 
     void resetPopulation ();
 

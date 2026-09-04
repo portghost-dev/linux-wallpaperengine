@@ -375,16 +375,6 @@ bool CParticle::simulate () {
     return true;
 }
 
-uint32_t CParticle::liveParticleCount () const {
-    uint32_t count = m_particleCount;
-
-    for (const auto& child : m_children) {
-	count += child->liveParticleCount ();
-    }
-
-    return count;
-}
-
 void CParticle::buildSpriteTree () {
     if (!m_useRopeRenderer) {
 	buildSpriteVertices ();
