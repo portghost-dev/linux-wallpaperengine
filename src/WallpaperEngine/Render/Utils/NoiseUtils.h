@@ -126,26 +126,81 @@ inline glm::vec3 perlinNoiseVec3 (const glm::vec3& p) {
     );
 }
 
-// Curl noise - smooth, swirling patterns ideal for fluid-like particle motion
+// The gradient vectors behind perlinGrad, sixteen cases in the same order
+static const glm::vec3 PERLIN_GRADS[16] = { { 1, 1, 0 },  { -1, 1, 0 }, { 1, -1, 0 }, { -1, -1, 0 }, { 1, 0, 1 },  { -1, 0, 1 },
+					    { 1, 0, -1 }, { -1, 0, -1 }, { 0, 1, 1 }, { 0, -1, 1 },  { 0, 1, -1 }, { 0, -1, -1 },
+					    { 1, 1, 0 },  { 0, -1, 1 },  { -1, 1, 0 }, { 0, -1, -1 } };
+
+// Perlin noise with its analytic gradient, single precision
+inline float perlinNoiseGrad (float x, float y, float z, glm::vec3& gradient) {
+    const float fx = std::floor (x);
+    const float fy = std::floor (y);
+    const float fz = std::floor (z);
+    const int X = static_cast<int> (fx) & 255;
+    const int Y = static_cast<int> (fy) & 255;
+    const int Z = static_cast<int> (fz) & 255;
+
+    x -= fx;
+    y -= fy;
+    z -= fz;
+
+    const float u = x * x * x * (x * (x * 6.0f - 15.0f) + 10.0f);
+    const float v = y * y * y * (y * (y * 6.0f - 15.0f) + 10.0f);
+    const float w = z * z * z * (z * (z * 6.0f - 15.0f) + 10.0f);
+    const float du = 30.0f * x * x * (x * (x - 2.0f) + 1.0f);
+    const float dv = 30.0f * y * y * (y * (y - 2.0f) + 1.0f);
+    const float dw = 30.0f * z * z * (z * (z - 2.0f) + 1.0f);
+
+    const int A = PERLIN_PERM[X] + Y;
+    const int AA = PERLIN_PERM[A] + Z;
+    const int AB = PERLIN_PERM[A + 1] + Z;
+    const int B = PERLIN_PERM[X + 1] + Y;
+    const int BA = PERLIN_PERM[B] + Z;
+    const int BB = PERLIN_PERM[B + 1] + Z;
+
+    const glm::vec3 ga = PERLIN_GRADS[0xF & PERLIN_PERM[AA]];
+    const glm::vec3 gb = PERLIN_GRADS[0xF & PERLIN_PERM[BA]];
+    const glm::vec3 gc = PERLIN_GRADS[0xF & PERLIN_PERM[AB]];
+    const glm::vec3 gd = PERLIN_GRADS[0xF & PERLIN_PERM[BB]];
+    const glm::vec3 ge = PERLIN_GRADS[0xF & PERLIN_PERM[AA + 1]];
+    const glm::vec3 gf = PERLIN_GRADS[0xF & PERLIN_PERM[BA + 1]];
+    const glm::vec3 gg = PERLIN_GRADS[0xF & PERLIN_PERM[AB + 1]];
+    const glm::vec3 gh = PERLIN_GRADS[0xF & PERLIN_PERM[BB + 1]];
+
+    const float a = glm::dot (ga, glm::vec3 (x, y, z));
+    const float b = glm::dot (gb, glm::vec3 (x - 1, y, z));
+    const float c = glm::dot (gc, glm::vec3 (x, y - 1, z));
+    const float d = glm::dot (gd, glm::vec3 (x - 1, y - 1, z));
+    const float e = glm::dot (ge, glm::vec3 (x, y, z - 1));
+    const float f = glm::dot (gf, glm::vec3 (x - 1, y, z - 1));
+    const float g = glm::dot (gg, glm::vec3 (x, y - 1, z - 1));
+    const float h = glm::dot (gh, glm::vec3 (x - 1, y - 1, z - 1));
+
+    const float k1 = b - a;
+    const float k2 = c - a;
+    const float k3 = e - a;
+    const float k4 = a - b - c + d;
+    const float k5 = a - c - e + g;
+    const float k6 = a - b - e + f;
+    const float k7 = -a + b + c - d + e - f - g + h;
+
+    gradient = ga + u * (gb - ga) + v * (gc - ga) + w * (ge - ga) + u * v * (ga - gb - gc + gd)
+	+ v * w * (ga - gc - ge + gg) + w * u * (ga - gb - ge + gf) + u * v * w * (-ga + gb + gc - gd + ge - gf - gg + gh);
+    gradient.x += du * (k1 + k4 * v + k6 * w + k7 * v * w);
+    gradient.y += dv * (k2 + k4 * u + k5 * w + k7 * u * w);
+    gradient.z += dw * (k3 + k5 * v + k6 * u + k7 * u * v);
+
+    return a + k1 * u + k2 * v + k3 * w + k4 * u * v + k5 * v * w + k6 * w * u + k7 * u * v * w;
+}
+
+// Curl of the three offset noise fields, from their analytic gradients
 inline glm::vec3 curlNoise (const glm::vec3& p) {
-    const float e = 1e-4f;
+    glm::vec3 g1, g2, g3;
+    perlinNoiseGrad (p.x, p.y, p.z, g1);
+    perlinNoiseGrad (p.x + 89.2f, p.y + 33.1f, p.z + 57.3f, g2);
+    perlinNoiseGrad (p.x + 100.3f, p.y + 120.1f, p.z + 142.2f, g3);
 
-    glm::vec3 dx (e, 0, 0);
-    glm::vec3 dy (0, e, 0);
-    glm::vec3 dz (0, 0, e);
-
-    glm::vec3 x0 = perlinNoiseVec3 (p - dx);
-    glm::vec3 x1 = perlinNoiseVec3 (p + dx);
-    glm::vec3 y0 = perlinNoiseVec3 (p - dy);
-    glm::vec3 y1 = perlinNoiseVec3 (p + dy);
-    glm::vec3 z0 = perlinNoiseVec3 (p - dz);
-    glm::vec3 z1 = perlinNoiseVec3 (p + dz);
-
-    float x = (y1.z - y0.z) - (z1.y - z0.y);
-    float y = (z1.x - z0.x) - (x1.z - x0.z);
-    float z = (x1.y - x0.y) - (y1.x - y0.x);
-
-    return glm::vec3 (x, y, z) / (2.0f * e);
+    return { g3.y - g2.z, g1.z - g3.x, g2.x - g1.y };
 }
 
 } // namespace WallpaperEngine::Render::Utils
