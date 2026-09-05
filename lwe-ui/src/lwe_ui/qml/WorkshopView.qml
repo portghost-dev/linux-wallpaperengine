@@ -221,9 +221,12 @@ Item {
         // property (this list scrolls under the hero, no clipped-last-row problem), so it
         // stays there; only the base 16:10 sizing is shared.
         readonly property int gap: Theme.spacingLg
-        readonly property int minTile: 216
+        // target tile: 176 compact; flagship ramps 216 at a 1280 window to 260 at 2560 (R55)
+        readonly property int targetTile: Theme.compact ? 176
+                                        : Math.round(Math.max(216, Math.min(260, 216 + (width - 1200) * 44 / 1280)))
         readonly property int maxTile: 320
-        readonly property int cols: Math.max(1, Math.floor(width / (minTile + gap)))
+        // columns: the count whose tiles land nearest the target width (R54), same as the library
+        readonly property int cols: Math.max(1, Math.round(width / (targetTile + gap)))
         readonly property int tileW: Math.min(maxTile, Math.floor(width / cols) - gap)
         readonly property int thumbH: Math.round(tileW * 10 / 16)
         readonly property int tileH: thumbH + 34 + 2

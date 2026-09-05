@@ -18,6 +18,13 @@ Item {
     // open, the slot under the pointer is marked, the model holds the provisional order
     property string dragId: ""
     property var dragSource: null
+    // the lifted card's face, copied at lift time, so the ghost never depends on the delegate
+    property string dragTitle: ""
+    property url dragThumb: ""
+    property bool dragInPlaylist: false
+    property bool dragFavorite: false
+    property string dragType: ""
+    property bool dragMissing: false
     property int liftedRow: -1     // the lifted card's own open slot in the provisional order
     property int hoverRow: -1
     property real pointerX: 0
@@ -27,9 +34,29 @@ Item {
         if (!backend.beginDrag(card.wpId))
             return;
         dragSource = card;
+        dragTitle = card.title;
+        dragThumb = card.thumb;
+        dragInPlaylist = card.inPlaylist;
+        dragFavorite = card.favorite;
+        dragType = card.wpType;
+        dragMissing = card.missing;
         dragId = card.wpId;
         liftedRow = backend.orderModel.rowOf(card.wpId);
         hoverRow = liftedRow;
+    }
+    // the grid row under a point in the grid's own coordinates, -1 outside, -2 in the band
+    function rowAt(px, py) {
+        if (px < 0 || px >= grid.width || py < 0 || py >= grid.height)
+            return -1;
+        var cx = px + grid.contentX, cy = py + grid.contentY;
+        var col = Math.min(grid.cols - 1, Math.floor(cx / grid.cellWidth));
+        var band = grid.bandTop();
+        if (band >= 0 && cy >= band && cy < band + grid.gap + grid.poolOffset + 1)
+            return -2;
+        var laidY = band >= 0 && cy >= band ? cy - grid.poolOffset : cy;
+        var r = Math.floor((laidY - grid.originY) / grid.cellHeight);
+        var row = Math.max(0, r) * grid.cols + col;
+        return row >= grid.count ? grid.count : row;
     }
     function moveDrag(sceneX, sceneY) {
         var p = root.mapFromItem(null, sceneX, sceneY);
@@ -41,23 +68,7 @@ Item {
         if (dragId === "")
             return;
         var p = grid.mapFromItem(root, pointerX, pointerY);
-        var row = -1;
-        if (p.x >= 0 && p.x < grid.width && p.y >= 0 && p.y < grid.height) {
-            var cx = p.x + grid.contentX, cy = p.y + grid.contentY;
-            var col = Math.min(grid.cols - 1, Math.floor(cx / grid.cellWidth));
-            // pool rows sit poolOffset lower than the view lays them; the view's own hit test
-            // knows the laid position, the band and the pool shift are ours to undo
-            var band = grid.bandTop();
-            if (band >= 0 && cy >= band && cy < band + grid.gap + grid.poolOffset + 1) {
-                row = -2;
-            } else {
-                var laidY = band >= 0 && cy >= band ? cy - grid.poolOffset : cy;
-                var r = Math.floor((laidY - grid.originY) / grid.cellHeight);
-                row = Math.max(0, r) * grid.cols + col;
-                if (row >= grid.count)
-                    row = grid.count;   // below the last row: over the pool
-            }
-        }
+        var row = rowAt(p.x, p.y);
         if (row !== hoverRow) {
             hoverRow = row;
             backend.dragOver(row);
@@ -89,6 +100,7 @@ Item {
         } catch (e) {
             console.warn("drop failed:", e);
         }
+        grid.returnToBounds();
     }
 
     // setScope lives on the FILTER MODEL, not Backend (calling backend.setScope threw
@@ -114,13 +126,12 @@ Item {
                 return -1;
             return originY + memberRows * cellHeight - gap;
         }
-        readonly property int minTile: Theme.compact ? 176 : 216   // three across at 640 (D14, R42)
+        // columns: the count whose tiles land nearest the target width (R54), never a floor
+        // target tile: 176 compact; flagship ramps 216 at a 1280 window to 260 at 2560 (R55)
+        readonly property int targetTile: Theme.compact ? 176
+                                        : Math.round(Math.max(216, Math.min(260, 216 + (width - 1200) * 44 / 1280)))
         readonly property int maxTile: 320
-        // auto-fit: GridView cells are uniform and each reserves tile+gap (the last cell's
-        // trailing gap is the right padding, mirroring the left margin), so the most
-        // columns that keep tiles >= minTile is floor(width / (minTile + gap)). cellWidth =
-        // width/cols then makes GridView lay exactly that many columns filling the width.
-        readonly property int cols: Math.max(1, Math.floor(width / (minTile + gap)))
+        readonly property int cols: Math.max(1, Math.round(width / (targetTile + gap)))
         onColsChanged: backend.orderModel.setColumns(cols)
         Component.onCompleted: backend.orderModel.setColumns(cols)
         readonly property int tileW: Math.min(maxTile, cellWidth - gap)
@@ -153,7 +164,10 @@ Item {
         // rounding pixel (which would clip the last row's bottom border)
         cellHeight: Math.floor(thumbH) + 34 + gap
         model: backend.orderModel
-        cacheBuffer: cellHeight * 4
+        // every delegate stays alive while a card is lifted: the drag's handler lives on the
+        // lifted delegate, and the view would otherwise recycle it as the grid scrolls
+        cacheBuffer: root.dragId !== "" ? Math.max(contentHeight, cellHeight * 4) : cellHeight * 4
+        interactive: root.dragId === ""   // no flicking under a lifted card
 
         // grid-removal contract (v2.3.1): the trashed card fades, the rest reflow to close the
         // gap. Shared timings from Motion so every grid removes the same way.
@@ -195,7 +209,9 @@ Item {
             required property int index
 
             visible: !model.filler
-            transform: Translate { y: index >= backend.orderModel.hairlineIndex && backend.orderModel.hairlineIndex >= 0 ? grid.poolOffset : 0 }
+            // pool rows sit poolOffset below their laid position (the hairline band)
+            readonly property real poolShift: index >= backend.orderModel.hairlineIndex && backend.orderModel.hairlineIndex >= 0 ? grid.poolOffset : 0
+            transform: Translate { y: poolShift }
             lifted: root.dragId !== "" && model.id === root.dragId
             onDragStarted: function(card) { root.startDrag(card); }
             onDragMoved: function(sceneX, sceneY) { root.moveDrag(sceneX, sceneY); }
@@ -236,7 +252,7 @@ Item {
 
     // the lifted card: scale 0.75, top-left at pointer + (12, 12), face identical to rest
     WallpaperCard {
-        id: lift
+        id: liftGhost
         visible: root.dragId !== ""
         x: root.pointerX + 12
         y: root.pointerY + 12
@@ -247,13 +263,13 @@ Item {
         scale: 0.75
         transformOrigin: Item.TopLeft
         enabled: false
-        wpId: root.dragSource ? root.dragSource.wpId : ""
-        title: root.dragSource ? root.dragSource.title : ""
-        thumb: root.dragSource ? root.dragSource.thumb : ""
-        inPlaylist: root.dragSource ? root.dragSource.inPlaylist : false
-        favorite: root.dragSource ? root.dragSource.favorite : false
-        wpType: root.dragSource ? root.dragSource.wpType : ""
-        missing: root.dragSource ? root.dragSource.missing : false
+        wpId: root.dragId
+        title: root.dragTitle
+        thumb: root.dragThumb
+        inPlaylist: root.dragInPlaylist
+        favorite: root.dragFavorite
+        wpType: root.dragType
+        missing: root.dragMissing
     }
 
     // auto-scroll within 40 px of the grid's top or bottom edge, up to 12 px per frame
@@ -272,9 +288,12 @@ Item {
             // so a large move sweeps the library
             var band = 40, maxStep = 12;
             var p = grid.mapFromItem(root, root.pointerX, root.pointerY);
-            var maxY = Math.max(0, grid.contentHeight - grid.height);
-            if (p.y < band && grid.contentY > 0)
-                grid.contentY = Math.max(0, grid.contentY - maxStep * Math.min(1, (band - p.y) / band));
+            // the view moves its origin when rows shift above the viewport; the content lies
+            // in [originY, originY + contentHeight], not from zero
+            var minY = grid.originY;
+            var maxY = Math.max(minY, grid.originY + grid.contentHeight - grid.height);
+            if (p.y < band && grid.contentY > minY)
+                grid.contentY = Math.max(minY, grid.contentY - maxStep * Math.min(1, (band - p.y) / band));
             else if (p.y > grid.height - band && grid.contentY < maxY)
                 grid.contentY = Math.min(maxY, grid.contentY + maxStep * Math.min(1, (p.y - (grid.height - band)) / band));
             root.updateHover();

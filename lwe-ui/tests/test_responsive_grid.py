@@ -72,7 +72,7 @@ def main() -> None:
     assert int(win.property("minimumHeight")) == 640
 
     prev_cols = 0
-    for w, h in ((1080, 640), (1280, 720), (1600, 900), (1920, 1080), (3840, 2160)):
+    for w, h in ((640, 700), (1080, 640), (1280, 720), (1600, 900), (1920, 1080), (3840, 2160)):
         win.setProperty("width", w)
         win.setProperty("height", h)
         QTest.qWait(40)
@@ -85,7 +85,16 @@ def main() -> None:
         thumb = float(grid.property("thumbH"))
         rendered = int(gw / cw) if cw else 0
 
-        assert 216 <= tile <= 320, f"@{w}px tile {tile} out of [216,320]"
+        # R54: the column count is the one whose tiles land nearest the target, never a floor
+        target = int(grid.property("targetTile"))
+        gap = int(grid.property("gap"))
+        def miss(n):
+            return abs(gw / n - gap - target) if n >= 1 else float("inf")
+        assert miss(cols) <= min(miss(cols - 1), miss(cols + 1)), \
+            f"@{w}px {cols} columns (tile {tile}) is not the count nearest the {target}px target"
+        assert tile <= 320, f"@{w}px tile {tile} over the 320 cap"
+        if w == 640:
+            assert cols == 3, f"640 window must be three across (R42), got {cols}"
         assert abs(base_thumb - tile * 10 / 16) < 1.0, f"@{w}px thumb not 16:10: {base_thumb} vs {tile*10/16}"
         assert abs(thumb - base_thumb) <= base_thumb * 0.10 + 0.5, \
             f"@{w}px optical flex exceeds +/-10%: base {base_thumb} -> {thumb}"
@@ -130,7 +139,7 @@ def main() -> None:
         ws_tile = int(ws.property("tileW")); ws_thumb = int(ws.property("thumbH"))
         assert ws_tile == lib_tile, f"@{w}px workshop tile {ws_tile} != library {lib_tile}"
         assert abs(ws_thumb - lib_thumb) <= 1, f"@{w}px workshop thumb {ws_thumb} != library {lib_thumb}"
-        assert 216 <= ws_tile <= 320, f"@{w}px workshop tile out of range: {ws_tile}"
+        assert ws_tile <= 320, f"@{w}px workshop tile over the 320 cap: {ws_tile}"  # R54: sizing is the library rule
     print("  workshop/library tile parity holds at 1080, 1600, 3840")
 
     print("OK test_responsive_grid - auto-fit columns / 16:10 aspect lock / <=10% optical "

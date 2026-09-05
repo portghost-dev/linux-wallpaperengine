@@ -23,7 +23,7 @@ Rectangle {
     // lifted: this card is being dragged; its slot stays open and the grid draws the outline
     property bool lifted: false
     readonly property bool lifting: lift.active
-    // a release the window never saw (pointer left it) leaves the handler armed; this disarms it
+    // a release the window never saw leaves the handler armed; this disarms it
     function cancelLift() { lift.enabled = false; lift.enabled = true; }
 
     signal playlistToggled(string id, bool on)
@@ -45,11 +45,12 @@ Rectangle {
     HoverHandler { id: hover }
 
     // a press anywhere but the hover chrome lifts the card once the pointer has travelled the
-    // threshold; a release before that is the normal tap
+    // threshold; a release before that is the normal tap. Nothing takes the grab from a lift.
     DragHandler {
         id: lift
         target: null
         dragThreshold: 24
+        grabPermissions: PointerHandler.CanTakeOverFromItems | PointerHandler.CanTakeOverFromHandlersOfDifferentType
         onActiveChanged: {
             if (active) {
                 if (card.pressOnChrome(centroid.pressPosition)) {
