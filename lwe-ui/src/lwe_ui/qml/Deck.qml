@@ -106,7 +106,7 @@ Rectangle {
 
     // --- left (idle / engine-off / engine-down): now playing ----------------------------
     // The left block is exempt from the off-state dimming (F24): when the engine is off or the
-    // engine is down the status dot + secondary line render at full opacity so they stay readable.
+    // engine is down the status line renders at full opacity so it stays readable.
     Row {
         id: leftIdle
         objectName: "deckLeftIdle"
@@ -116,14 +116,6 @@ Rectangle {
         spacing: Theme.spacingMd
         visible: !deck.testing && !deck.wizBenching && !deck.devHold
         readonly property string showingWid: deck._field("current")
-
-        Rectangle {
-            objectName: "deckStatusDot"
-            width: 6; height: 6; radius: 3
-            visible: deck.engineOff || deck.engineDown
-            color: deck.engineDown ? Theme.danger : Theme.textTertiary
-            anchors.verticalCenter: parent.verticalCenter
-        }
 
         Label {
             objectName: "deckStatusText"

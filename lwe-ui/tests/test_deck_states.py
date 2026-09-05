@@ -237,7 +237,7 @@ def main() -> None:
         assert left_idle.property("visible") is True, "the left slot shows the status message when off"
         assert abs(float(left_idle.property("opacity")) - 1.0) < 0.01, \
             "F24: the left block must stay at full opacity while off (exempt from dimming)"
-        assert _find(deck, "deckStatusDot").property("visible") is True, "off-state status dot must show"
+        assert _find(deck, "deckStatusDot") is None, "no status dot before the engine line"
         status_text = _find(deck, "deckStatusText")
         assert status_text.property("visible") is True and status_text.property("text") == "Engine off", \
             "off-state 13px secondary line must read 'Engine off'"
