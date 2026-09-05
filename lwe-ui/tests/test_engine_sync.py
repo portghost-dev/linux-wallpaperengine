@@ -35,7 +35,8 @@ _API.available = lambda: False
 _API.show = lambda wid, wait_done=False, **kw: None
 _API.status = lambda: None
 _API.ping = lambda: None
-_API.rotate_set = lambda *a, **kw: None
+_API.playlist_set = lambda *a, **kw: None
+_API.lanes_set = lambda lanes: None
 _API.next_wallpaper = lambda: None
 _API.prev_wallpaper = lambda: None
 _API.set_fullscreen = lambda behavior: None
@@ -74,13 +75,19 @@ class EngineSyncTest(unittest.TestCase):
         _API.available = lambda: True
         _API.status = lambda: None
         self.pushes: list[dict] = []
+        self.binds: list[list[dict]] = []
 
-        def _rotate_set(entries, interval_s, order, enabled, avoid_repeat=True, label=""):
-            self.pushes.append({"entries": entries, "interval_s": interval_s, "order": order,
-                                "enabled": enabled, "label": label})
+        def _playlist_set(slug, entries, order, interval_s, part=1, of=1, avoid_repeat=True, label=""):
+            self.pushes.append({"slug": slug, "entries": entries, "interval_s": interval_s,
+                                "order": order, "part": part, "of": of, "label": label})
             return {"id": 1, "ok": True, "status": "done"}
 
-        _API.rotate_set = _rotate_set
+        def _lanes_set(lanes):
+            self.binds.append(lanes)
+            return {"id": 1, "ok": True, "status": "done", "result": {"lanes": []}}
+
+        _API.playlist_set = _playlist_set
+        _API.lanes_set = _lanes_set
         self.backend = models.Backend()
 
     def _seed_playlist(self, members: list[str], mode: str = "sequential", interval: int = 300) -> None:
@@ -95,7 +102,7 @@ class EngineSyncTest(unittest.TestCase):
 
     def test_payload_resolves_active_playlist(self) -> None:
         self._seed_playlist(["111", "222"])
-        entries, interval, order, enabled, label = self.backend._engine_rotation_payload()
+        entries, interval, order, enabled, label = self.backend._playlist_payload(playlists.active_slug())
         self.assertEqual([e["ui_id"] for e in entries], ["111", "222"])
         self.assertEqual(interval, 300)
         self.assertEqual(order, "sequential")
@@ -107,17 +114,49 @@ class EngineSyncTest(unittest.TestCase):
 
     def test_static_mode_and_rotation_toggle_disable(self) -> None:
         self._seed_playlist(["111"], mode="static")
-        self.assertFalse(self.backend._engine_rotation_payload()[3], "static = no rotation")
+        payload = self.backend._playlist_payload(playlists.active_slug())
+        self.assertFalse(payload[3], "static = no timer")
+        self.assertEqual(payload[2], "static", "static is a real engine order: next still walks")
         self._seed_playlist(["111"], mode="shuffle")
         settings.save({**settings.load(), "ROTATION_ENABLED": False})
-        self.assertFalse(self.backend._engine_rotation_payload()[3], "user pause wins")
+        self.assertFalse(self.backend._playlist_payload(playlists.active_slug())[3], "user pause wins")
 
     def test_engine_owns_the_schedule(self) -> None:
         """The push carries enabled=True for a live shuffle playlist (one scheduler: the engine)."""
         self._seed_playlist(["111", "222"], mode="shuffle")
         self.backend._sync_engine()
         self.assertEqual(len(self.pushes), 1)
-        self.assertTrue(self.pushes[0]["enabled"], "the engine owns the schedule")
+        self.assertEqual((self.pushes[0]["part"], self.pushes[0]["of"]), (1, 1))
+        self.assertEqual(self.pushes[0]["slug"], playlists.active_slug())
+        self.assertEqual([e["ui_id"] for e in self.pushes[0]["entries"]], ["111", "222"])
+        self.assertEqual(self.binds, [[{"id": "all", "playlist": playlists.active_slug(), "enabled": True}]],
+                         "the engine owns the schedule; the panel binds the lane")
+
+    def test_member_order_is_the_stored_order(self) -> None:
+        self._seed_playlist(["222", "111"], mode="sequential")
+        self.backend._sync_engine()
+        self.assertEqual([e["ui_id"] for e in self.pushes[0]["entries"]], ["222", "111"])
+
+    def test_large_set_goes_in_numbered_parts_then_binds(self) -> None:
+        self._seed_playlist(["111", "222"], mode="sequential")
+        saved = models.C.ENGINE_ROTATE_MAX_BYTES
+        models.C.ENGINE_ROTATE_MAX_BYTES = 400  # one resolved entry per part
+        try:
+            self.backend._sync_engine()
+        finally:
+            models.C.ENGINE_ROTATE_MAX_BYTES = saved
+        self.assertEqual([(p["part"], p["of"]) for p in self.pushes], [(1, 2), (2, 2)])
+        self.assertEqual({p["slug"] for p in self.pushes}, {playlists.active_slug()})
+        self.assertEqual(len(self.binds), 1, "bound once, after the last part")
+
+    def test_a_refused_part_never_binds(self) -> None:
+        self._seed_playlist(["111"])
+        _API.playlist_set = lambda *a, **kw: {"id": 1, "ok": False, "error": "part 1 of 1 arrived out of order"}
+        self.backend._sync_engine()
+        self.assertEqual(self.binds, [])
+        _API.playlist_set = lambda *a, **kw: None
+        self.backend._sync_engine()
+        self.assertEqual(self.binds, [], "an unreachable engine binds nothing either")
 
     def test_rotate_next_uses_engine_verb(self) -> None:
         calls = []

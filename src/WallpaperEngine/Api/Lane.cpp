@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <random>
 
 using namespace WallpaperEngine::Api;
 
@@ -39,54 +40,224 @@ std::string WallpaperEngine::Api::displayId (const std::string& id, const std::s
 
 std::string WallpaperEngine::Api::displayId (const Entry& entry) { return displayId (entry.id, entry.uiId); }
 
-std::size_t WallpaperEngine::Api::pickNext (Lane& lane, const Playlist& playlist, std::mt19937& rng) {
-    const std::size_t n = playlist.entries.size ();
+namespace {
+bool isShuffle (const Playlist& playlist) { return playlist.order == "shuffle" || playlist.order == "random"; }
+
+std::vector<std::string> orderedIds (const Playlist& playlist) {
+    std::vector<std::string> ids;
+
+    for (const auto& entry : playlist.entries) {
+	const auto id = displayId (entry);
+
+	if (std::find (ids.begin (), ids.end (), id) == ids.end ()) {
+	    ids.push_back (id);
+	}
+    }
+
+    return ids;
+}
+
+std::size_t entryIndex (const Playlist& playlist, const std::string& id) {
+    for (std::size_t i = 0; i < playlist.entries.size (); i++) {
+	if (displayId (playlist.entries[i]) == id) {
+	    return i;
+	}
+    }
+
+    return SIZE_MAX;
+}
+
+bool walkIsStale (const Lane& lane, const Playlist& playlist) {
+    if (lane.walk.empty ()) {
+	return !playlist.entries.empty ();
+    }
+
+    const auto unknown = [&] (const std::string& id) { return entryIndex (playlist, id) == SIZE_MAX; };
+    return std::any_of (lane.walk.begin (), lane.walk.end (), unknown)
+	|| std::any_of (lane.nextCycle.begin (), lane.nextCycle.end (), unknown);
+}
+
+std::vector<std::string> drawCycle (const Playlist& playlist, std::mt19937& rng) {
+    auto ids = orderedIds (playlist);
+    std::shuffle (ids.begin (), ids.end (), rng);
+    return ids;
+}
+
+/** Rebuild the walk for the playlist's current content, keeping the cursor's place by identity.
+ *  Shuffle keeps the ids it already ordered, in the walk and in the drawn next cycle alike, and
+ *  shuffles only the new ids onto their ends. */
+void reseat (Lane& lane, const Playlist& playlist, std::mt19937& rng) {
+    const auto oldWalk = lane.walk;
+    const int oldCursor = lane.cursor;
+    const auto ids = orderedIds (playlist);
+    const auto survivorsThenFresh = [&] (const std::vector<std::string>& old) {
+	std::vector<std::string> out;
+
+	for (const auto& id : old) {
+	    if (std::find (ids.begin (), ids.end (), id) != ids.end ()
+		&& std::find (out.begin (), out.end (), id) == out.end ()) {
+		out.push_back (id);
+	    }
+	}
+
+	std::vector<std::string> fresh;
+
+	for (const auto& id : ids) {
+	    if (std::find (out.begin (), out.end (), id) == out.end ()) {
+		fresh.push_back (id);
+	    }
+	}
+
+	std::shuffle (fresh.begin (), fresh.end (), rng);
+	out.insert (out.end (), fresh.begin (), fresh.end ());
+	return out;
+    };
+
+    if (isShuffle (playlist)) {
+	lane.walk = survivorsThenFresh (oldWalk);
+	lane.nextCycle = lane.nextCycle.empty () ? std::vector<std::string> {} : survivorsThenFresh (lane.nextCycle);
+    } else {
+	lane.walk = ids;
+	lane.nextCycle.clear ();
+    }
+
+    lane.cursor = -1;
+
+    if (lane.walk.empty ()) {
+	lane.nextCycle.clear ();
+	return;
+    }
+
+    if (oldWalk.empty ()) {
+	seatOnCurrent (lane, playlist);
+	return;
+    }
+
+    if (oldCursor >= 0) {
+	for (std::size_t j = static_cast<std::size_t> (oldCursor); j < oldWalk.size (); j++) {
+	    const auto it = std::find (lane.walk.begin (), lane.walk.end (), oldWalk[j]);
+
+	    if (it != lane.walk.end ()) {
+		const int index = static_cast<int> (it - lane.walk.begin ());
+		// the cursor's own item keeps its seat; a removed one yields so the first
+		// survivor after it plays next
+		lane.cursor = j == static_cast<std::size_t> (oldCursor) ? index : index - 1;
+		break;
+	    }
+
+	    if (j + 1 == oldWalk.size ()) {
+		lane.cursor = static_cast<int> (lane.walk.size ()) - 1;
+	    }
+	}
+    }
+
+    // the drawn next cycle must still exist when the cursor sits on the last item
+    if (isShuffle (playlist) && lane.nextCycle.empty () && lane.cursor + 1 == static_cast<int> (lane.walk.size ())) {
+	lane.nextCycle = drawCycle (playlist, rng);
+    }
+}
+
+/** The position the walk moves to next, in walk + nextCycle coordinates. False when shuffle
+ *  would first have to draw a cycle that does not exist yet. */
+bool stepAhead (const Lane& lane, const Playlist& playlist, std::size_t& pos) {
+    const std::size_t n = lane.walk.size ();
+    const std::size_t total = n + lane.nextCycle.size ();
 
     if (n == 0) {
+	return false;
+    }
+
+    auto forward = [&] (std::size_t from, std::size_t& to) {
+	to = from + 1;
+
+	if (to < total) {
+	    return true;
+	}
+
+	if (isShuffle (playlist)) {
+	    return false;
+	}
+
+	to = 0;
+	return true;
+    };
+
+    const std::size_t start = lane.cursor < 0 ? total - 1 : static_cast<std::size_t> (lane.cursor);
+
+    if (lane.cursor < 0) {
+	pos = 0;
+    } else if (!forward (start, pos)) {
+	return false;
+    }
+
+    const auto at = [&] (std::size_t p) { return p < n ? lane.walk[p] : lane.nextCycle[p - n]; };
+
+    if (playlist.avoidRepeat && lane.walk.size () > 1 && at (pos) == displayId (lane.current)) {
+	return forward (pos, pos);
+    }
+
+    return true;
+}
+} // namespace
+
+std::size_t WallpaperEngine::Api::pickNext (Lane& lane, const Playlist& playlist, std::mt19937& rng) {
+    if (playlist.entries.empty ()) {
+	lane.walk.clear ();
+	lane.nextCycle.clear ();
+	lane.cursor = -1;
 	return SIZE_MAX;
     }
 
-    if (n == 1) {
-	return 0;
+    if (walkIsStale (lane, playlist)) {
+	reseat (lane, playlist, rng);
     }
 
-    std::size_t pick = SIZE_MAX;
+    std::size_t pos = 0;
 
-    if (playlist.order == "sequential" || playlist.order == "static") {
-	lane.seqIndex = (lane.seqIndex + 1) % static_cast<int> (n);
-	pick = static_cast<std::size_t> (lane.seqIndex);
-    } else if (playlist.order == "random") {
-	pick = rng () % n;
-    } else {
-	if (lane.perm.size () != n || lane.permIndex >= lane.perm.size ()
-	    || std::any_of (lane.perm.begin (), lane.perm.end (), [n] (std::size_t v) { return v >= n; })) {
-	    lane.perm.resize (n);
-	    std::iota (lane.perm.begin (), lane.perm.end (), 0);
-	    std::shuffle (lane.perm.begin (), lane.perm.end (), rng);
-	    lane.permIndex = 0;
-	}
+    if (!stepAhead (lane, playlist, pos)) {
+	lane.nextCycle = drawCycle (playlist, rng);
 
-	pick = lane.perm[lane.permIndex++];
-    }
-
-    const auto current = displayId (lane.current);
-
-    if (playlist.avoidRepeat && !current.empty ()) {
-	int guard = 0;
-
-	while (guard < 8 && displayId (playlist.entries[pick]) == current) {
-	    if (playlist.order == "sequential" || playlist.order == "static") {
-		lane.seqIndex = (lane.seqIndex + 1) % static_cast<int> (n);
-		pick = static_cast<std::size_t> (lane.seqIndex);
-	    } else {
-		pick = rng () % n;
-	    }
-
-	    guard++;
+	if (!stepAhead (lane, playlist, pos)) {
+	    return SIZE_MAX;
 	}
     }
 
-    return pick;
+    if (pos >= lane.walk.size ()) {
+	pos -= lane.walk.size ();
+	lane.walk = lane.nextCycle;
+	lane.nextCycle.clear ();
+    }
+
+    lane.cursor = static_cast<int> (pos);
+
+    // shuffle draws the following cycle as soon as the cursor lands on the last item
+    if (isShuffle (playlist) && pos + 1 == lane.walk.size ()) {
+	lane.nextCycle = drawCycle (playlist, rng);
+    }
+
+    return entryIndex (playlist, lane.walk[pos]);
+}
+
+void WallpaperEngine::Api::seatCursor (Lane& lane, const std::string& displayId) {
+    const auto it = std::find (lane.walk.begin (), lane.walk.end (), displayId);
+
+    if (it != lane.walk.end ()) {
+	lane.cursor = static_cast<int> (it - lane.walk.begin ());
+    }
+}
+
+void WallpaperEngine::Api::seatBehind (Lane& lane, const std::string& displayId) {
+    const auto it = std::find (lane.walk.begin (), lane.walk.end (), displayId);
+
+    if (it != lane.walk.end () && static_cast<int> (it - lane.walk.begin ()) == lane.cursor - 1) {
+	lane.cursor--;
+    }
+}
+
+void WallpaperEngine::Api::seatOnCurrent (Lane& lane, const Playlist& playlist) {
+    if (!isShuffle (playlist)) {
+	seatCursor (lane, displayId (lane.current));
+    }
 }
 
 void WallpaperEngine::Api::applySet (
@@ -97,6 +268,13 @@ void WallpaperEngine::Api::applySet (
     const int previousInterval = playlist.intervalSeconds;
     const int frozen = lane.frozenRemainingSeconds;
 
+    // a change between ordered and shuffled starts a fresh walk: the cycle was drawn for the old kind
+    if (isShuffle (playlist) != isShuffle (incoming)) {
+	lane.walk.clear ();
+	lane.nextCycle.clear ();
+	lane.cursor = -1;
+    }
+
     playlist.entries = incoming.entries;
     playlist.intervalSeconds = incoming.intervalSeconds;
     playlist.order = incoming.order;
@@ -104,13 +282,11 @@ void WallpaperEngine::Api::applySet (
     playlist.label = incoming.label;
 
     lane.enabled = enabled && !playlist.entries.empty ();
-    lane.perm.clear ();
-    lane.permIndex = 0;
-    lane.seqIndex = -1;
-    lane.nextPick = SIZE_MAX;
+    // a push never restarts a cycle: the walk is re-seated by identity, not rebuilt
+    std::mt19937 rng (std::random_device {}());
+    reseat (lane, playlist, rng);
 
     const bool sameSet = idsOf (playlist) == previousIds && playlist.intervalSeconds == previousInterval;
-
     if (!lane.enabled) {
 	lane.frozenRemainingSeconds = sameSet && frozen >= 0 ? frozen : playlist.intervalSeconds;
     } else if (sameSet && !wasEnabled && frozen >= 0) {
@@ -143,11 +319,13 @@ int WallpaperEngine::Api::nextInSeconds (const Lane& lane, const Playlist& playl
 }
 
 std::string WallpaperEngine::Api::nextUp (const Lane& lane, const Playlist& playlist) {
-    if (lane.nextPick != SIZE_MAX && lane.nextPick < playlist.entries.size ()) {
-	return displayId (playlist.entries[lane.nextPick]);
+    std::size_t pos = 0;
+
+    if (playlist.entries.empty () || walkIsStale (lane, playlist) || !stepAhead (lane, playlist, pos)) {
+	return "";
     }
 
-    return "";
+    return pos < lane.walk.size () ? lane.walk[pos] : lane.nextCycle[pos - lane.walk.size ()];
 }
 
 void WallpaperEngine::Api::recordShow (Lane& lane, const Entry& shown, bool recordHistory) {
@@ -214,9 +392,9 @@ nlohmann::json WallpaperEngine::Api::toJson (const Lane& lane) {
 	     { "group", lane.groupKey },
 	     { "playlist", lane.playlistSlug },
 	     { "enabled", lane.enabled },
-	     { "perm", lane.perm },
-	     { "perm_index", lane.permIndex },
-	     { "seq_index", lane.seqIndex },
+	     { "walk", lane.walk },
+	     { "next_cycle", lane.nextCycle },
+	     { "cursor", lane.cursor },
 	     { "frozen_remaining_s", lane.frozenRemainingSeconds },
 	     { "current", toJson (lane.current) },
 	     { "history", history },
@@ -318,16 +496,23 @@ Lane WallpaperEngine::Api::laneFromJson (const nlohmann::json& j) {
     lane.playlistSlug = j.value ("playlist", "default");
     lane.enabled = j.value ("enabled", false);
 
-    if (j.contains ("perm") && j["perm"].is_array ()) {
-	for (const auto& index : j["perm"]) {
-	    if (index.is_number_unsigned ()) {
-		lane.perm.push_back (index.get<std::size_t> ());
+    for (const auto* field : { "walk", "next_cycle" }) {
+	if (j.contains (field) && j[field].is_array ()) {
+	    auto& target = std::string (field) == "walk" ? lane.walk : lane.nextCycle;
+
+	    for (const auto& id : j[field]) {
+		if (id.is_string ()) {
+		    target.push_back (id.get<std::string> ());
+		}
 	    }
 	}
     }
 
-    lane.permIndex = j.value ("perm_index", static_cast<std::size_t> (0));
-    lane.seqIndex = j.value ("seq_index", -1);
+    lane.cursor = j.value ("cursor", -1);
+
+    if (lane.cursor >= static_cast<int> (lane.walk.size ())) {
+	lane.cursor = -1;
+    }
     lane.frozenRemainingSeconds = j.value ("frozen_remaining_s", -1);
 
     if (j.contains ("current")) {
@@ -406,8 +591,8 @@ void WallpaperEngine::Api::fromLegacyState (const nlohmann::json& state, Lane& l
 }
 
 nlohmann::json WallpaperEngine::Api::laneStatus (const Lane& lane, const Playlist& playlist, Clock::time_point now) {
-    // cursor: the entry index the walk shows next (an identity-anchored cursor comes with 1b)
-    const std::size_t cursor = lane.nextPick == SIZE_MAX ? 0 : lane.nextPick;
+    // cursor: walk index of the item the walk last played; -1 before the first pick
+    const int cursor = lane.cursor;
 
     return { { "id", lane.id },
 	     { "group", lane.groupKey },

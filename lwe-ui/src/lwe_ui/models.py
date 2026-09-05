@@ -208,15 +208,6 @@ def resolved_tuning(wid: str) -> dict[str, float]:
     return out
 
 
-def fit_rotation_entries(entries: list[dict]) -> list[dict]:
-    """The longest prefix of `entries` one rotate-set can carry under the engine's caps."""
-    import json
-    kept = list(entries[:C.ENGINE_ROTATE_MAX_ENTRIES])
-    while kept and len(json.dumps(kept)) > C.ENGINE_ROTATE_MAX_BYTES:
-        kept.pop()
-    return kept
-
-
 def split_playlist_parts(entries: list[dict]) -> list[list[dict]]:
     """Cut `entries` into the parts one playlist-set transfer carries: every part under the
     engine's entry and byte caps, at most 64 parts. An entry too large for a part on its own
@@ -909,11 +900,10 @@ class Backend(QObject):
         except (OSError, subprocess.SubprocessError):
             return False
 
-    def _engine_rotation_payload(self) -> tuple[list, int, str, bool, str]:
-        """Resolve the ACTIVE playlist into the engine's standing rotation order:
-        (entries, interval_s, order, enabled, label). Each entry is a complete
-        resolved show-args object - the engine executes, never resolves."""
-        slug = self._active_slug()
+    def _playlist_payload(self, slug: str) -> tuple[list, int, str, bool, str]:
+        """Resolve one stored playlist into the engine's terms: (entries in stored order,
+        interval_s, order, enabled, label). Each entry is a complete resolved show-args
+        object - the engine executes, never resolves. Member order is the stored order."""
         d = playlists.load(slug)
         entries = []
         for wid in str(d.get("MEMBERS") or "").split():
@@ -924,11 +914,8 @@ class Backend(QObject):
             except Exception:
                 continue  # one broken conf must not sink the whole set
             entries.append({"id": engine_wid, "ui_id": wid, **args})
-        # the engine refuses more than its entry cap and drops a request line over its
-        # byte cap outright, so the set is trimmed to what will land rather than lost whole
-        entries = fit_rotation_entries(entries)
         mode = str(d.get("MODE") or "shuffle")
-        order = mode if mode in ("shuffle", "sequential") else "sequential"
+        order = mode if mode in C.PLAYLIST_MODES else "shuffle"
         enabled = (bool(self._setting("ROTATION_ENABLED", True)) and mode != "static"
                    and bool(entries))
         try:
@@ -959,16 +946,22 @@ class Backend(QObject):
             pass
 
     def _sync_engine(self) -> None:
-        """Push the standing rotation order to the engine (policy push).
-
-        The engine owns scheduled rotation; the panel owns resolution. Never two
-        schedulers. Best-effort by design: a dead socket is retried by the status
-        poll's pid-change tracker, never surfaced to the caller."""
+        """Push the active playlist to the engine by slug, in parts, then bind the lane
+        to it (policy push). The engine owns the walk and the schedule; the panel owns
+        resolution. Best-effort by design: a dead socket is retried by the status poll's
+        pid-change tracker, never surfaced to the caller."""
         try:
             if not api_client.available():
                 return
-            entries, interval, order, enabled, label = self._engine_rotation_payload()
-            api_client.rotate_set(entries, interval, order, enabled, label=label)
+            slug = self._active_slug() or "default"
+            entries, interval, order, enabled, label = self._playlist_payload(slug)
+            parts = split_playlist_parts(entries)
+            for number, part in enumerate(parts, start=1):
+                reply = api_client.playlist_set(slug, part, order, interval, part=number,
+                                                of=len(parts), label=label)
+                if reply is None or not reply.get("ok"):
+                    return  # a refused part must never bind a half-sent playlist
+            api_client.lanes_set([{"id": "all", "playlist": slug, "enabled": enabled}])
         except Exception:
             pass
 

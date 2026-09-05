@@ -234,7 +234,7 @@ private:
     bool m_bootHistoryArmed = false;
     bool apiRotationAdvance (std::string& error);
     [[nodiscard]] size_t apiRotationPick ();
-    void apiRotationPredraw ();
+
     void tickApiRotation ();
     enum class ReleaseReason { Live, Verb, Deadman, Fullscreen, AppCondition };
     bool apiReleaseOutputs (ReleaseReason reason, std::string& error);

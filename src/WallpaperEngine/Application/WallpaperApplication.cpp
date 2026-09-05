@@ -1449,7 +1449,8 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 		error = "no active viewport to switch on";
 	    } else if (this->applyShowCore (*path, entry.args, false, error)) {
 		this->lane ().lastShow = std::chrono::steady_clock::now ();
-		this->apiRotationPredraw ();
+		// back is a true back inside the walk; across a cycle boundary the cycle stays whole
+		Api::seatBehind (this->lane (), Api::displayId (entry));
 		ok = true;
 	    }
 	}
@@ -2071,14 +2072,13 @@ void WallpaperApplication::apiShow (
     }
 
     // a manual show restarts the rotation countdown (watcher parity: show-request
-    // stamped the rotation clock) and refreshes the pre-drawn next_up
+    // stamped the rotation clock)
     this->lane ().lastShow = std::chrono::steady_clock::now ();
 
     if (this->lane ().frozenRemainingSeconds >= 0) {
 	this->lane ().frozenRemainingSeconds = this->playlistOf (this->lane ()).intervalSeconds;
     }
 
-    this->apiRotationPredraw ();
     this->m_commandServer->respond (client, Api::CommandDispatcher::done (requestId, { { "path", path->string () } }));
 }
 
@@ -2262,6 +2262,12 @@ bool WallpaperApplication::applyShowCore (
     shown.uiId = args.contains ("ui_id") ? args["ui_id"].get<std::string> () : "";
     shown.args = args;
     Api::recordShow (this->lane (), shown, recordHistory);
+
+    // static: a click chooses the item, so the cursor follows it; other orders detour
+    if (this->playlistOf (this->lane ()).order == "static") {
+	Api::seatCursor (this->lane (), Api::displayId (shown));
+    }
+
     this->captureLook (this->lane (), args);
     return true;
 }
@@ -2300,7 +2306,6 @@ void WallpaperApplication::applyRotateSet (const nlohmann::json& args) {
     auto& lane = this->lane ();
     lane.playlistSlug = "default";
     Api::applySet (lane, this->playlist ("default"), incoming, enabled, std::chrono::steady_clock::now ());
-    this->apiRotationPredraw ();
 
     const auto& playlist = this->playlistOf (lane);
     sLog.out (
@@ -2378,7 +2383,6 @@ void WallpaperApplication::apiPlaylistSet (int client, int64_t requestId, const 
 
     if (bound) {
 	Api::applySet (lane, this->playlist (slug), incoming, lane.enabled, std::chrono::steady_clock::now ());
-	this->apiRotationPredraw ();
     } else {
 	this->playlist (slug) = incoming;
     }
@@ -2451,12 +2455,15 @@ void WallpaperApplication::apiLanesSet (int client, int64_t requestId, const nlo
 	    const Api::Playlist incoming = playlist;
 
 	    if (rebind) {
+		// another playlist is another walk: nothing of the old cycle carries over
 		lane.playlistSlug = slug;
 		lane.frozenRemainingSeconds = -1;
+		lane.walk.clear ();
+		lane.nextCycle.clear ();
+		lane.cursor = -1;
 	    }
 
 	    Api::applySet (lane, playlist, incoming, enabled, now);
-	    this->apiRotationPredraw ();
 	}
 
 	if (item.contains ("fit") && item["fit"].is_object ()) {
@@ -2869,6 +2876,7 @@ void WallpaperApplication::restoreRuntimeState () {
 		lane.frozenRemainingSeconds = legacyLane.frozenRemainingSeconds;
 	    }
 	    lane.current = legacyLane.current;
+	    Api::seatOnCurrent (lane, this->playlistOf (lane));
 	} else {
 	    if (state.contains ("playlists") && state["playlists"].is_array ()) {
 		for (const auto& item : state["playlists"]) {
@@ -2886,7 +2894,6 @@ void WallpaperApplication::restoreRuntimeState () {
 		for (const auto& item : state["lanes"]) {
 		    auto lane = Api::laneFromJson (item);
 		    lane.lastShow = std::chrono::steady_clock::now ();
-		    lane.nextPick = SIZE_MAX;
 		    const auto bound = this->m_playlists.find (lane.playlistSlug);
 		    lane.enabled = lane.enabled && bound != this->m_playlists.end () && !bound->second.entries.empty ();
 		    this->m_lanes[lane.id] = lane;
@@ -2909,14 +2916,11 @@ void WallpaperApplication::restoreRuntimeState () {
 		sLog.error ("state restore: show failed: ", error);
 	    } else {
 		this->lane ().lastShow = std::chrono::steady_clock::now ();
-		this->apiRotationPredraw ();
 		sLog.out (
 		    "state restore: showing ", showId, " (rotation ", this->lane ().enabled ? "enabled" : "disabled",
 		    ", ", this->playlistOf (this->lane ()).entries.size (), " entries)"
 		);
 	    }
-	} else {
-	    this->apiRotationPredraw ();
 	}
 
 	this->m_manualPauseRequested = state.value ("paused", false);
@@ -2951,11 +2955,6 @@ size_t WallpaperApplication::apiRotationPick () {
     return Api::pickNext (this->lane (), this->playlistOf (this->lane ()), this->m_playlistRng);
 }
 
-void WallpaperApplication::apiRotationPredraw () {
-    auto& lane = this->lane ();
-    lane.nextPick = this->playlistOf (lane).entries.empty () ? SIZE_MAX : this->apiRotationPick ();
-}
-
 bool WallpaperApplication::apiRotationAdvance (std::string& error) {
     auto& rot = this->lane ();
     const auto& entries = this->playlistOf (rot).entries;
@@ -2970,10 +2969,9 @@ bool WallpaperApplication::apiRotationAdvance (std::string& error) {
 	return false;
     }
 
-    size_t pick = rot.nextPick != SIZE_MAX ? rot.nextPick : this->apiRotationPick ();
-    rot.nextPick = SIZE_MAX;
+    size_t pick = this->apiRotationPick ();
 
-    for (size_t attempts = 0; attempts < entries.size (); attempts++) {
+    for (size_t attempts = 0; attempts < entries.size () && pick < entries.size (); attempts++) {
 	const auto& entry = entries[pick];
 	const auto path = resolveLibraryBackground (entry.id);
 
@@ -2982,7 +2980,6 @@ bool WallpaperApplication::apiRotationAdvance (std::string& error) {
 
 	    if (this->applyShowCore (*path, entry.args, true, applyError)) {
 		rot.lastShow = std::chrono::steady_clock::now ();
-		this->apiRotationPredraw ();
 		return true;
 	    }
 

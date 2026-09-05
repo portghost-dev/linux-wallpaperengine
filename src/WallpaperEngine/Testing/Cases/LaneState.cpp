@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <nlohmann/json.hpp>
 #include <random>
 #include <string>
@@ -29,39 +30,87 @@ Playlist makePlaylist (std::size_t count, const std::string& order) {
 Clock::time_point t0 () { return Clock::time_point {} + std::chrono::hours (1); }
 } // namespace
 
-TEST_CASE ("sequential walks the playlist in order and skips the on-screen item", "[lane]") {
-    std::mt19937 rng (7);
+namespace {
+std::vector<std::string> walkOf (Lane& lane, const Playlist& playlist, std::mt19937& rng, int steps) {
+    std::vector<std::string> ids;
+
+    for (int i = 0; i < steps; i++) {
+	const auto pick = pickNext (lane, playlist, rng);
+	REQUIRE (pick < playlist.entries.size ());
+	ids.push_back (displayId (playlist.entries[pick]));
+	recordShow (lane, playlist.entries[pick], true);
+    }
+
+    return ids;
+}
+} // namespace
+
+TEST_CASE ("sequential plays the stored order, wraps, and skips the on-screen item once", "[lane]") {
+    std::mt19937 rng (1);
     Lane lane;
     Playlist playlist;
     applySet (lane, playlist, makePlaylist (4, "sequential"), true, t0 ());
 
-    REQUIRE (pickNext (lane, playlist, rng) == 0);
-    REQUIRE (pickNext (lane, playlist, rng) == 1);
-    recordShow (lane, playlist.entries[2], true);
-    // the walk lands on the item already on screen and steps past it once
-    REQUIRE (pickNext (lane, playlist, rng) == 3);
+    REQUIRE (walkOf (lane, playlist, rng, 5) == std::vector<std::string> { "wp0", "wp1", "wp2", "wp3", "wp0" });
+    REQUIRE (lane.cursor == 0);
+    REQUIRE (nextUp (lane, playlist) == "wp1");
+    // a detour onto the next-up item: the cursor holds and the pick skips it once (A11)
+    recordShow (lane, playlist.entries[1], true);
+    REQUIRE (lane.cursor == 0);
+    REQUIRE (nextUp (lane, playlist) == "wp2");
+    REQUIRE (pickNext (lane, playlist, rng) == 2);
+    REQUIRE (lane.cursor == 2);
 }
 
-TEST_CASE ("shuffle exhausts a permutation before drawing a new one", "[lane]") {
-    std::mt19937 rng (11);
+TEST_CASE ("a detour elsewhere leaves the cursor alone and resumes at cursor + 1", "[lane]") {
+    std::mt19937 rng (1);
+    Lane lane;
+    Playlist playlist;
+    applySet (lane, playlist, makePlaylist (5, "sequential"), true, t0 ());
+    walkOf (lane, playlist, rng, 2);
+    REQUIRE (lane.cursor == 1);
+    recordShow (lane, playlist.entries[4], true);
+    REQUIRE (lane.cursor == 1);
+    REQUIRE (pickNext (lane, playlist, rng) == 2);
+}
+
+TEST_CASE ("shuffle covers every member once per cycle and pre-draws the next cycle", "[lane]") {
+    std::mt19937 rng (2);
     Lane lane;
     Playlist playlist;
     applySet (lane, playlist, makePlaylist (6, "shuffle"), true, t0 ());
 
-    std::vector<std::size_t> seen;
-    for (int i = 0; i < 6; i++) {
-	seen.push_back (pickNext (lane, playlist, rng));
-    }
-
+    auto seen = walkOf (lane, playlist, rng, 6);
     std::sort (seen.begin (), seen.end ());
-    REQUIRE (seen == std::vector<std::size_t> { 0, 1, 2, 3, 4, 5 });
-    REQUIRE (lane.permIndex == 6);
-    pickNext (lane, playlist, rng);
-    REQUIRE (lane.permIndex == 1);
+    REQUIRE (seen == std::vector<std::string> { "wp0", "wp1", "wp2", "wp3", "wp4", "wp5" });
+    REQUIRE (lane.cursor == 5);
+    REQUIRE (lane.nextCycle.size () == 6);
+    REQUIRE (nextUp (lane, playlist) != "");
+    REQUIRE (nextUp (lane, playlist) == lane.nextCycle[lane.nextCycle[0] == lane.current.uiId ? 1 : 0]);
+
+    // the next cycle: its first item is skipped once when it is the one on screen, so the
+    // on-screen item plus six advances is the cycle (R23: a member may show twice)
+    const auto onScreen = lane.current.uiId;
+    auto second = walkOf (lane, playlist, rng, 6);
+    second.push_back (onScreen);
+    std::sort (second.begin (), second.end ());
+    second.erase (std::unique (second.begin (), second.end ()), second.end ());
+    REQUIRE (second == seen);
+    REQUIRE (lane.walk.size () == 6);
 }
 
-TEST_CASE ("static never advances on the timer but next still walks", "[lane]") {
+TEST_CASE ("random walks as shuffle and stays inside the set", "[lane]") {
     std::mt19937 rng (3);
+    Lane lane;
+    Playlist playlist;
+    applySet (lane, playlist, makePlaylist (3, "random"), true, t0 ());
+    auto seen = walkOf (lane, playlist, rng, 3);
+    std::sort (seen.begin (), seen.end ());
+    REQUIRE (seen == std::vector<std::string> { "wp0", "wp1", "wp2" });
+}
+
+TEST_CASE ("static never advances on the timer, next still walks, and a click seats the cursor", "[lane]") {
+    std::mt19937 rng (4);
     Lane lane;
     Playlist playlist;
     applySet (lane, playlist, makePlaylist (3, "static"), true, t0 ());
@@ -70,10 +119,127 @@ TEST_CASE ("static never advances on the timer but next still walks", "[lane]") 
     REQUIRE (nextInSeconds (lane, playlist, t0 ()) == -1);
     REQUIRE (pickNext (lane, playlist, rng) == 0);
     REQUIRE (pickNext (lane, playlist, rng) == 1);
+    seatCursor (lane, "wp2");
+    REQUIRE (lane.cursor == 2);
+    REQUIRE (pickNext (lane, playlist, rng) == 0);
+    seatCursor (lane, "nope");
+    REQUIRE (lane.cursor == 0);
+}
+
+TEST_CASE ("a push keeps the cursor's item in place and the old successor next (A6)", "[lane]") {
+    std::mt19937 rng (5);
+    Lane lane;
+    Playlist playlist;
+    applySet (lane, playlist, makePlaylist (5, "sequential"), true, t0 ());
+    walkOf (lane, playlist, rng, 3); // wp2 on screen, cursor 2
+    REQUIRE (nextUp (lane, playlist) == "wp3");
+
+    // append: nothing moves
+    auto grown = makePlaylist (6, "sequential");
+    applySet (lane, playlist, grown, true, t0 ());
+    REQUIRE (lane.cursor == 2);
+    REQUIRE (nextUp (lane, playlist) == "wp3");
+
+    // reorder: the cursor follows its item, next is the new successor
+    auto reordered = makePlaylist (6, "sequential");
+    std::swap (reordered.entries[2], reordered.entries[5]); // wp5 wp1 wp2 -> order wp0 wp1 wp5 wp3 wp4 wp2
+    applySet (lane, playlist, reordered, true, t0 ());
+    REQUIRE (lane.cursor == 5);
+    REQUIRE (nextUp (lane, playlist) == "wp0");
+
+    // remove the cursor's item: the first survivor after it plays next
+    Playlist without = makePlaylist (6, "sequential");
+    without.entries.erase (without.entries.begin () + 2); // wp0 wp1 wp3 wp4 wp5
+    applySet (lane, playlist, without, true, t0 ());
+    REQUIRE (nextUp (lane, playlist) == "wp0");
+    REQUIRE (lane.cursor == 4);
+
+    // nothing after the cursor survives: the walk wraps to its start
+    Playlist front = makePlaylist (2, "sequential"); // wp0 wp1
+    applySet (lane, playlist, front, true, t0 ());
+    REQUIRE (lane.cursor == 1);
+    REQUIRE (nextUp (lane, playlist) == "wp0");
+}
+
+TEST_CASE ("a shuffle push keeps the cycle and shuffles only the new ids onto the end", "[lane]") {
+    std::mt19937 rng (6);
+    Lane lane;
+    Playlist playlist;
+    applySet (lane, playlist, makePlaylist (6, "shuffle"), true, t0 ());
+    walkOf (lane, playlist, rng, 3);
+    const auto before = lane.walk;
+    const int cursor = lane.cursor;
+
+    applySet (lane, playlist, makePlaylist (8, "shuffle"), true, t0 ());
+    REQUIRE (lane.cursor == cursor);
+    REQUIRE (std::vector<std::string> (lane.walk.begin (), lane.walk.begin () + 6) == before);
+    std::vector<std::string> tail (lane.walk.begin () + 6, lane.walk.end ());
+    std::sort (tail.begin (), tail.end ());
+    REQUIRE (tail == std::vector<std::string> { "wp6", "wp7" });
+    REQUIRE (nextUp (lane, playlist) == before[cursor + 1]);
+
+    // the same set again: nothing moves
+    const auto walk = lane.walk;
+    applySet (lane, playlist, makePlaylist (8, "shuffle"), true, t0 ());
+    REQUIRE (lane.walk == walk);
+    REQUIRE (lane.cursor == cursor);
+}
+
+TEST_CASE ("an order change starts a fresh walk", "[lane]") {
+    std::mt19937 rng (11);
+    Lane lane;
+    Playlist playlist;
+    applySet (lane, playlist, makePlaylist (6, "sequential"), true, t0 ());
+    walkOf (lane, playlist, rng, 3); // wp2 on screen, cursor 2
+
+    applySet (lane, playlist, makePlaylist (6, "shuffle"), true, t0 ());
+    REQUIRE (lane.cursor == -1);
+    auto ids = lane.walk;
+    std::sort (ids.begin (), ids.end ());
+    REQUIRE (ids == std::vector<std::string> { "wp0", "wp1", "wp2", "wp3", "wp4", "wp5" });
+
+    // the on-screen item plus one cycle of advances covers the set (R23: it may show twice)
+    auto cycle = walkOf (lane, playlist, rng, 6);
+    cycle.push_back ("wp2");
+    std::sort (cycle.begin (), cycle.end ());
+    cycle.erase (std::unique (cycle.begin (), cycle.end ()), cycle.end ());
+    REQUIRE (cycle == ids);
+
+    // back to sequential: the walk is the stored order and continues from the item on screen
+    applySet (lane, playlist, makePlaylist (6, "sequential"), true, t0 ());
+    REQUIRE (lane.walk == std::vector<std::string> { "wp0", "wp1", "wp2", "wp3", "wp4", "wp5" });
+    REQUIRE (lane.cursor == std::stoi (lane.current.uiId.substr (2)));
+}
+
+TEST_CASE ("a stale or corrupt walk is re-seated instead of indexed", "[lane]") {
+    std::mt19937 rng (7);
+    Lane lane;
+    Playlist playlist;
+    applySet (lane, playlist, makePlaylist (4, "sequential"), true, t0 ());
+    lane.walk = { "gone", "wp1", "also-gone" };
+    lane.cursor = 1;
+    REQUIRE (nextUp (lane, playlist) == "");
+    REQUIRE (pickNext (lane, playlist, rng) == 2);
+    REQUIRE (lane.walk == std::vector<std::string> { "wp0", "wp1", "wp2", "wp3" });
+
+    lane.walk.clear ();
+    lane.cursor = 9;
+    REQUIRE (pickNext (lane, playlist, rng) < 4);
+}
+
+TEST_CASE ("avoid-repeat off lets the on-screen item come straight back", "[lane]") {
+    std::mt19937 rng (8);
+    Lane lane;
+    Playlist playlist;
+    auto set = makePlaylist (3, "sequential");
+    set.avoidRepeat = false;
+    applySet (lane, playlist, set, true, t0 ());
+    walkOf (lane, playlist, rng, 1);
+    recordShow (lane, playlist.entries[1], true);
+    REQUIRE (pickNext (lane, playlist, rng) == 1);
 }
 
 TEST_CASE ("the same set keeps a frozen countdown across disable and enable", "[lane]") {
-    std::mt19937 rng (5);
     Lane lane;
     Playlist playlist;
     const auto set = makePlaylist (3, "sequential");
@@ -81,21 +247,19 @@ TEST_CASE ("the same set keeps a frozen countdown across disable and enable", "[
     applySet (lane, playlist, set, true, t0 ());
     REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (100)) == 800);
 
-    // disabling the same set freezes the remainder as the full interval (as the engine did)
     applySet (lane, playlist, set, false, t0 () + std::chrono::seconds (100));
     REQUIRE (lane.frozenRemainingSeconds == 900);
+    REQUIRE_FALSE (lane.enabled);
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (5000)) == 900);
     lane.frozenRemainingSeconds = 300;
 
-    // re-enabling the same set resumes from the frozen remainder
     applySet (lane, playlist, set, true, t0 () + std::chrono::seconds (200));
     REQUIRE (lane.frozenRemainingSeconds == -1);
     REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (200)) == 300);
 
-    // a different set restarts the clock
     applySet (lane, playlist, makePlaylist (4, "sequential"), true, t0 () + std::chrono::seconds (500));
     REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (500)) == 900);
-    REQUIRE (lane.seqIndex == -1);
-    REQUIRE (lane.nextPick == SIZE_MAX);
+    REQUIRE (lane.cursor == -1);
 }
 
 TEST_CASE ("history is bounded and pops in order", "[lane]") {
@@ -149,7 +313,7 @@ TEST_CASE ("lane and playlist round-trip through json", "[lane]") {
     Lane lane;
     Playlist playlist;
     applySet (lane, playlist, makePlaylist (5, "shuffle"), true, t0 ());
-    pickNext (lane, playlist, rng);
+    walkOf (lane, playlist, rng, 5);
     recordShow (lane, playlist.entries[1], true);
     recordShow (lane, playlist.entries[2], true);
     lane.fit.zoom = 1.5f;
@@ -158,15 +322,20 @@ TEST_CASE ("lane and playlist round-trip through json", "[lane]") {
     const auto laneBack = laneFromJson (toJson (lane));
     const auto playlistBack = playlistFromJson (toJson (playlist));
 
-    REQUIRE (laneBack.perm == lane.perm);
-    REQUIRE (laneBack.permIndex == lane.permIndex);
+    REQUIRE (laneBack.walk == lane.walk);
+    REQUIRE (laneBack.nextCycle == lane.nextCycle);
+    REQUIRE (laneBack.cursor == lane.cursor);
     REQUIRE (laneBack.current.id == "wp2");
-    REQUIRE (laneBack.history.size () == 1);
+    REQUIRE (laneBack.history.size () == 6);
     REQUIRE (laneBack.history.back ().id == "wp1");
     REQUIRE (laneBack.fit.zoom == 1.5f);
     REQUIRE (laneBack.look.timescale == 2.0f);
     REQUIRE (playlistBack.entries.size () == 5);
     REQUIRE (playlistBack.entries[4].args["ui_id"] == "wp4");
+
+    auto broken = toJson (lane);
+    broken["cursor"] = 99;
+    REQUIRE (laneFromJson (broken).cursor == -1);
 }
 
 TEST_CASE ("the status block names what is on screen and what comes next", "[lane]") {
@@ -177,7 +346,6 @@ TEST_CASE ("the status block names what is on screen and what comes next", "[lan
     // the walk advanced through the first two entries as the timer would have
     recordShow (lane, playlist.entries[pickNext (lane, playlist, rng)], true);
     recordShow (lane, playlist.entries[pickNext (lane, playlist, rng)], true);
-    lane.nextPick = pickNext (lane, playlist, rng);
 
     const auto status = laneStatus (lane, playlist, t0 () + std::chrono::seconds (60));
     REQUIRE (status["now"] == "wp1");
@@ -192,33 +360,6 @@ TEST_CASE ("the status block names what is on screen and what comes next", "[lan
     REQUIRE (emptyStatus["next_in_s"] == -1);
 }
 
-TEST_CASE ("random stays inside the set and honours avoid-repeat", "[lane]") {
-    std::mt19937 rng (3);
-    Lane lane;
-    Playlist playlist;
-    applySet (lane, playlist, makePlaylist (3, "random"), true, t0 ());
-    lane.current = playlist.entries[0];
-
-    for (int i = 0; i < 200; i++) {
-	const auto pick = pickNext (lane, playlist, rng);
-	REQUIRE (pick < 3);
-	REQUIRE (pick != 0);
-    }
-}
-
-TEST_CASE ("a corrupt permutation is redrawn instead of indexed", "[lane]") {
-    std::mt19937 rng (5);
-    Lane lane;
-    Playlist playlist;
-    applySet (lane, playlist, makePlaylist (4, "shuffle"), true, t0 ());
-    lane.perm = { 7, 8, 9, 10 };
-    lane.permIndex = 0;
-
-    for (int i = 0; i < 8; i++) {
-	REQUIRE (pickNext (lane, playlist, rng) < 4);
-    }
-}
-
 TEST_CASE ("applySet leaves the binding to its caller", "[lane]") {
     Lane lane;
     lane.playlistSlug = "chill";
@@ -230,4 +371,111 @@ TEST_CASE ("applySet leaves the binding to its caller", "[lane]") {
     REQUIRE (playlist.slug == "chill");
     REQUIRE (lane.playlistSlug == "chill");
     REQUIRE (playlist.entries.size () == 2);
+}
+
+TEST_CASE ("a one-item shuffle playlist keeps picking its item", "[lane]") {
+    std::mt19937 rng (12);
+    Lane lane;
+    Playlist playlist;
+    applySet (lane, playlist, makePlaylist (1, "shuffle"), true, t0 ());
+
+    for (int i = 0; i < 4; i++) {
+	REQUIRE (pickNext (lane, playlist, rng) == 0);
+	recordShow (lane, playlist.entries[0], true);
+	REQUIRE (nextUp (lane, playlist) == "wp0");
+    }
+}
+
+TEST_CASE ("a push while the cursor sits on the last item keeps the drawn next cycle", "[lane]") {
+    std::mt19937 rng (13);
+    Lane lane;
+    Playlist playlist;
+    applySet (lane, playlist, makePlaylist (4, "shuffle"), true, t0 ());
+    walkOf (lane, playlist, rng, 4);
+    REQUIRE (lane.cursor == 3);
+    const auto announced = nextUp (lane, playlist);
+    REQUIRE (announced != "");
+
+    applySet (lane, playlist, makePlaylist (4, "shuffle"), true, t0 ());
+    REQUIRE (nextUp (lane, playlist) == announced);
+
+    // a push that adds an id extends the current cycle with it (kept ids in old order, new ids
+    // shuffled onto the end), so it plays before the drawn cycle, which grows to a full cycle too
+    applySet (lane, playlist, makePlaylist (5, "shuffle"), true, t0 ());
+    REQUIRE (nextUp (lane, playlist) == "wp4");
+    REQUIRE (lane.walk.size () == 5);
+    REQUIRE (lane.cursor == 3);
+    auto cycle = lane.nextCycle;
+    std::sort (cycle.begin (), cycle.end ());
+    REQUIRE (cycle == std::vector<std::string> { "wp0", "wp1", "wp2", "wp3", "wp4" });
+
+    // removing the new id again puts the cursor back on the last item and the drawn cycle next
+    applySet (lane, playlist, makePlaylist (4, "shuffle"), true, t0 ());
+    REQUIRE (lane.cursor == 3);
+    REQUIRE (nextUp (lane, playlist) == announced);
+}
+
+TEST_CASE ("back seats the cursor only on the item just behind it", "[lane]") {
+    std::mt19937 rng (14);
+    Lane lane;
+    Playlist playlist;
+    applySet (lane, playlist, makePlaylist (4, "shuffle"), true, t0 ());
+    walkOf (lane, playlist, rng, 4); // cycle 1 played, cursor 3, next cycle drawn
+    const auto lastOfCycle1 = lane.current.uiId;
+    Entry detour;
+    detour.id = "elsewhere";
+    detour.uiId = "elsewhere";
+    recordShow (lane, detour, true); // a detour, so the first pick of cycle 2 is not skipped
+    walkOf (lane, playlist, rng, 1); // first item of cycle 2, cursor 0
+    REQUIRE (lane.cursor == 0);
+
+    // back across the cycle boundary: the new cycle stays whole
+    seatBehind (lane, lastOfCycle1);
+    REQUIRE (lane.cursor == 0);
+
+    // back inside the walk: cursor 2 -> 1 when the item behind is the one returned to
+    walkOf (lane, playlist, rng, 2);
+    REQUIRE (lane.cursor == 2);
+    seatBehind (lane, lane.walk[1]);
+    REQUIRE (lane.cursor == 1);
+    seatBehind (lane, lane.walk[3]);
+    REQUIRE (lane.cursor == 1);
+}
+
+TEST_CASE ("random and shuffle are one kind: switching between them keeps the walk", "[lane]") {
+    std::mt19937 rng (15);
+    Lane lane;
+    Playlist playlist;
+    applySet (lane, playlist, makePlaylist (5, "random"), true, t0 ());
+    walkOf (lane, playlist, rng, 2);
+    const auto walk = lane.walk;
+    applySet (lane, playlist, makePlaylist (5, "shuffle"), true, t0 ());
+    REQUIRE (lane.walk == walk);
+    REQUIRE (lane.cursor == 1);
+
+    // sequential and static are one kind too
+    applySet (lane, playlist, makePlaylist (5, "sequential"), true, t0 ());
+    REQUIRE (lane.cursor == std::stoi (lane.current.uiId.substr (2)));
+    const int seated = lane.cursor;
+    applySet (lane, playlist, makePlaylist (5, "static"), true, t0 ());
+    REQUIRE (lane.cursor == seated);
+}
+
+TEST_CASE ("a stale next cycle is rebuilt and a fresh ordered walk starts after the on-screen item", "[lane]") {
+    std::mt19937 rng (16);
+    Lane lane;
+    Playlist playlist;
+    applySet (lane, playlist, makePlaylist (3, "shuffle"), true, t0 ());
+    walkOf (lane, playlist, rng, 3);
+    lane.nextCycle = { "gone", "wp0", "wp1" };
+    REQUIRE (nextUp (lane, playlist) == "");
+    REQUIRE (pickNext (lane, playlist, rng) < 3);
+
+    Lane restored;
+    restored.current = playlist.entries[1];
+    Playlist ordered;
+    applySet (restored, ordered, makePlaylist (3, "sequential"), true, t0 ());
+    restored.walk.clear (); // as a state file from an older build leaves it
+    restored.cursor = -1;
+    REQUIRE (pickNext (restored, ordered, rng) == 2);
 }

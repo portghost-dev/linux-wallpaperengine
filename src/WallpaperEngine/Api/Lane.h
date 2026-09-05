@@ -78,12 +78,12 @@ struct Lane {
     std::string playlistSlug = "default";
     bool enabled = false;
 
-    /** shuffle exhausts a permutation before re-shuffling; sequential walks an index */
-    std::vector<std::size_t> perm;
-    std::size_t permIndex = 0;
-    int seqIndex = -1;
-    /** pre-drawn pick consumed by the next advance; SIZE_MAX = none */
-    std::size_t nextPick = SIZE_MAX;
+    /** the walk: display ids in play order (stored order, or one shuffle cycle) */
+    std::vector<std::string> walk;
+    /** shuffle only: the following cycle, drawn when the cursor lands on the walk's last item */
+    std::vector<std::string> nextCycle;
+    /** index into walk of the item the walk last played; -1 before the first pick */
+    int cursor = -1;
 
     std::chrono::steady_clock::time_point lastShow {};
     /** countdown freeze: disabling pauses the clock, re-enabling the same set resumes it */
@@ -99,11 +99,20 @@ struct Lane {
 
 using Clock = std::chrono::steady_clock;
 
-/** The next index to show, advancing the lane's walk. SIZE_MAX when the playlist is empty. */
+/** Next entry index, advancing the cursor. SIZE_MAX when nothing can be picked: never index on it. */
 std::size_t pickNext (Lane& lane, const Playlist& playlist, std::mt19937& rng);
 
-/** Replace the playlist's content and reset the lane's walk; the same set keeps its countdown
- *  rules. The caller owns the binding: neither slug nor lane.playlistSlug is touched. */
+/** Move the cursor onto `displayId` when the walk holds it (static: a click chooses the item). */
+void seatCursor (Lane& lane, const std::string& displayId);
+
+/** Seat the cursor on `displayId` only when it is the walk item just behind the cursor. */
+void seatBehind (Lane& lane, const std::string& displayId);
+
+/** Seat the cursor on the item on screen for an ordered walk; shuffle keeps its cycle start. */
+void seatOnCurrent (Lane& lane, const Playlist& playlist);
+
+/** Replace the playlist's content and re-seat the walk by identity; the same set keeps its
+ *  countdown rules. The caller owns the binding: neither slug nor lane.playlistSlug is touched. */
 void applySet (Lane& lane, Playlist& playlist, const Playlist& incoming, bool enabled, Clock::time_point now);
 
 /** True when the rotation timer should advance this lane now. Never for static. */
@@ -112,7 +121,7 @@ bool dueForAdvance (const Lane& lane, const Playlist& playlist, Clock::time_poin
 /** Seconds until the next timed advance: the frozen remainder while disabled, -1 when idle. */
 int nextInSeconds (const Lane& lane, const Playlist& playlist, Clock::time_point now);
 
-/** Display id of the pre-drawn next entry, or empty. */
+/** Display id the walk shows next, or empty when a fresh shuffle cycle is still to be drawn. */
 std::string nextUp (const Lane& lane, const Playlist& playlist);
 
 /** Record an applied show; the previous current goes to bounded history when asked. */
