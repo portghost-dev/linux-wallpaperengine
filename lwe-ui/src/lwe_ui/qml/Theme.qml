@@ -81,6 +81,7 @@ QtObject {
     readonly property int spacingSm: 8
     readonly property int spacingMd: 12
     readonly property int spacingLg: 16
+    readonly property int gridGapCompact: 7   // library grid gap under compact: three 176 px tiles fit 640 (D14)
     readonly property int spacingXl: 24
 
     readonly property int radiusXs: 4

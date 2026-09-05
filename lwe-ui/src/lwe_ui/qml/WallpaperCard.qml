@@ -20,20 +20,58 @@ Rectangle {
     property bool pendingReview: false
     property real thumbHeight: 136
     readonly property int titleRowHeight: 34
+    // lifted: this card is being dragged; its slot stays open and the grid draws the outline
+    property bool lifted: false
+    readonly property bool lifting: lift.active
+    // a release the window never saw (pointer left it) leaves the handler armed; this disarms it
+    function cancelLift() { lift.enabled = false; lift.enabled = true; }
 
     signal playlistToggled(string id, bool on)
     signal favoriteToggled(string id)
     signal gearClicked(string id)
     signal playClicked(string id)
     signal trashRequested(string id, string title)
+    signal dragStarted(var source)
+    signal dragMoved(real sceneX, real sceneY)
+    signal dragEnded()
 
     implicitWidth: 224
     implicitHeight: thumbHeight + titleRowHeight + 2
     radius: Theme.radiusLg
     color: Theme.surface
     clip: true
+    opacity: lifted ? 0 : 1
 
     HoverHandler { id: hover }
+
+    // a press anywhere but the hover chrome lifts the card once the pointer has travelled the
+    // threshold; a release before that is the normal tap
+    DragHandler {
+        id: lift
+        target: null
+        dragThreshold: 24
+        onActiveChanged: {
+            if (active) {
+                if (card.pressOnChrome(centroid.pressPosition)) {
+                    lift.enabled = false;
+                    lift.enabled = true;
+                    return;
+                }
+                card.dragStarted(card);
+            } else {
+                card.dragEnded();
+            }
+        }
+        onCentroidChanged: if (active) card.dragMoved(centroid.scenePosition.x, centroid.scenePosition.y)
+    }
+    function pressOnChrome(p) {
+        // geometry only: the chrome fades with hover, but a press on its footprint is a press on
+        // it. The play button is not chrome for this purpose (R52): a drag may start over it.
+        return [checkBox, starBtn, gearBtn, trashBtn].some(function(b) {
+            var q = b.mapFromItem(card, p.x, p.y);
+            return q.x >= 0 && q.y >= 0 && q.x <= b.width && q.y <= b.height;
+        });
+    }
 
     Item {
         id: thumbBox
@@ -102,6 +140,7 @@ Rectangle {
         }
 
         Item {
+            id: checkBox
             anchors.left: parent.left
             anchors.top: parent.top
             anchors.margins: Theme.spacingSm
@@ -131,6 +170,7 @@ Rectangle {
             spacing: Theme.spacingXs
 
             Rectangle {
+                id: starBtn
                 width: 26; height: 26; radius: Theme.radiusSm
                 color: Theme.scrimPlate
                 visible: card.favorite || hover.hovered
@@ -143,6 +183,7 @@ Rectangle {
                 TapHandler { onTapped: card.favoriteToggled(card.wpId) }
             }
             Rectangle {
+                id: gearBtn
                 width: 26; height: 26; radius: Theme.radiusSm
                 color: Theme.scrimPlate
                 opacity: hover.hovered ? 1 : 0
@@ -158,6 +199,7 @@ Rectangle {
         }
 
         Rectangle {
+            id: playBtn
             anchors.centerIn: parent
             width: 44; height: 44; radius: 22
             color: Theme.accent

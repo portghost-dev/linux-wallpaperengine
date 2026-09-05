@@ -36,6 +36,7 @@ from PySide6.QtCore import (
 from . import api_client
 from . import constants as C
 from .discovery import project
+from .library_order import LibraryOrderModel
 from .storage import atomic, meta, paths, playlists, settings, tags, wp
 
 # Role ids for LibraryModel. Start past Qt.UserRole so they never collide with built-ins.
@@ -602,7 +603,10 @@ class Backend(QObject):
         self._model = LibraryModel(self)
         self._model.reload(self._active_members())
         self._model.modelReset.connect(self.countChanged)
-        self._filter = LibraryFilterModel(self._model, self)  # the GridView binds to this
+        self._filter = LibraryFilterModel(self._model, self)
+        # the GridView binds to this: members first in stored order, fillers, then the pool
+        self._order = LibraryOrderModel(self._filter, self._member_order, self)
+        self.playlistsChanged.connect(self._order.resync)
         self._cpu_last: tuple | None = None   # (monotonic, ticks, pidset) for the CPU delta
         self._vram_total: int = -1            # cached GPU total MiB (-1 until queried)
         self._stats_last: dict = {"cpu": 0.0, "gpu": -1, "vram": -1, "rss": -1,
@@ -646,6 +650,50 @@ class Backend(QObject):
 
     # The GridView binds to this (search + favorites filter; proper reset signals -> relayout).
     filterModel = Property(QObject, _get_filter_model, constant=True)
+
+    def _get_order_model(self) -> LibraryOrderModel:
+        return self._order
+
+    orderModel = Property(QObject, _get_order_model, constant=True)
+
+    def _member_order(self) -> list[str]:
+        slug = self._active_slug()
+        return playlists.members(slug) if slug else []
+
+    @Slot(str, result=bool)
+    def beginDrag(self, wid: str) -> bool:
+        return self._order.beginDrag(wid)
+
+    @Slot(int)
+    def dragOver(self, row: int) -> None:
+        self._order.dragOver(row)
+
+    @Slot(bool, result=str)
+    def endDrag(self, commit: bool) -> str:
+        """Drop: store the provisional order once (reorder or insert), push once. Returns
+        the action taken: none, reorder or insert."""
+        plan = self._order.dragPlan(commit)
+        action = str(plan.get("action") or "none")
+        slug = self._active_slug()
+        if action != "none" and slug:
+            try:
+                if action == "reorder":
+                    playlists.reorder(slug, list(plan["members"]))
+                elif playlists.insert_member(slug, str(plan["wid"]), int(plan["index"])) >= 0:
+                    self._model.set_in_playlist(str(plan["wid"]), True)
+                else:
+                    action = "none"
+            except Exception:
+                action = "none"
+        self._order.endDrag(commit)
+        if action != "none":
+            self.countChanged.emit()
+            self.playlistsChanged.emit()
+            try:
+                self._sync_engine()
+            except Exception:
+                pass
+        return action
 
     @Slot(str)
     def setSearch(self, text: str) -> None:
