@@ -15,6 +15,7 @@ What is proven:
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import hashlib
 import json
 import os

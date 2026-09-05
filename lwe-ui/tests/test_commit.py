@@ -31,6 +31,7 @@ Runs as a plain `python3 tests/test_commit.py` (pytest is absent on the box).
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import importlib
 import json
 import os

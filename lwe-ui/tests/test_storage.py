@@ -6,6 +6,7 @@ otherwise as a plain `python3 tests/test_storage.py` script (asserts + a manual 
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import importlib
 import os
 import sys

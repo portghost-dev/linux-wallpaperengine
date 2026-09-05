@@ -3,6 +3,7 @@
 Standalone runnable: sandboxes HOME/XDG into a temp tree BEFORE importing lwe_ui, so the
 live ~/.config/lwe is never touched (project safety rule).
 """
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import os
 import subprocess
 import sys

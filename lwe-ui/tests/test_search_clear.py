@@ -17,6 +17,7 @@ Run: PYTHONPATH=src QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software python3 
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import os
 import re
 import sys

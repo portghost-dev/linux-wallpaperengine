@@ -6,6 +6,7 @@ first-frame health clock are provable here without ever launching an engine.
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import sys
 from pathlib import Path
 

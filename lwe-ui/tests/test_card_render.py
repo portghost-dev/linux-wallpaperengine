@@ -14,6 +14,7 @@ Runs headless (offscreen + software renderer). Skips cleanly if the platform can
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import os
 import sys
 

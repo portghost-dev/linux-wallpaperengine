@@ -10,6 +10,7 @@ Static on the QML side, no Qt runtime needed. Run: PYTHONPATH=src python3 tests/
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import json
 import os
 import re

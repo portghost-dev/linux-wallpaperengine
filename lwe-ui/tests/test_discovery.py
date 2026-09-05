@@ -9,6 +9,7 @@ touched. Run:
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import os
 import sys
 import tempfile

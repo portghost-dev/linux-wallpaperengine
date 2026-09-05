@@ -13,6 +13,7 @@ Run: PYTHONPATH=src QT_QPA_PLATFORM=offscreen python3 tests/test_bench_standdown
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import json
 import os
 import shutil

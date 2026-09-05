@@ -3,6 +3,7 @@
 Sandboxes HOME/XDG before importing lwe_ui; drives the real Backend offscreen. The
 watcher courier no-ops against an absent watcher, so nothing here can signal anything.
 """
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import os
 import sys
 import tempfile

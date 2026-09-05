@@ -7,6 +7,7 @@ Run: export PYTHONPATH=src && python3 tests/test_bench.py
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import sys
 import tempfile
 import unittest

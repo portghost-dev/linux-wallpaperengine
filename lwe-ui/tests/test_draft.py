@@ -22,6 +22,7 @@ if present, otherwise as a plain `python3 tests/test_draft.py`.
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import importlib
 import json
 import os

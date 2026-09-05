@@ -8,6 +8,7 @@ bench falls back to the workshop's geometry and places nothing.
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import os
 import shutil
 import sys

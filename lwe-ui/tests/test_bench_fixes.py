@@ -6,6 +6,7 @@ sys.modules so no signal can reach a live watcher.
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import json
 import os
 import shutil

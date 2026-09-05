@@ -15,6 +15,7 @@ Run: export PYTHONPATH=src && python3 tests/test_api_client.py
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import json
 import os
 import socket
@@ -81,7 +82,7 @@ class ApiClientTests(unittest.TestCase):
         os.environ["LWE_SOCKET"] = str(self.sock)
 
     def tearDown(self) -> None:
-        os.environ.pop("LWE_SOCKET", None)
+        os.environ["LWE_SOCKET"] = _sandbox.SOCKET
         self._dir.cleanup()
 
 

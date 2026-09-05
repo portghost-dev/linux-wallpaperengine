@@ -15,6 +15,7 @@ Run: PYTHONPATH=src python3 tests/test_importer.py
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import json
 import os
 import sys

@@ -30,7 +30,10 @@ Requires Python 3.11+ and PySide6 >= 6.6.
 ## Tests
 
 Plain runnable scripts, no pytest needed. Each one sandboxes its config into a temp
-directory and never touches a live setup:
+directory and never touches a live setup. Every test file starts with `import _sandbox`,
+which points the engine socket and the runtime dir at a private temp path before anything
+from `lwe_ui` loads; `tests/test_harness_pin.py` enforces that order. Run the files as
+scripts from any directory; they put `tests/` on `sys.path` themselves:
 
 ```
 for t in tests/test_*.py; do

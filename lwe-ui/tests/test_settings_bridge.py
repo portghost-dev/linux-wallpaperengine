@@ -17,6 +17,7 @@ here rather than silently dropped:
 
 Sandboxes HOME/XDG before importing lwe_ui and drives the real Backend offscreen.
 """
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import os
 import sys
 import tempfile

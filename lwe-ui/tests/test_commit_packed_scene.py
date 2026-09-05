@@ -8,6 +8,7 @@ sys.modules so no signal reaches a live watcher; all paths are tempfile trees.
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import json
 import os
 import shutil

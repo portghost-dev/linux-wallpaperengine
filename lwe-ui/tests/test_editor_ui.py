@@ -16,6 +16,7 @@ One engine, two synthetic wallpapers (0.9 / 0.1 sliders).
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import json
 import os
 import shutil

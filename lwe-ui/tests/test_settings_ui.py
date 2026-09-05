@@ -21,6 +21,7 @@ guards, the string sweep, and the Schedule gate exercised with the flag FORCED O
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import os
 import subprocess
 import tempfile

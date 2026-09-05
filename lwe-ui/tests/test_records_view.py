@@ -3,6 +3,7 @@ neutral-sentence composer, the manager queries, and purge-that-ungates. Pure Pyt
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import importlib
 import os
 import shutil

@@ -6,6 +6,7 @@ Each case pins one finding so it cannot silently come back:
   F4  wp.save skips a non-shell-identifier prop name instead of dropping the whole write
   F5  the bench refuses to launch when no display output resolves (no window-over-session)
 """
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import os
 import sys
 import tempfile

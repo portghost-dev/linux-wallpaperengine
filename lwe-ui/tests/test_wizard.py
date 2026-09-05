@@ -6,6 +6,7 @@ constitution invariants (F3/C4) and that a cancel-after-finding does NOT suppres
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import importlib
 import json
 import os

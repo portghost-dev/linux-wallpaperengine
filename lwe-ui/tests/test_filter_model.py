@@ -15,6 +15,7 @@ Pure model-level (no QML rendering). Uses an offscreen QGuiApplication.
 """
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")

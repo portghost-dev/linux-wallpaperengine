@@ -3,6 +3,7 @@
 Sandboxes HOME/XDG, seeds a scene wallpaper with a small scene.json (objects + parented
 child) and a project.json with a conditional property, then drives EditorBridge offscreen.
 """
+import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import json
 import os
 import sys
