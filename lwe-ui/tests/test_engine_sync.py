@@ -231,11 +231,11 @@ class EngineSyncTest(unittest.TestCase):
         self.backend._push_live_globals()
         self.assertFalse(got["parallax"], "the deck override wins over the global default")
 
-    def test_empty_fps_pushes_nothing(self) -> None:
+    def test_blank_fps_reads_as_the_default(self) -> None:
         got = self._capture_globals()
         settings.save({"ENGINE_FPS": ""})
         self.backend._push_live_globals()
-        self.assertNotIn("fps", got, "empty means 'whatever the engine launched with'")
+        self.assertEqual(got.get("fps"), 60, "a blank is not a state; the schema default is pushed")
 
     def test_fps_is_clamped_to_the_engine_range(self) -> None:
         got = self._capture_globals()

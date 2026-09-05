@@ -94,7 +94,7 @@ SETTINGS_SCHEMA: dict[str, dict] = {
     "PAUSE_RECOVERY_CONDITION": {"type": "enum", "default": "off", "choices": PAUSE_RECOVERY_CONDITIONS},
     "PAUSE_RECOVERY_ACTION": {"type": "enum", "default": "pause", "choices": PAUSE_RECOVERY_ACTIONS},
     # engine-global defaults (Settings > Engine); a per-wallpaper conf value wins where set
-    "ENGINE_FPS": {"type": "int_or_empty", "default": ""},  # "" = engine default
+    "ENGINE_FPS": {"type": "int", "default": 60, "min": 1, "max": 480},
     "ENGINE_VOLUME": {"type": "int", "default": 15, "min": 0, "max": 100},
     "ENGINE_SCALING": {"type": "enum", "default": "default", "choices": SCALINGS},
     "ENGINE_CLAMP": {"type": "enum_or_empty", "default": "", "choices": CLAMPS},

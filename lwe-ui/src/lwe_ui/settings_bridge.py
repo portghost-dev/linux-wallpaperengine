@@ -247,8 +247,7 @@ class SettingsBridge(QObject):
             if key == "PARTICLES_DEFAULT":
                 return self._ok(api_client.set_particles(bool(value)))
             if key == "ENGINE_FPS":
-                text = str(value).strip()
-                return True if text == "" else self._ok(api_client.set_fps(int(text)))
+                return self._ok(api_client.set_fps(int(value)))
             if key == "APP_CONDITION_BEHAVIOR":
                 return self._ok(api_client.set_app_conditions(
                     self._backend._app_condition_names(), str(value)))

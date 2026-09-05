@@ -50,13 +50,13 @@ def test_f2_toggle_member_wid_safety() -> None:
 def test_f3_settings_or_empty_coercion() -> None:
     settings.ensure_exists()
     s = settings.load()
-    # int_or_empty: garbage collapses to "" (engine default), never carries "abc" to --fps
+    # int: garbage collapses to the schema default (60), never reaches the engine
     s["ENGINE_FPS"] = "abc"
     # enum_or_empty: an out-of-set value collapses to "" (never a wrong --clamp)
     s["ENGINE_CLAMP"] = "xyzzy"
     settings.save(s)
     r = settings.load()
-    assert r["ENGINE_FPS"] == "", repr(r["ENGINE_FPS"])
+    assert r["ENGINE_FPS"] == 60, repr(r["ENGINE_FPS"])
     assert r["ENGINE_CLAMP"] == "", repr(r["ENGINE_CLAMP"])
     s2 = settings.load()
     s2["ENGINE_FPS"] = "30"

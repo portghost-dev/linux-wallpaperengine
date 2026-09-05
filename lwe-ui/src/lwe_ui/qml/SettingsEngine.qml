@@ -80,19 +80,19 @@ Column {
             compact: true
             freeEntry: true                       // free integer entry 1-480, through the value
             failed: page.isFailed("ENGINE_FPS")
-            model: ["Auto", "30", "60", "120", "144"]
+            model: ["10", "15", "30", "40", "60", "120", "144", "240"]
             entryText: String(page.val("ENGINE_FPS") || "")
             currentIndex: {
                 var v = String(page.val("ENGINE_FPS") || "");
-                var i = ["Auto", "30", "60", "120", "144"].indexOf(v === "" ? "Auto" : v);
+                var i = ["10", "15", "30", "40", "60", "120", "144", "240"].indexOf(v);
                 return i;
             }
             displayText: {
                 var v = String(page.val("ENGINE_FPS") || "");
-                return v === "" ? "Auto" : v;
+                return v;
             }
             onActivated: function(i) {
-                settingsBridge.commit("ENGINE_FPS", i === 0 ? "" : model[i]);
+                settingsBridge.commit("ENGINE_FPS", model[i]);
             }
             onEntered: function(t) { settingsBridge.commit("ENGINE_FPS", t); }
         }

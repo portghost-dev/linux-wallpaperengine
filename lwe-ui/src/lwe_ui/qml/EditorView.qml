@@ -1328,23 +1328,25 @@ Rectangle {
                                         editable: true
                                         ckey: "ENGINE_FPS"
                                         entries: [
-                                            { label: "Auto", value: "" },
+                                            { label: "10", value: "10" },
+                                            { label: "15", value: "15" },
                                             { label: "30", value: "30" },
+                                            { label: "40", value: "40" },
                                             { label: "60", value: "60" },
                                             { label: "120", value: "120" },
-                                            { label: "144", value: "144" }
+                                            { label: "144", value: "144" },
+                                            { label: "240", value: "240" }
                                         ]
                                         display: {
                                             var v = (view.rev, editor.globalFps());
-                                            return v === "" ? "Auto" : v;
+                                            return v;
                                         }
                                         onPicked: function(v) { editor.setGlobalFps(v) }
                                         // free integer entry: the bridge is the validator, so
                                         // a non-integer or an out-of-band number raises the
-                                        // banner instead of silently falling back to Auto
+                                        // banner instead of silently falling back
                                         onEntered: function(t) {
-                                            editor.setGlobalFps(
-                                                String(t).trim().toLowerCase() === "auto" ? "" : t);
+                                            editor.setGlobalFps(t);
                                         }
                                     }
                                 }

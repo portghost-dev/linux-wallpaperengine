@@ -136,7 +136,7 @@ ComboBox {
         }
         contentItem: ListView {
             clip: true
-            implicitHeight: Math.min(contentHeight, 200)
+            implicitHeight: Math.min(contentHeight, 8 * 26)   // eight rows uncut (the FPS list)
             model: cb.popup.visible ? cb.delegateModel : null
             ScrollBar.vertical: ScrollBar {}
         }

@@ -260,9 +260,11 @@ class DeckPopupBridge(QObject):
 
     @Slot(result=str)
     def globalFps(self) -> str:
-        """"" for Auto, else the stored integer as text."""
-        raw = self._setting("ENGINE_FPS", "")
-        return "" if raw is None or str(raw).strip() == "" else str(raw).strip()
+        """The stored cap as text; a missing value reads as the schema default."""
+        default = str(C.SETTINGS_SCHEMA["ENGINE_FPS"]["default"])
+        raw = self._setting("ENGINE_FPS", default)
+        s = "" if raw is None else str(raw).strip()
+        return s if s else default
 
     @Slot(result=int)
     def fpsMin(self) -> int:
@@ -274,19 +276,12 @@ class DeckPopupBridge(QObject):
 
     @Slot(str, result=bool)
     def setGlobalFps(self, text: str) -> bool:
-        """Auto (empty) clears the key; anything else must parse as an integer in the engine's band.
+        """The text must parse as an integer in the engine's band; there is no empty state.
 
-        A non-integer is failure grammar, never the silent fall-back-to-empty the editor does.
+        A blank, a non-integer or an out-of-band number is failure grammar, never a
+        silent fall-back.
         """
         s = str(text or "").strip()
-        if s == "":
-            if not self._persist_setting("ENGINE_FPS", ""):
-                self.commitFailed.emit(["ENGINE_FPS"])
-                return False
-            # nothing to push: an empty cap means "whatever the engine launched with", which
-            # is a launch-time value the running engine cannot be talked back into
-            self.stateChanged.emit()
-            return True
         try:
             n = int(s)
         except (TypeError, ValueError):

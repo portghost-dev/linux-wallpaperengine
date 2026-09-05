@@ -426,11 +426,10 @@ class TestEditorLiveCommit(unittest.TestCase):
         self.assertTrue(e.setGlobalFps("90"))
         self.assertEqual(timeline, ["push:set_fps", "persist:ENGINE_FPS"])
 
-        # Auto is the one leg with nothing to push: an empty cap is a launch-time value the
-        # running engine cannot be talked back into, so it persists alone (popup-identical).
+        # a blank is not a state: it is refused, and nothing is pushed or persisted
         timeline.clear()
-        self.assertTrue(e.setGlobalFps(""))
-        self.assertEqual(timeline, ["persist:ENGINE_FPS"])
+        self.assertFalse(e.setGlobalFps(""))
+        self.assertEqual(timeline, [])
 
     def test_H5_a_refused_verb_persists_nothing(self) -> None:
         """The engine's no stops the write: settings.conf must not hold a value it rejected."""
