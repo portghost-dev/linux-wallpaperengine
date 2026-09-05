@@ -154,6 +154,20 @@ def main() -> None:
 
         deck.setProperty("masterActive", True)
         deck.setProperty("engineStatus", {"state": "up", "current": "", "interval": "900", "next_in": "300"})
+        # the three-line left block (spec 3.1, R32, R46) and the back glyph's static gate
+        deck.setProperty("engineStatus", {"state": "up", "current": "111", "last": "222", "next_up": "333",
+                                          "interval": "900", "next_in": "300", "back_enabled": True})
+        settle()
+        assert _find(deck, "deckLast").property("text") == "Last: 222"
+        assert _find(deck, "deckNow").property("text") == "111"
+        assert _find(deck, "deckNext").property("text") == "Next: 333"
+        assert _find(deck, "deckBack").property("enabled") is True
+        deck.setProperty("engineStatus", {"state": "up", "current": "111", "last": "", "next_up": "",
+                                          "interval": "", "next_in": "", "back_enabled": False})
+        settle()
+        assert _find(deck, "deckLast").property("text") == "Last: ", "an empty Last keeps its label"
+        assert _find(deck, "deckBack").property("enabled") is False, "back is off in static"
+        deck.setProperty("engineStatus", {"state": "up", "current": "", "interval": "900", "next_in": "300"})
         settle()
         assert left_idle.property("visible") is True, "idle block should show when engine up + not holding"
         assert left_testing.property("visible") is False and left_dev.property("visible") is False, \

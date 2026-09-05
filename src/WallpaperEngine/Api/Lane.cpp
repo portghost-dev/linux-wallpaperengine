@@ -34,6 +34,19 @@ std::array<float, 4> floatsFromJson (const nlohmann::json& j, const std::array<f
 }
 } // namespace
 
+namespace {
+void boundHistory (Lane& lane) {
+    while (lane.history.size () + lane.forward.size () > HISTORY_BOUND && !lane.history.empty ()) {
+	lane.history.pop_front ();
+    }
+}
+
+std::size_t walkIndexOf (const Lane& lane, const std::string& id) {
+    const auto it = std::find (lane.walk.begin (), lane.walk.end (), id);
+    return it == lane.walk.end () ? SIZE_MAX : static_cast<std::size_t> (it - lane.walk.begin ());
+}
+} // namespace
+
 std::string WallpaperEngine::Api::displayId (const std::string& id, const std::string& uiId) {
     return uiId.empty () ? id : uiId;
 }
@@ -278,6 +291,7 @@ void WallpaperEngine::Api::applySet (
     playlist.entries = incoming.entries;
     playlist.intervalSeconds = incoming.intervalSeconds;
     playlist.order = incoming.order;
+    lane.forward.clear ();
     playlist.avoidRepeat = incoming.avoidRepeat;
     playlist.label = incoming.label;
 
@@ -329,25 +343,144 @@ std::string WallpaperEngine::Api::nextUp (const Lane& lane, const Playlist& play
 }
 
 void WallpaperEngine::Api::recordShow (Lane& lane, const Entry& shown, bool recordHistory) {
-    if (recordHistory && !lane.current.id.empty ()) {
-	lane.history.push_back (lane.current);
+    // the same id again (an editor re-show) refreshes the record and leaves history alone
+    if (!lane.current.id.empty () && displayId (lane.current) == displayId (shown)) {
+	lane.current = shown;
+	return;
+    }
 
-	while (lane.history.size () > HISTORY_BOUND) {
-	    lane.history.pop_front ();
+    if (recordHistory) {
+	if (!lane.current.id.empty ()) {
+	    lane.history.push_back (lane.current);
 	}
+
+	lane.forward.clear ();
+	boundHistory (lane);
     }
 
     lane.current = shown;
 }
 
-std::optional<Entry> WallpaperEngine::Api::popHistory (Lane& lane) {
-    if (lane.history.empty ()) {
+namespace {
+/** The walk item behind the cursor, skipping the id on screen once; SIZE_MAX with none. */
+std::size_t walkBehind (const Lane& lane) {
+    const std::size_t n = lane.walk.size ();
+
+    if (n < 2) {
+	return SIZE_MAX;
+    }
+
+    std::size_t at = lane.cursor < 0 ? n - 1 : (static_cast<std::size_t> (lane.cursor) + n - 1) % n;
+
+    if (lane.walk[at] == displayId (lane.current)) {
+	at = (at + n - 1) % n;
+    }
+
+    return at;
+}
+} // namespace
+
+std::optional<Entry> WallpaperEngine::Api::backTarget (const Lane& lane, const Playlist& playlist) {
+    if (playlist.order == "static" || lane.walk.size () < 2) {
 	return std::nullopt;
     }
 
-    Entry entry = lane.history.back ();
-    lane.history.pop_back ();
-    return entry;
+    if (!lane.history.empty ()) {
+	return lane.history.back ();
+    }
+
+    const auto at = walkBehind (lane);
+    const auto index = at == SIZE_MAX ? SIZE_MAX : entryIndex (playlist, lane.walk[at]);
+    return index == SIZE_MAX ? std::nullopt : std::optional<Entry> (playlist.entries[index]);
+}
+
+void WallpaperEngine::Api::commitBack (Lane& lane, const Playlist&, const Entry& previous, const Entry& target) {
+    if (!lane.history.empty () && displayId (lane.history.back ()) == displayId (target)) {
+	if (!previous.id.empty ()) {
+	    lane.forward.push_front (previous);
+	}
+
+	lane.history.pop_back ();
+	lane.current = target;
+	boundHistory (lane);
+	seatBehind (lane, displayId (target));
+	return;
+    }
+
+    // the walk stepped back: a fresh show, recorded like any other
+    const auto at = walkBehind (lane);
+
+    if (at != SIZE_MAX) {
+	lane.cursor = static_cast<int> (at);
+    }
+
+    if (!previous.id.empty () && displayId (previous) != displayId (target)) {
+	lane.history.push_back (previous);
+    }
+
+    lane.forward.clear ();
+    lane.current = target;
+    boundHistory (lane);
+}
+
+std::optional<Entry> WallpaperEngine::Api::forwardTarget (const Lane& lane) {
+    if (lane.forward.empty ()) {
+	return std::nullopt;
+    }
+
+    return lane.forward.front ();
+}
+
+void WallpaperEngine::Api::commitForward (Lane& lane, const Entry& previous, const Entry& target) {
+    if (!previous.id.empty ()) {
+	lane.history.push_back (previous);
+    }
+
+    if (!lane.forward.empty ()) {
+	lane.forward.pop_front ();
+    }
+
+    lane.current = target;
+    boundHistory (lane);
+    const std::size_t n = lane.walk.size ();
+    const auto index = walkIndexOf (lane, displayId (target));
+
+    if (n > 0 && index != SIZE_MAX && index == (static_cast<std::size_t> (lane.cursor + 1)) % n) {
+	lane.cursor = static_cast<int> (index);
+    }
+}
+
+void WallpaperEngine::Api::jumpToEnd (Lane& lane) {
+    // item by item, with forward's own cursor rule: a detour ahead never moves the cursor
+    while (!lane.forward.empty ()) {
+	const Entry ahead = lane.forward.front ();
+	commitForward (lane, lane.current, ahead);
+    }
+}
+
+std::string WallpaperEngine::Api::previousUp (const Lane& lane, const Playlist& playlist) {
+    if (playlist.order == "static" || lane.walk.size () < 2) {
+	return "";
+    }
+
+    if (!lane.history.empty ()) {
+	return displayId (lane.history.back ());
+    }
+
+    const auto at = walkBehind (lane);
+    return at == SIZE_MAX ? "" : lane.walk[at];
+}
+
+std::string WallpaperEngine::Api::aheadUp (const Lane& lane, const Playlist& playlist) {
+    if (!lane.forward.empty ()) {
+	return displayId (lane.forward.front ());
+    }
+
+    return nextUp (lane, playlist);
+}
+
+bool WallpaperEngine::Api::backEnabled (const Lane& lane, const Playlist& playlist) {
+    return playlist.order != "static" && lane.walk.size () > 1;
 }
 
 nlohmann::json WallpaperEngine::Api::toJson (const Entry& entry) {
@@ -383,9 +516,14 @@ nlohmann::json WallpaperEngine::Api::toJson (const Group& group) {
 
 nlohmann::json WallpaperEngine::Api::toJson (const Lane& lane) {
     nlohmann::json history = nlohmann::json::array ();
+    nlohmann::json forward = nlohmann::json::array ();
 
     for (const auto& entry : lane.history) {
 	history.push_back (toJson (entry));
+    }
+
+    for (const auto& entry : lane.forward) {
+	forward.push_back (toJson (entry));
     }
 
     return { { "id", lane.id },
@@ -398,6 +536,7 @@ nlohmann::json WallpaperEngine::Api::toJson (const Lane& lane) {
 	     { "frozen_remaining_s", lane.frozenRemainingSeconds },
 	     { "current", toJson (lane.current) },
 	     { "history", history },
+	     { "forward", forward },
 	     { "fit", { { "zoom", lane.fit.zoom }, { "pan_x", lane.fit.panX }, { "pan_y", lane.fit.panY } } },
 	     { "look",
 	       { { "properties", lane.look.properties },
@@ -529,6 +668,18 @@ Lane WallpaperEngine::Api::laneFromJson (const nlohmann::json& j) {
 	}
     }
 
+    if (j.contains ("forward") && j["forward"].is_array ()) {
+	for (const auto& entry : j["forward"]) {
+	    lane.forward.push_back (entryFromJson (entry));
+	}
+    }
+
+    while (lane.forward.size () > HISTORY_BOUND) {
+	lane.forward.pop_back ();
+    }
+
+    boundHistory (lane);
+
     if (j.contains ("fit") && j["fit"].is_object ()) {
 	const auto& fit = j["fit"];
 	lane.fit.zoom = fit.value ("zoom", 1.0f);
@@ -602,9 +753,11 @@ nlohmann::json WallpaperEngine::Api::laneStatus (const Lane& lane, const Playlis
 	     { "count", playlist.entries.size () },
 	     { "empty", playlist.entries.empty () },
 	     { "cursor", cursor },
-	     { "previous", lane.history.empty () ? "" : displayId (lane.history.back ()) },
+	     { "previous", previousUp (lane, playlist) },
 	     { "now", displayId (lane.current) },
-	     { "next", nextUp (lane, playlist) },
+	     { "next", aheadUp (lane, playlist) },
+	     { "back_enabled", backEnabled (lane, playlist) },
+	     { "forward_depth", lane.forward.size () },
 	     { "interval_s", playlist.intervalSeconds },
 	     { "next_in_s", nextInSeconds (lane, playlist, now) },
 	     { "history_depth", lane.history.size () },

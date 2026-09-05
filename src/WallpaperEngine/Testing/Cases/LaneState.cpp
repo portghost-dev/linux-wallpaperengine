@@ -274,10 +274,16 @@ TEST_CASE ("history is bounded and pops in order", "[lane]") {
 
     REQUIRE (lane.history.size () == HISTORY_BOUND);
     REQUIRE (lane.current.id == "s149");
-    const auto last = popHistory (lane);
+    Playlist none;
+    lane.walk = { "a", "b" }; // back needs a walk of two (R31)
+    const auto last = backTarget (lane, none);
     REQUIRE (last.has_value ());
     REQUIRE (last->id == "s148");
+    const Entry before = lane.current;
+    commitBack (lane, none, before, *last);
     REQUIRE (lane.history.size () == HISTORY_BOUND - 1);
+    REQUIRE (lane.forward.size () == 1);
+    REQUIRE (lane.current.id == "s148");
 }
 
 TEST_CASE ("a version 1 state file becomes one lane and one playlist", "[lane]") {
@@ -326,8 +332,8 @@ TEST_CASE ("lane and playlist round-trip through json", "[lane]") {
     REQUIRE (laneBack.nextCycle == lane.nextCycle);
     REQUIRE (laneBack.cursor == lane.cursor);
     REQUIRE (laneBack.current.id == "wp2");
-    REQUIRE (laneBack.history.size () == 6);
-    REQUIRE (laneBack.history.back ().id == "wp1");
+    REQUIRE (laneBack.history.size () == lane.history.size ());
+    REQUIRE (laneBack.history.back ().id == lane.history.back ().id);
     REQUIRE (laneBack.fit.zoom == 1.5f);
     REQUIRE (laneBack.look.timescale == 2.0f);
     REQUIRE (playlistBack.entries.size () == 5);

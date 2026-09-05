@@ -1421,8 +1421,16 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 
     if (command.cmd == "next" || command.cmd == "prev") {
 	// transport verbs: ack-then-done like show - a heavy scene loads for seconds
-	if (command.cmd == "prev" && this->lane ().history.empty ()) {
-	    this->m_commandServer->respond (client, Api::CommandDispatcher::failure (command.id, "history is empty"));
+	const auto backEntry = Api::backTarget (this->lane (), this->playlistOf (this->lane ()));
+
+	if (command.cmd == "prev" && !backEntry.has_value ()) {
+	    const bool isStatic = this->playlistOf (this->lane ()).order == "static";
+	    this->m_commandServer->respond (
+		client,
+		Api::CommandDispatcher::failure (
+		    command.id, isStatic ? "back is off in static" : "nothing to go back to"
+		)
+	    );
 	    return;
 	}
 
@@ -1436,21 +1444,36 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	    return;
 	}
 
-	if (command.cmd == "next") {
+	const auto aheadEntry = command.cmd == "next" ? Api::forwardTarget (this->lane ()) : std::nullopt;
+
+	if (command.cmd == "next" && !aheadEntry.has_value ()) {
 	    ok = this->apiRotationAdvance (error);
 	} else {
-	    // prev consumes history (watcher parity: pop, apply, never re-push)
-	    const auto entry = *Api::popHistory (this->lane ());
+	    // a step through history: shown without a new record, then the books move
+	    const auto entry = command.cmd == "next" ? *aheadEntry : *backEntry;
+	    const auto before = this->lane ().current;
 	    const auto path = resolveLibraryBackground (entry.id);
 
 	    if (!path.has_value () || !this->preflightWallpaper (path->string ())) {
-		error = "history entry no longer resolves: " + entry.id;
+		// a wallpaper that left the library leaves the books too, so the next press moves on
+		if (command.cmd == "next") {
+		    this->lane ().forward.pop_front ();
+		} else if (!this->lane ().history.empty ()) {
+		    this->lane ().history.pop_back ();
+		}
+
+		error = "history entry no longer resolves and was dropped: " + entry.id;
 	    } else if (!this->makeAnyViewportCurrent ()) {
 		error = "no active viewport to switch on";
 	    } else if (this->applyShowCore (*path, entry.args, false, error)) {
 		this->lane ().lastShow = std::chrono::steady_clock::now ();
-		// back is a true back inside the walk; across a cycle boundary the cycle stays whole
-		Api::seatBehind (this->lane (), Api::displayId (entry));
+
+		if (command.cmd == "next") {
+		    Api::commitForward (this->lane (), before, entry);
+		} else {
+		    Api::commitBack (this->lane (), this->playlistOf (this->lane ()), before, entry);
+		}
+
 		ok = true;
 	    }
 	}
@@ -1880,7 +1903,7 @@ nlohmann::json WallpaperApplication::apiStatus () const {
 			   { "next_in_s", Api::nextInSeconds (lane, playlist, now) },
 			   { "order", playlist.order },
 			   { "count", playlist.entries.size () },
-			   { "next_up", Api::nextUp (lane, playlist) },
+			   { "next_up", Api::aheadUp (lane, playlist) },
 			   { "label", playlist.label },
 			   { "history_depth", lane.history.size () } };
     nlohmann::json lanes = nlohmann::json::array ();
@@ -3302,9 +3325,14 @@ void WallpaperApplication::tickApiRotation () {
 	return;
     }
 
+    // the timer always advances the walk; a backed-up lane first moves to its newest item,
+    // and keeps its books when the advance fails so status never runs ahead of the screen
+    const Api::Lane saved = lane;
+    Api::jumpToEnd (lane);
     std::string error;
 
     if (!this->apiRotationAdvance (error)) {
+	lane = saved;
 	sLog.error ("API: scheduled rotation advance failed: ", error);
 	// re-arm for the next full interval instead of retrying every loop pass
 	lane.lastShow = std::chrono::steady_clock::now ();

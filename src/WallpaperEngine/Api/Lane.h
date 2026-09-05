@@ -92,6 +92,8 @@ struct Lane {
     Entry current;
     /** complete show records, so stepping back restores the look and not only the id */
     std::deque<Entry> history;
+    /** ahead after stepping back; a new show discards them */
+    std::deque<Entry> forward;
 
     Fit fit;
     Look look;
@@ -124,11 +126,32 @@ int nextInSeconds (const Lane& lane, const Playlist& playlist, Clock::time_point
 /** Display id the walk shows next, or empty when a fresh shuffle cycle is still to be drawn. */
 std::string nextUp (const Lane& lane, const Playlist& playlist);
 
-/** Record an applied show; the previous current goes to bounded history when asked. */
+/** Record an applied show: the old current goes behind, forward is discarded; a re-show only refreshes. */
 void recordShow (Lane& lane, const Entry& shown, bool recordHistory);
 
-/** Pop the most recent history entry, if any. */
-std::optional<Entry> popHistory (Lane& lane);
+/** What back would show: history, else the previous walk item; nothing in static or under two items. */
+std::optional<Entry> backTarget (const Lane& lane, const Playlist& playlist);
+
+/** Books after back showed `target`; `previous` was on screen before. */
+void commitBack (Lane& lane, const Playlist& playlist, const Entry& previous, const Entry& target);
+
+/** The item ahead in forward history, if any. */
+std::optional<Entry> forwardTarget (const Lane& lane);
+
+/** Books after forward showed `target`; `previous` was on screen before. */
+void commitForward (Lane& lane, const Entry& previous, const Entry& target);
+
+/** Timer rule: a backed-up lane moves to its newest item before the walk advances. */
+void jumpToEnd (Lane& lane);
+
+/** Display id behind the current show, or empty. */
+std::string previousUp (const Lane& lane, const Playlist& playlist);
+
+/** Display id ahead: forward history, else the walk's next. */
+std::string aheadUp (const Lane& lane, const Playlist& playlist);
+
+/** Never in static, never under two walk items. */
+bool backEnabled (const Lane& lane, const Playlist& playlist);
 
 nlohmann::json toJson (const Entry& entry);
 nlohmann::json toJson (const Playlist& playlist);

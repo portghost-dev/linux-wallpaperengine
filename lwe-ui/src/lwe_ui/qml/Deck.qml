@@ -25,6 +25,14 @@ Rectangle {
     readonly property bool outputsReleased: deck._field("outputs_state") === "released"
     readonly property bool engineOff: !masterActive
     readonly property bool engineDown: !engineOff && deck._field("state") === ""
+    // back is off in static and on a one-item playlist (engine-reported; absent = on)
+    readonly property bool backEnabled: deck._field("back_enabled") !== "false"
+    function nameOf(id) {
+        if (id === "")
+            return "";
+        var t = backend.titleOf(id);
+        return t !== "" ? t : id;
+    }
 
     // Smooth clock: the status poll arrives every 2s, and binding the timer text/bar
     // straight to it made the whole readout step in 2s chunks. Anchor the last polled
@@ -127,6 +135,7 @@ Rectangle {
         }
 
         Row {
+            id: leftRow
             visible: !deck.engineOff && !deck.engineDown
             spacing: Theme.spacingMd
             Rectangle {
@@ -144,46 +153,46 @@ Rectangle {
                     asynchronous: true
                 }
             }
+            // three stacked lines (spec 3.1, R32, R46): Last: <name> / <current name> / Next: <name>
             Column {
+                id: leftLines
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: 1
+                spacing: 0
+                // spec 3.1 caps (190 / 130), and never into the clock: the lines stop short of
+                // the centre block wherever it lands at this width
+                // the clock's elapsed label hangs left of the centred bar: that is the edge to stop at
+                readonly property int clockLeft: (deck.width - barSlot.barWidth) / 2 - 10 - elapsedLabel.width
+                readonly property int room: clockLeft - (leftIdle.x + leftRow.x + leftLines.x) - Theme.spacingMd
+                readonly property int lineWidth: Theme.compact ? 130 : 190
+                // the Last line alone stops short of the clock; the name and Next keep the spec width
+                readonly property int lastWidth: Math.max(48, Math.min(lineWidth, room))
                 Label {
-                    text: "Now playing"
-                    color: Theme.textTertiary
-                    font.pixelSize: Theme.fontMeta
-                    visible: !Theme.compact
-                }
-                Label {
-                    width: Math.min(implicitWidth, Theme.compact ? 130 : 170)
+                    objectName: "deckLast"
+                    width: Math.min(implicitWidth, parent.lastWidth)
                     elide: Text.ElideRight
                     textFormat: Text.PlainText
-                    text: {
-                        var id = deck._field("current");
-                        if (id === "") return "nothing";
-                        var t = backend.titleOf(id);
-                        return t !== "" ? t : id;
-                    }
+                    text: "Last: " + deck.nameOf(deck._field("last"))
+                    color: Theme.textTertiary
+                    font.pixelSize: Theme.fontMeta
+                }
+                Label {
+                    objectName: "deckNow"
+                    width: Math.min(implicitWidth, parent.lineWidth)
+                    elide: Text.ElideRight
+                    textFormat: Text.PlainText
+                    text: deck._field("current") === "" ? "nothing" : deck.nameOf(deck._field("current"))
                     color: Theme.textPrimary
                     font.pixelSize: Theme.fontDeckName
                     font.weight: Theme.weightMedium
                 }
-            }
-            Column {
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 1
-                visible: deck._field("next_up") !== "" && !Theme.compact
-                Label { text: "Next up"; color: Theme.textTertiary; font.pixelSize: Theme.fontMeta }
                 Label {
-                    width: Math.min(implicitWidth, 116)
+                    objectName: "deckNext"
+                    width: Math.min(implicitWidth, parent.lineWidth)
                     elide: Text.ElideRight
                     textFormat: Text.PlainText
-                    text: {
-                        var id = deck._field("next_up");
-                        var t = backend.titleOf(id);
-                        return t !== "" ? t : id;
-                    }
-                    color: Theme.textSecondary
-                    font.pixelSize: Theme.fontControl
+                    text: "Next: " + deck.nameOf(deck._field("next_up"))
+                    color: Theme.textTertiary
+                    font.pixelSize: Theme.fontMeta
                 }
             }
         }
@@ -429,6 +438,7 @@ Rectangle {
                 }
             }
             Label {
+                id: elapsedLabel
                 anchors.right: parent.left
                 anchors.rightMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
@@ -460,11 +470,12 @@ Rectangle {
             component TransportGlyph: Item {
                 id: tg
                 property bool forward: true
+                property bool allowed: true
                 signal tapped()
                 width: 24; height: 24
-                enabled: !deck.holding
+                enabled: !deck.holding && allowed
                 // these DO recede during a lease - they are genuinely disabled while a bench holds it
-                opacity: (deck.engineUp ? 1 : 0.4) * deck.transportDim
+                opacity: (deck.engineUp ? 1 : 0.4) * deck.transportDim * (allowed ? 1 : 0.35)
                 Rectangle {
                     anchors.fill: parent
                     radius: Theme.radiusXs
@@ -497,7 +508,7 @@ Rectangle {
                 TapHandler { onTapped: tg.tapped() }
             }
 
-            TransportGlyph { forward: false; onTapped: backend.rotatePrev() }
+            TransportGlyph { objectName: "deckBack"; forward: false; allowed: deck.backEnabled; onTapped: backend.rotatePrev() }
 
             Item {
                 width: 28; height: 28

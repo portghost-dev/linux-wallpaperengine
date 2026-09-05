@@ -612,6 +612,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/InstrumentRegistry.cpp
         src/WallpaperEngine/Testing/Cases/CommandSocket.cpp
         src/WallpaperEngine/Testing/Cases/LaneState.cpp
+        src/WallpaperEngine/Testing/Cases/LaneHistory.cpp
         src/WallpaperEngine/Testing/Cases/MirrorOwner.cpp
         src/WallpaperEngine/Testing/Cases/CommandDispatcher.cpp)
 endif()

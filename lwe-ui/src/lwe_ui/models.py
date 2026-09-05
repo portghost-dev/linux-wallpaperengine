@@ -1950,6 +1950,13 @@ class Backend(QObject):
                     result["interval"] = int(rot.get("interval_s") or 0)
                     result["playlist"] = str(rot.get("label") or "")
                     result["next_up"] = str(rot.get("next_up") or "")
+                # the lane's transport view (R32): behind, ahead, and whether back can act
+                lanes = api.get("lanes")
+                if isinstance(lanes, list) and lanes and isinstance(lanes[0], dict):
+                    lane = lanes[0]
+                    result["last"] = str(lane.get("previous") or "")
+                    result["next_up"] = str(lane.get("next") or "")
+                    result["back_enabled"] = bool(lane.get("back_enabled", True))
 
                 outs = api.get("outputs")
                 if isinstance(outs, dict):
