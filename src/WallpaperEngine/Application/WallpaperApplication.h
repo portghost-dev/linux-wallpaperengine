@@ -96,6 +96,8 @@ public:
      * Gets the output
      */
     [[nodiscard]] const WallpaperEngine::Render::Drivers::Output::Output& getOutput () const;
+    /** a screen left: any shared wallpaper it owned is handed to a remaining member */
+    void screenRemoved (const std::string& name);
     /**
      * Sets the destination framebuffer for rendering. If not called, the default framebuffer will be used.
      */

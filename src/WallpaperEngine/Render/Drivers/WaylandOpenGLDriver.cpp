@@ -282,6 +282,8 @@ void WaylandOpenGLDriver::onLayerClose (Output::WaylandOutputViewport* viewport)
 	this->viewportInFocus = nullptr;
     }
 
+    this->getApp ().screenRemoved (viewport->name);
+
     // the same teardown the bench release path uses, so a pending frame callback and
     // the cursor objects go with the surfaces here too
     viewport->teardownSurfaces ();
@@ -615,7 +617,8 @@ void WaylandOpenGLDriver::dispatchEventQueue () {
 // the cap spaces scene renders: viewports that only present a shared frame never sleep or count
 void WaylandOpenGLDriver::paceRender (const float minimumTime) {
     if (m_lastRenderStart.has_value ()) {
-	const double since = std::chrono::duration<double> (std::chrono::steady_clock::now () - *m_lastRenderStart).count ();
+	const double since
+	    = std::chrono::duration<double> (std::chrono::steady_clock::now () - *m_lastRenderStart).count ();
 
 	if (since < minimumTime) {
 	    usleep (static_cast<useconds_t> ((minimumTime - since) * 1000000.0));

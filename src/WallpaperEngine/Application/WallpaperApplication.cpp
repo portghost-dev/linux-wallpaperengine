@@ -13,7 +13,7 @@
 #include "WallpaperEngine/Render/CTexture.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
 #include "WallpaperEngine/Render/FBOProvider.h"
-
+#include "WallpaperEngine/Render/MirrorOwner.h"
 #include "WallpaperEngine/Render/OverlayLabel.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 
@@ -986,7 +986,20 @@ void WallpaperApplication::buildWallpapers () {
 
     for (const auto& groupKey : mirrorGroupOrder) {
 	const auto& screens = mirrorGroups[groupKey];
-	const std::string& ownerScreen = screens.front ();
+	// config order can still name an unplugged screen first; the owner must have a live
+	// viewport or its pass never runs and the mirrors freeze
+	std::string ownerScreen = screens.front ();
+
+	if (this->m_videoDriver) {
+	    const auto& viewports = this->m_videoDriver->getOutput ().getViewports ();
+
+	    for (const auto& screen : screens) {
+		if (viewports.find (screen) != viewports.end ()) {
+		    ownerScreen = screen;
+		    break;
+		}
+	    }
+	}
 	const auto& info = this->m_backgrounds.at (ownerScreen);
 
 	const auto scalingIt = this->m_context.settings.general.screenScalings.find (ownerScreen);
@@ -2541,6 +2554,29 @@ nlohmann::json WallpaperApplication::laneCanvas () const {
     }
 
     return { { "w", width }, { "h", height } };
+}
+
+void WallpaperApplication::screenRemoved (const std::string& name) {
+    if (!this->m_renderContext) {
+	return;
+    }
+
+    const auto& wallpapers = this->m_renderContext->getWallpapers ();
+    const auto it = wallpapers.find (name);
+
+    if (it == wallpapers.end () || it->second->getMirrorOwner () != name) {
+	return;
+    }
+
+    std::set<std::string> live;
+
+    for (const auto& [screen, viewport] : this->m_renderContext->getOutput ().getViewports ()) {
+	live.insert (screen);
+    }
+
+    const auto owner = Render::MirrorOwner::next (wallpapers, name, live);
+    it->second->setMirrorOwner (owner);
+    sLog.out ("Mirror group: owner ", name, " left, ", owner.empty () ? "no member remains" : "now owned by " + owner);
 }
 
 namespace {
