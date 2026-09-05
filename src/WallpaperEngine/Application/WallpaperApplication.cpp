@@ -13,6 +13,7 @@
 #include "WallpaperEngine/Render/CTexture.h"
 #include "WallpaperEngine/Render/Drivers/VideoFactories.h"
 #include "WallpaperEngine/Render/FBOProvider.h"
+
 #include "WallpaperEngine/Render/OverlayLabel.h"
 #include "WallpaperEngine/Render/RenderContext.h"
 
@@ -974,8 +975,8 @@ void WallpaperApplication::buildWallpapers () {
 	    ? clampIt->second
 	    : this->m_context.settings.render.window.clamp;
 
-	const std::string groupKey = effectivePath + "|" + std::to_string (static_cast<int> (scaling)) + "|"
-	    + std::to_string (static_cast<uint32_t> (clamp));
+	const std::string groupKey = this->lane ().id + "|" + effectivePath + "|"
+	    + std::to_string (static_cast<int> (scaling)) + "|" + std::to_string (static_cast<uint32_t> (clamp));
 
 	if (mirrorGroups.find (groupKey) == mirrorGroups.end ()) {
 	    mirrorGroupOrder.push_back (groupKey);
@@ -1304,14 +1305,37 @@ void WallpaperApplication::processApiRequests () {
 	    continue;
 	}
 
-	this->handleApiCommand (request.client, *outcome.command);
+	try {
+	    this->handleApiCommand (request.client, *outcome.command);
+	} catch (const nlohmann::json::exception& e) {
+	    // a field of the wrong type earns a refusal, never a dead daemon
+	    sLog.error ("API: ", outcome.command->cmd, " refused: ", e.what ());
+	    this->m_commandServer->respond (
+		request.client,
+		Api::CommandDispatcher::failure (outcome.command->id, std::string ("malformed args: ") + e.what ())
+	    );
+	}
 
 	// every verb that changes durable state re-persists it; readers/diagnostics do not
-	static const std::set<std::string> MUTATING_VERBS
-	    = { "show",       "rotate-set",        "next",          "prev",           "pause",
-		"resume",     "set-fps",           "set-speed",     "set-volume",     "set-mouse",
-		"set-audio",  "set-parallax",      "set-particles", "set-fullscreen", "set-fullscreen-ignore",
-		"set-tuning", "set-app-conditions" };
+	static const std::set<std::string> MUTATING_VERBS = { "show",
+							      "rotate-set",
+							      "next",
+							      "prev",
+							      "pause",
+							      "resume",
+							      "set-fps",
+							      "set-speed",
+							      "set-volume",
+							      "set-mouse",
+							      "set-audio",
+							      "set-parallax",
+							      "set-particles",
+							      "set-fullscreen",
+							      "set-fullscreen-ignore",
+							      "set-tuning",
+							      "set-app-conditions",
+							      "playlist-set",
+							      "lanes-set" };
 
 	if (MUTATING_VERBS.find (outcome.command->cmd) != MUTATING_VERBS.end ()) {
 	    this->persistRuntimeState ();
@@ -1331,6 +1355,17 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	sLog.out ("API: quit requested by client");
 	this->m_context.state.general.keepRunning = false;
 	return;
+    }
+
+    if ((command.cmd == "show" || command.cmd == "next" || command.cmd == "prev") && command.args.contains ("lane")) {
+	const auto name = command.args["lane"].get<std::string> ();
+
+	if (this->m_lanes.find (name) == this->m_lanes.end ()) {
+	    this->m_commandServer->respond (
+		client, Api::CommandDispatcher::failure (command.id, "unknown lane: " + name)
+	    );
+	    return;
+	}
     }
 
     if (command.cmd == "show") {
@@ -1361,9 +1396,19 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	return;
     }
 
+    if (command.cmd == "playlist-set") {
+	this->apiPlaylistSet (client, command.id, command.args);
+	return;
+    }
+
+    if (command.cmd == "lanes-set") {
+	this->apiLanesSet (client, command.id, command.args);
+	return;
+    }
+
     if (command.cmd == "next" || command.cmd == "prev") {
 	// transport verbs: ack-then-done like show - a heavy scene loads for seconds
-	if (command.cmd == "prev" && this->m_showHistory.empty ()) {
+	if (command.cmd == "prev" && this->lane ().history.empty ()) {
 	    this->m_commandServer->respond (client, Api::CommandDispatcher::failure (command.id, "history is empty"));
 	    return;
 	}
@@ -1382,8 +1427,7 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	    ok = this->apiRotationAdvance (error);
 	} else {
 	    // prev consumes history (watcher parity: pop, apply, never re-push)
-	    const auto entry = this->m_showHistory.back ();
-	    this->m_showHistory.pop_back ();
+	    const auto entry = *Api::popHistory (this->lane ());
 	    const auto path = resolveLibraryBackground (entry.id);
 
 	    if (!path.has_value () || !this->preflightWallpaper (path->string ())) {
@@ -1391,7 +1435,7 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	    } else if (!this->makeAnyViewportCurrent ()) {
 		error = "no active viewport to switch on";
 	    } else if (this->applyShowCore (*path, entry.args, false, error)) {
-		this->m_apiRotation.lastShow = std::chrono::steady_clock::now ();
+		this->lane ().lastShow = std::chrono::steady_clock::now ();
 		this->apiRotationPredraw ();
 		ok = true;
 	    }
@@ -1401,7 +1445,7 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	    this->m_commandServer->respond (
 		client,
 		Api::CommandDispatcher::done (
-		    command.id, { { "id", this->m_currentShow.id }, { "ui_id", this->m_currentShow.uiId } }
+		    command.id, { { "id", this->lane ().current.id }, { "ui_id", this->lane ().current.uiId } }
 		)
 	    );
 	} else {
@@ -1792,7 +1836,7 @@ nlohmann::json WallpaperApplication::apiStatus () const {
 		     this->m_colorCorrection.w };
     result["speed"] = this->m_timescale;
 
-    std::string currentId = this->m_currentShow.id;
+    std::string currentId = this->lane ().current.id;
 
     if (currentId.empty ()) {
 	for (const auto& [screen, path] : this->m_context.settings.general.screenBackgrounds) {
@@ -1803,7 +1847,7 @@ nlohmann::json WallpaperApplication::apiStatus () const {
 	}
     }
 
-    result["current"] = { { "id", currentId }, { "ui_id", this->m_currentShow.uiId } };
+    result["current"] = { { "id", currentId }, { "ui_id", this->lane ().current.uiId } };
     result["outputs"] = { { "state", this->m_releaseReason == ReleaseReason::Live ? "live" : "released" },
 			  { "reason",
 			    this->m_releaseReason == ReleaseReason::Deadman            ? "deadman"
@@ -1814,28 +1858,33 @@ nlohmann::json WallpaperApplication::apiStatus () const {
 			  { "deadman_s", this->m_deadmanSeconds },
 			  { "ping_seen", this->m_pingSeen } };
 
-    const auto& rot = this->m_apiRotation;
-    int nextIn = -1;
+    const auto& lane = this->lane ();
+    const auto& playlist = this->playlistOf (lane);
+    const auto now = std::chrono::steady_clock::now ();
+    result["rotation"] = { { "enabled", lane.enabled },
+			   { "interval_s", playlist.intervalSeconds },
+			   { "next_in_s", Api::nextInSeconds (lane, playlist, now) },
+			   { "order", playlist.order },
+			   { "count", playlist.entries.size () },
+			   { "next_up", Api::nextUp (lane, playlist) },
+			   { "label", playlist.label },
+			   { "history_depth", lane.history.size () } };
+    nlohmann::json lanes = nlohmann::json::array ();
+    for (const auto& [key, item] : this->m_lanes) {
+	auto block = Api::laneStatus (item, this->playlistOf (item), now);
+	block["canvas"] = this->laneCanvas ();
 
-    if (rot.frozenRemainingSeconds >= 0) {
-	nextIn = rot.frozenRemainingSeconds;
-    } else if (rot.enabled) {
-	const auto elapsed
-	    = std::chrono::duration_cast<std::chrono::seconds> (std::chrono::steady_clock::now () - rot.lastShow);
-	nextIn = std::max (0, rot.intervalSeconds - static_cast<int> (elapsed.count ()));
+	if (item.current.id.empty ()) {
+	    block["now"] = currentId;
+	}
+	lanes.push_back (block);
     }
-
-    std::string nextUp;
-
-    if (rot.nextPick != SIZE_MAX && rot.nextPick < rot.entries.size ()) {
-	const auto& entry = rot.entries[rot.nextPick];
-	nextUp = entry.uiId.empty () ? entry.id : entry.uiId;
+    result["lanes"] = lanes;
+    nlohmann::json groups = nlohmann::json::array ();
+    for (const auto& [key, group] : this->m_groups) {
+	groups.push_back (Api::toJson (group));
     }
-
-    result["rotation"] = { { "enabled", rot.enabled },       { "interval_s", rot.intervalSeconds },
-			   { "next_in_s", nextIn },          { "order", rot.order },
-			   { "count", rot.entries.size () }, { "next_up", nextUp },
-			   { "label", rot.label },           { "history_depth", this->m_showHistory.size () } };
+    result["groups"] = groups;
 
     result["app_condition"] = { { "behavior", this->m_appCondition.behavior },
 				{ "count", this->m_appCondition.names.size () },
@@ -1997,7 +2046,11 @@ void WallpaperApplication::apiShow (
 
     std::string error;
 
-    if (!this->applyShowCore (*path, args, true, error)) {
+    // the lane selector addressed this verb; it is not part of the wallpaper's look
+    nlohmann::json showArgs = args;
+    showArgs.erase ("lane");
+
+    if (!this->applyShowCore (*path, showArgs, true, error)) {
 	this->m_commandServer->respond (
 	    client, Api::CommandDispatcher::failure (requestId, std::string ("show failed: ") + error)
 	);
@@ -2006,10 +2059,10 @@ void WallpaperApplication::apiShow (
 
     // a manual show restarts the rotation countdown (watcher parity: show-request
     // stamped the rotation clock) and refreshes the pre-drawn next_up
-    this->m_apiRotation.lastShow = std::chrono::steady_clock::now ();
+    this->lane ().lastShow = std::chrono::steady_clock::now ();
 
-    if (this->m_apiRotation.frozenRemainingSeconds >= 0) {
-	this->m_apiRotation.frozenRemainingSeconds = this->m_apiRotation.intervalSeconds;
+    if (this->lane ().frozenRemainingSeconds >= 0) {
+	this->lane ().frozenRemainingSeconds = this->playlistOf (this->lane ()).intervalSeconds;
     }
 
     this->apiRotationPredraw ();
@@ -2191,100 +2244,307 @@ bool WallpaperApplication::applyShowCore (
     // the swap is live: record identity + history. History keeps the FULL show record
     // (args included) so `prev` restores the wallpaper's look, not just its id. prev
     // itself applies with recordHistory=false - it consumes history, never grows it.
-    if (recordHistory && !this->m_currentShow.id.empty ()) {
-	this->m_showHistory.push_back (this->m_currentShow);
-
-	while (this->m_showHistory.size () > 20) {
-	    this->m_showHistory.pop_front ();
-	}
-    }
-
-    this->m_currentShow = { .id = path.filename ().string (),
-			    .uiId = args.contains ("ui_id") ? args["ui_id"].get<std::string> () : "",
-			    .args = args };
+    Api::Entry shown;
+    shown.id = path.filename ().string ();
+    shown.uiId = args.contains ("ui_id") ? args["ui_id"].get<std::string> () : "";
+    shown.args = args;
+    Api::recordShow (this->lane (), shown, recordHistory);
+    this->captureLook (this->lane (), args);
     return true;
 }
-
-namespace {
-/** avoid-repeat and next_up compare by the id the USER sees: the UI identity when the
- *  entry is a preset (several presets share one base), the engine id otherwise */
-std::string displayId (const std::string& id, const std::string& uiId) { return uiId.empty () ? id : uiId; }
-} // namespace
 
 void WallpaperApplication::apiRotateSet (int client, int64_t requestId, const nlohmann::json& args) {
     this->applyRotateSet (args);
     this->m_commandServer->respond (
 	client,
 	Api::CommandDispatcher::done (
-	    requestId, { { "count", this->m_apiRotation.entries.size () }, { "enabled", this->m_apiRotation.enabled } }
+	    requestId,
+	    { { "count", this->playlistOf (this->lane ()).entries.size () }, { "enabled", this->lane ().enabled } }
 	)
     );
 }
 
 void WallpaperApplication::applyRotateSet (const nlohmann::json& args) {
-    auto& rot = this->m_apiRotation;
-
-    std::vector<std::string> previousIds;
-    previousIds.reserve (rot.entries.size ());
-
-    for (const auto& entry : rot.entries) {
-	previousIds.push_back (displayId (entry.id, entry.uiId));
-    }
-
-    const bool wasEnabled = rot.enabled;
-    const int previousInterval = rot.intervalSeconds;
-    const int frozen = rot.frozenRemainingSeconds;
-
-    rot.entries.clear ();
+    Api::Playlist incoming;
+    incoming.slug = "default";
 
     if (args.contains ("entries")) {
 	for (const auto& entry : args["entries"]) {
-	    rot.entries.push_back (
-		{ .id = entry["id"].get<std::string> (),
-		  .uiId = entry.contains ("ui_id") ? entry["ui_id"].get<std::string> () : "",
-		  .args = entry }
-	    );
+	    Api::Entry item;
+	    item.id = entry["id"].get<std::string> ();
+	    item.uiId = entry.contains ("ui_id") ? entry["ui_id"].get<std::string> () : "";
+	    item.args = entry;
+	    incoming.entries.push_back (item);
 	}
     }
 
-    rot.intervalSeconds = args.contains ("interval_s") ? args["interval_s"].get<int> () : 900;
-    rot.order = args.contains ("order") ? args["order"].get<std::string> () : "shuffle";
-    rot.avoidRepeat = !args.contains ("avoid_repeat") || args["avoid_repeat"].get<bool> ();
-    rot.enabled = args.contains ("enabled") && args["enabled"].get<bool> () && !rot.entries.empty ();
-    rot.label = args.contains ("label") ? args["label"].get<std::string> () : "";
-    rot.perm.clear ();
-    rot.permIndex = 0;
-    rot.seqIndex = -1;
-    rot.nextPick = SIZE_MAX;
+    incoming.intervalSeconds = args.contains ("interval_s") ? args["interval_s"].get<int> () : 900;
+    incoming.order = args.contains ("order") ? args["order"].get<std::string> () : "shuffle";
+    incoming.avoidRepeat = !args.contains ("avoid_repeat") || args["avoid_repeat"].get<bool> ();
+    incoming.label = args.contains ("label") ? args["label"].get<std::string> () : "";
 
-    std::vector<std::string> newIds;
-    newIds.reserve (rot.entries.size ());
-
-    for (const auto& entry : rot.entries) {
-	newIds.push_back (displayId (entry.id, entry.uiId));
-    }
-
-    const bool sameSet = newIds == previousIds && rot.intervalSeconds == previousInterval;
-
-    if (!rot.enabled) {
-	rot.frozenRemainingSeconds = sameSet && frozen >= 0 ? frozen : rot.intervalSeconds;
-    } else if (sameSet && !wasEnabled && frozen >= 0) {
-	rot.lastShow = std::chrono::steady_clock::now () - std::chrono::seconds (rot.intervalSeconds - frozen);
-	rot.frozenRemainingSeconds = -1;
-    } else {
-	rot.lastShow = std::chrono::steady_clock::now ();
-	rot.frozenRemainingSeconds = -1;
-    }
-
+    const bool enabled = args.contains ("enabled") && args["enabled"].get<bool> ();
+    auto& lane = this->lane ();
+    lane.playlistSlug = "default";
+    Api::applySet (lane, this->playlist ("default"), incoming, enabled, std::chrono::steady_clock::now ());
     this->apiRotationPredraw ();
+
+    const auto& playlist = this->playlistOf (lane);
     sLog.out (
-	"API: rotation set replaced - ", rot.entries.size (), " entries, interval ", rot.intervalSeconds, "s, order ",
-	rot.order, rot.enabled ? ", ENABLED" : ", disabled"
+	"API: rotation set replaced - ", playlist.entries.size (), " entries, interval ", playlist.intervalSeconds,
+	"s, order ", playlist.order, lane.enabled ? ", ENABLED" : ", disabled"
     );
 }
 
 namespace {
-constexpr int RUNTIME_STATE_VERSION = 1;
+constexpr std::size_t MAX_PENDING_PLAYLISTS = 16;
+} // namespace
+
+void WallpaperApplication::apiPlaylistSet (int client, int64_t requestId, const nlohmann::json& args) {
+    const auto slug = args["slug"].get<std::string> ();
+    const int part = args.contains ("part") ? args["part"].get<int> () : 1;
+    const int of = args.contains ("of") ? args["of"].get<int> () : 1;
+    auto pending = this->m_playlistParts.find (slug);
+
+    if (part == 1) {
+	if (pending == this->m_playlistParts.end () && this->m_playlistParts.size () >= MAX_PENDING_PLAYLISTS) {
+	    this->m_commandServer->respond (
+		client,
+		Api::CommandDispatcher::failure (requestId, "too many playlists mid-transfer; finish or restart one")
+	    );
+	    return;
+	}
+
+	pending = this->m_playlistParts.insert_or_assign (slug, PlaylistParts { .of = of }).first;
+    } else if (
+	pending == this->m_playlistParts.end () || pending->second.of != of
+	|| static_cast<int> (pending->second.pieces.size ()) + 1 != part
+    ) {
+	this->m_commandServer->respond (
+	    client,
+	    Api::CommandDispatcher::failure (
+		requestId,
+		"playlist-set part " + std::to_string (part) + " of " + std::to_string (of)
+		    + " arrived out of order; restart from part 1"
+	    )
+	);
+	return;
+    }
+
+    pending->second.pieces.push_back (args);
+
+    if (part < of) {
+	this->m_commandServer->respond (
+	    client, Api::CommandDispatcher::done (requestId, { { "slug", slug }, { "part", part }, { "of", of } })
+	);
+	return;
+    }
+
+    Api::Playlist incoming;
+    incoming.slug = slug;
+
+    for (const auto& piece : pending->second.pieces) {
+	for (const auto& entry : piece["entries"]) {
+	    Api::Entry item;
+	    item.id = entry["id"].get<std::string> ();
+	    item.uiId = entry.contains ("ui_id") ? entry["ui_id"].get<std::string> () : "";
+	    item.args = entry;
+	    incoming.entries.push_back (item);
+	}
+    }
+
+    const auto& last = pending->second.pieces.back ();
+    incoming.intervalSeconds = last.contains ("interval_s") ? last["interval_s"].get<int> () : 900;
+    incoming.order = last.contains ("order") ? last["order"].get<std::string> () : "shuffle";
+    incoming.avoidRepeat = !last.contains ("avoid_repeat") || last["avoid_repeat"].get<bool> ();
+    incoming.label = last.contains ("label") ? last["label"].get<std::string> () : "";
+    this->m_playlistParts.erase (pending);
+
+    auto& lane = this->lane ();
+    const bool bound = lane.playlistSlug == slug;
+
+    if (bound) {
+	Api::applySet (lane, this->playlist (slug), incoming, lane.enabled, std::chrono::steady_clock::now ());
+	this->apiRotationPredraw ();
+    } else {
+	this->playlist (slug) = incoming;
+    }
+
+    sLog.out (
+	"API: playlist ", slug, " set - ", incoming.entries.size (), " entries, interval ", incoming.intervalSeconds,
+	"s, order ", incoming.order, bound ? ", bound" : ", stored"
+    );
+    this->m_commandServer->respond (
+	client,
+	Api::CommandDispatcher::done (
+	    requestId, { { "slug", slug }, { "count", incoming.entries.size () }, { "bound", bound } }
+	)
+    );
+}
+
+void WallpaperApplication::apiLanesSet (int client, int64_t requestId, const nlohmann::json& args) {
+    for (const auto& item : args["lanes"]) {
+	const auto id = item["id"].get<std::string> ();
+
+	if (id != "all") {
+	    this->m_commandServer->respond (
+		client, Api::CommandDispatcher::failure (requestId, "only lane 'all' exists in this release")
+	    );
+	    return;
+	}
+
+	if (item.contains ("playlist")) {
+	    const auto slug = item["playlist"].get<std::string> ();
+
+	    if (this->m_playlists.find (slug) == this->m_playlists.end ()) {
+		this->m_commandServer->respond (
+		    client,
+		    Api::CommandDispatcher::failure (
+			requestId, "unknown playlist '" + slug + "': send playlist-set first"
+		    )
+		);
+		return;
+	    }
+	}
+    }
+
+    const auto now = std::chrono::steady_clock::now ();
+
+    for (const auto& item : args["lanes"]) {
+	auto& lane = this->lane ();
+	auto& group = this->m_groups["all"];
+	group.key = "all";
+
+	if (item.contains ("group")) {
+	    group.screens.clear ();
+
+	    for (const auto& screen : item["group"]) {
+		group.screens.push_back (
+		    { .make = screen.value ("make", ""),
+		      .model = screen.value ("model", ""),
+		      .serial = screen.value ("serial", ""),
+		      .name = screen.value ("name", "") }
+		);
+	    }
+	}
+
+	const auto slug = item.contains ("playlist") ? item["playlist"].get<std::string> () : lane.playlistSlug;
+	const bool enabled = item.contains ("enabled") ? item["enabled"].get<bool> () : lane.enabled;
+	const bool rebind = slug != lane.playlistSlug;
+
+	// a fit-only push leaves the walk and its clock alone
+	if (rebind || enabled != lane.enabled) {
+	    auto& playlist = this->playlist (slug);
+	    const Api::Playlist incoming = playlist;
+
+	    if (rebind) {
+		lane.playlistSlug = slug;
+		lane.frozenRemainingSeconds = -1;
+	    }
+
+	    Api::applySet (lane, playlist, incoming, enabled, now);
+	    this->apiRotationPredraw ();
+	}
+
+	if (item.contains ("fit") && item["fit"].is_object ()) {
+	    const auto& fit = item["fit"];
+	    lane.fit.zoom = std::clamp (fit.value ("zoom", lane.fit.zoom), 1.0f, 2.0f);
+	    lane.fit.panX = std::clamp (fit.value ("pan_x", lane.fit.panX), -1.0f, 1.0f);
+	    lane.fit.panY = std::clamp (fit.value ("pan_y", lane.fit.panY), -1.0f, 1.0f);
+	}
+
+	sLog.out (
+	    "API: lane ", lane.id, rebind ? " bound to playlist " : " on playlist ", lane.playlistSlug, " (",
+	    this->playlistOf (lane).entries.size (), " entries)", lane.enabled ? ", ENABLED" : ", disabled"
+	);
+    }
+
+    nlohmann::json lanes = nlohmann::json::array ();
+
+    for (const auto& [key, item] : this->m_lanes) {
+	lanes.push_back (Api::laneStatus (item, this->playlistOf (item), now));
+    }
+
+    this->m_commandServer->respond (client, Api::CommandDispatcher::done (requestId, { { "lanes", lanes } }));
+}
+
+WallpaperEngine::Api::Lane& WallpaperApplication::lane () { return this->m_lanes["all"]; }
+
+const WallpaperEngine::Api::Lane& WallpaperApplication::lane () const { return this->m_lanes.at ("all"); }
+
+WallpaperEngine::Api::Playlist& WallpaperApplication::playlist (const std::string& slug) {
+    const auto [it, inserted] = this->m_playlists.try_emplace (slug);
+
+    if (inserted) {
+	it->second.slug = slug;
+    }
+
+    return it->second;
+}
+
+WallpaperEngine::Api::Playlist& WallpaperApplication::playlistOf (const Api::Lane& lane) {
+    return this->playlist (lane.playlistSlug);
+}
+
+const WallpaperEngine::Api::Playlist& WallpaperApplication::playlistOf (const Api::Lane& lane) const {
+    static const Api::Playlist empty;
+    const auto it = this->m_playlists.find (lane.playlistSlug);
+    return it == this->m_playlists.end () ? empty : it->second;
+}
+
+void WallpaperApplication::captureLook (Api::Lane& lane, const nlohmann::json& args) const {
+    auto& look = lane.look;
+    look.properties = nlohmann::json::object ();
+
+    for (const auto& [key, value] : this->m_context.settings.general.properties) {
+	look.properties[key] = value;
+    }
+
+    look.cc = { this->m_colorCorrection.x, this->m_colorCorrection.y, this->m_colorCorrection.z,
+		this->m_colorCorrection.w };
+    look.timescale = this->m_timescale;
+    look.skipObjects.clear ();
+    look.skipEffects.clear ();
+
+    if (args.contains ("skip_objects") && args["skip_objects"].is_array ()) {
+	for (const auto& entry : args["skip_objects"]) {
+	    if (entry.is_number_integer ()) {
+		look.skipObjects.push_back (entry.get<int> ());
+	    }
+	}
+    }
+
+    if (args.contains ("skip_effects") && args["skip_effects"].is_array ()) {
+	for (const auto& entry : args["skip_effects"]) {
+	    if (entry.is_number_integer ()) {
+		look.skipEffects.push_back (entry.get<int> ());
+	    }
+	}
+    }
+
+    look.volume = this->m_context.settings.audio.volume;
+    look.audioProcessing = this->m_context.settings.audio.audioprocessing;
+    look.mouse = this->m_context.settings.mouse.enabled;
+    look.automute = this->m_context.settings.audio.automute;
+    look.scaling = args.value ("scaling", "");
+    look.clamp = args.value ("clamp", "");
+}
+
+nlohmann::json WallpaperApplication::laneCanvas () const {
+    int width = 0, height = 0;
+
+    if (this->m_videoDriver) {
+	for (const auto& [name, viewport] : this->m_videoDriver->getOutput ().getViewports ()) {
+	    width = std::max (width, viewport->viewport.z);
+	    height = std::max (height, viewport->viewport.w);
+	}
+    }
+
+    return { { "w", width }, { "h", height } };
+}
+
+namespace {
+constexpr int RUNTIME_STATE_VERSION = 2;
 constexpr int BOOT_SURVIVED_SECONDS = 60;
 constexpr int BOOT_HISTORY_DEPTH = 3;
 
@@ -2347,23 +2607,35 @@ std::filesystem::path WallpaperApplication::runtimeStateDir () {
 void WallpaperApplication::persistRuntimeState () const {
     nlohmann::json state = nlohmann::json::object ();
     state["version"] = RUNTIME_STATE_VERSION;
-    state["current"] = { { "id", this->m_currentShow.id },
-			 { "ui_id", this->m_currentShow.uiId },
-			 { "args", this->m_currentShow.args } };
-
+    const auto& lane = this->lane ();
+    const auto& playlist = this->playlistOf (lane);
+    state["current"] = { { "id", lane.current.id }, { "ui_id", lane.current.uiId }, { "args", lane.current.args } };
     nlohmann::json entries = nlohmann::json::array ();
-
-    for (const auto& entry : this->m_apiRotation.entries) {
+    for (const auto& entry : playlist.entries) {
 	entries.push_back (entry.args);
     }
-
     state["rotation"] = { { "entries", entries },
-			  { "interval_s", this->m_apiRotation.intervalSeconds },
-			  { "order", this->m_apiRotation.order },
-			  { "avoid_repeat", this->m_apiRotation.avoidRepeat },
-			  { "enabled", this->m_apiRotation.enabled },
-			  { "label", this->m_apiRotation.label },
-			  { "frozen_remaining_s", this->m_apiRotation.frozenRemainingSeconds } };
+			  { "interval_s", playlist.intervalSeconds },
+			  { "order", playlist.order },
+			  { "avoid_repeat", playlist.avoidRepeat },
+			  { "enabled", lane.enabled },
+			  { "label", playlist.label },
+			  { "frozen_remaining_s", lane.frozenRemainingSeconds } };
+    nlohmann::json lanes = nlohmann::json::array ();
+    for (const auto& [key, item] : this->m_lanes) {
+	lanes.push_back (Api::toJson (item));
+    }
+    nlohmann::json playlists = nlohmann::json::array ();
+    for (const auto& [key, item] : this->m_playlists) {
+	playlists.push_back (Api::toJson (item));
+    }
+    nlohmann::json groups = nlohmann::json::array ();
+    for (const auto& [key, item] : this->m_groups) {
+	groups.push_back (Api::toJson (item));
+    }
+    state["lanes"] = lanes;
+    state["playlists"] = playlists;
+    state["groups"] = groups;
     state["paused"] = this->m_manualPauseRequested.load ();
     state["fps"] = this->m_context.settings.render.maximumFPS;
     state["volume"] = this->m_context.settings.audio.volume;
@@ -2434,8 +2706,13 @@ void WallpaperApplication::restoreRuntimeState () {
 
     const auto stateFile = readJsonFile (runtimeStateDir () / "engine-state.json");
 
-    if (!stateFile.has_value () || !stateFile->is_object ()
-	|| stateFile->value ("version", 0) != RUNTIME_STATE_VERSION) {
+    if (!stateFile.has_value () || !stateFile->is_object ()) {
+	return;
+    }
+
+    const int stateVersion = stateFile->value ("version", 0);
+
+    if (stateVersion != 1 && stateVersion != RUNTIME_STATE_VERSION) {
 	return;
     }
 
@@ -2542,26 +2819,46 @@ void WallpaperApplication::restoreRuntimeState () {
 	    this->m_appCondition.behavior = cond.value ("behavior", "off");
 	}
 
-	if (state.contains ("rotation") && state["rotation"].is_object ()) {
-	    const auto& rotation = state["rotation"];
-	    nlohmann::json rotateArgs = nlohmann::json::object ();
-	    rotateArgs["entries"] = rotation.value ("entries", nlohmann::json::array ());
-	    rotateArgs["interval_s"] = rotation.value ("interval_s", 900);
-	    rotateArgs["order"] = rotation.value ("order", "shuffle");
-	    rotateArgs["avoid_repeat"] = rotation.value ("avoid_repeat", true);
-	    rotateArgs["enabled"] = rotation.value ("enabled", false);
-	    rotateArgs["label"] = rotation.value ("label", "");
-	    this->applyRotateSet (rotateArgs);
-
-	    const int frozen = rotation.value ("frozen_remaining_s", -1);
-
-	    if (frozen >= 0 && !this->m_apiRotation.enabled) {
-		this->m_apiRotation.frozenRemainingSeconds = frozen;
+	if (stateVersion == 1) {
+	    Api::Lane legacyLane;
+	    Api::Playlist legacyPlaylist;
+	    Api::fromLegacyState (state, legacyLane, legacyPlaylist);
+	    legacyPlaylist.slug = "default";
+	    auto& lane = this->lane ();
+	    lane.playlistSlug = "default";
+	    Api::applySet (
+		lane, this->playlist ("default"), legacyPlaylist, legacyLane.enabled, std::chrono::steady_clock::now ()
+	    );
+	    if (legacyLane.frozenRemainingSeconds >= 0 && !lane.enabled) {
+		lane.frozenRemainingSeconds = legacyLane.frozenRemainingSeconds;
+	    }
+	    lane.current = legacyLane.current;
+	} else {
+	    if (state.contains ("playlists") && state["playlists"].is_array ()) {
+		for (const auto& item : state["playlists"]) {
+		    const auto playlist = Api::playlistFromJson (item);
+		    this->m_playlists[playlist.slug] = playlist;
+		}
+	    }
+	    if (state.contains ("groups") && state["groups"].is_array ()) {
+		for (const auto& item : state["groups"]) {
+		    const auto group = Api::groupFromJson (item);
+		    this->m_groups[group.key] = group;
+		}
+	    }
+	    if (state.contains ("lanes") && state["lanes"].is_array ()) {
+		for (const auto& item : state["lanes"]) {
+		    auto lane = Api::laneFromJson (item);
+		    lane.lastShow = std::chrono::steady_clock::now ();
+		    lane.nextPick = SIZE_MAX;
+		    const auto bound = this->m_playlists.find (lane.playlistSlug);
+		    lane.enabled = lane.enabled && bound != this->m_playlists.end () && !bound->second.entries.empty ();
+		    this->m_lanes[lane.id] = lane;
+		}
 	    }
 	}
-
-	const std::string showId
-	    = state.contains ("current") && state["current"].is_object () ? state["current"].value ("id", "") : "";
+	const std::string showId = this->lane ().current.id;
+	const nlohmann::json showArgs = this->lane ().current.args;
 
 	if (!showId.empty ()) {
 	    // same recipe as the prev verb: resolve, preflight, current viewport, core
@@ -2572,19 +2869,18 @@ void WallpaperApplication::restoreRuntimeState () {
 		sLog.error ("state restore: persisted background no longer resolves: ", showId);
 	    } else if (!this->makeAnyViewportCurrent ()) {
 		sLog.error ("state restore: no active viewport to restore onto");
-	    } else if (!this->applyShowCore (
-			   *path, state["current"].value ("args", nlohmann::json::object ()), false, error
-		       )) {
+	    } else if (!this->applyShowCore (*path, showArgs, false, error)) {
 		sLog.error ("state restore: show failed: ", error);
 	    } else {
-		this->m_apiRotation.lastShow = std::chrono::steady_clock::now ();
+		this->lane ().lastShow = std::chrono::steady_clock::now ();
 		this->apiRotationPredraw ();
 		sLog.out (
-		    "state restore: showing ", showId, " (rotation ",
-		    this->m_apiRotation.enabled ? "enabled" : "disabled", ", ", this->m_apiRotation.entries.size (),
-		    " entries)"
+		    "state restore: showing ", showId, " (rotation ", this->lane ().enabled ? "enabled" : "disabled",
+		    ", ", this->playlistOf (this->lane ()).entries.size (), " entries)"
 		);
 	    }
+	} else {
+	    this->apiRotationPredraw ();
 	}
 
 	this->m_manualPauseRequested = state.value ("paused", false);
@@ -2616,64 +2912,19 @@ void WallpaperApplication::markBootSurvived () {
 }
 
 size_t WallpaperApplication::apiRotationPick () {
-    auto& rot = this->m_apiRotation;
-    const size_t n = rot.entries.size ();
-
-    if (n == 0) {
-	return SIZE_MAX;
-    }
-
-    if (n == 1) {
-	return 0;
-    }
-
-    size_t pick = SIZE_MAX;
-
-    if (rot.order == "sequential") {
-	rot.seqIndex = (rot.seqIndex + 1) % static_cast<int> (n);
-	pick = static_cast<size_t> (rot.seqIndex);
-    } else if (rot.order == "random") {
-	pick = this->m_playlistRng () % n;
-    } else {
-	if (rot.perm.size () != n || rot.permIndex >= rot.perm.size ()) {
-	    rot.perm.resize (n);
-	    std::iota (rot.perm.begin (), rot.perm.end (), 0);
-	    std::shuffle (rot.perm.begin (), rot.perm.end (), this->m_playlistRng);
-	    rot.permIndex = 0;
-	}
-
-	pick = rot.perm[rot.permIndex++];
-    }
-
-    const auto current = displayId (this->m_currentShow.id, this->m_currentShow.uiId);
-
-    if (rot.avoidRepeat && !current.empty ()) {
-	int guard = 0;
-
-	while (guard < 8 && displayId (rot.entries[pick].id, rot.entries[pick].uiId) == current) {
-	    if (rot.order == "sequential") {
-		rot.seqIndex = (rot.seqIndex + 1) % static_cast<int> (n);
-		pick = static_cast<size_t> (rot.seqIndex);
-	    } else {
-		pick = this->m_playlistRng () % n;
-	    }
-
-	    guard++;
-	}
-    }
-
-    return pick;
+    return Api::pickNext (this->lane (), this->playlistOf (this->lane ()), this->m_playlistRng);
 }
 
 void WallpaperApplication::apiRotationPredraw () {
-    auto& rot = this->m_apiRotation;
-    rot.nextPick = rot.entries.empty () ? SIZE_MAX : this->apiRotationPick ();
+    auto& lane = this->lane ();
+    lane.nextPick = this->playlistOf (lane).entries.empty () ? SIZE_MAX : this->apiRotationPick ();
 }
 
 bool WallpaperApplication::apiRotationAdvance (std::string& error) {
-    auto& rot = this->m_apiRotation;
+    auto& rot = this->lane ();
+    const auto& entries = this->playlistOf (rot).entries;
 
-    if (rot.entries.empty ()) {
+    if (entries.empty ()) {
 	error = "rotation set is empty";
 	return false;
     }
@@ -2686,8 +2937,8 @@ bool WallpaperApplication::apiRotationAdvance (std::string& error) {
     size_t pick = rot.nextPick != SIZE_MAX ? rot.nextPick : this->apiRotationPick ();
     rot.nextPick = SIZE_MAX;
 
-    for (size_t attempts = 0; attempts < rot.entries.size (); attempts++) {
-	const auto& entry = rot.entries[pick];
+    for (size_t attempts = 0; attempts < entries.size (); attempts++) {
+	const auto& entry = entries[pick];
 	const auto path = resolveLibraryBackground (entry.id);
 
 	if (path.has_value () && this->preflightWallpaper (path->string ())) {
@@ -3007,19 +3258,14 @@ void WallpaperApplication::tickFullscreenGate () {
 }
 
 void WallpaperApplication::tickApiRotation () {
-    auto& rot = this->m_apiRotation;
+    auto& lane = this->lane ();
+    const auto& playlist = this->playlistOf (lane);
 
     // released outputs = nothing to paint on; advancing would rebuild scenes (VRAM
     // resident again) into surfaces that do not exist. The clock keeps counting - an
     // overdue advance fires on the first tick after acquire.
-    if (!rot.enabled || rot.entries.empty () || this->m_releaseReason != ReleaseReason::Live) {
-	return;
-    }
-
-    const auto elapsed
-	= std::chrono::duration_cast<std::chrono::seconds> (std::chrono::steady_clock::now () - rot.lastShow);
-
-    if (elapsed.count () < rot.intervalSeconds) {
+    if (this->m_releaseReason != ReleaseReason::Live
+	|| !Api::dueForAdvance (lane, playlist, std::chrono::steady_clock::now ())) {
 	return;
     }
 
@@ -3028,12 +3274,10 @@ void WallpaperApplication::tickApiRotation () {
     if (!this->apiRotationAdvance (error)) {
 	sLog.error ("API: scheduled rotation advance failed: ", error);
 	// re-arm for the next full interval instead of retrying every loop pass
-	rot.lastShow = std::chrono::steady_clock::now ();
+	lane.lastShow = std::chrono::steady_clock::now ();
 	return;
     }
 
-    // a scheduled advance changes durable state (the current wallpaper) exactly like a
-    // verb does; persist so a crash or restart restores what was actually on screen
     this->persistRuntimeState ();
 }
 

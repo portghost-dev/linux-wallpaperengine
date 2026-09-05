@@ -14,6 +14,8 @@ const std::set<std::string> KNOWN_VERBS = { "status",
 					    "set-skip",
 					    "list-objects",
 					    "rotate-set",
+					    "playlist-set",
+					    "lanes-set",
 					    "next",
 					    "prev",
 					    "ping",
@@ -243,6 +245,11 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 	args = request["args"];
     }
 
+    if ((cmd == "show" || cmd == "next" || cmd == "prev") && args.contains ("lane")
+	&& (!args["lane"].is_string () || !validBackgroundId (args["lane"].get<std::string> ()))) {
+	return { .command = std::nullopt, .errorResponse = failure (id, "args.lane must match [A-Za-z0-9_-]{1,64}") };
+    }
+
     if (cmd == "show") {
 	if (!args.contains ("id") || !args["id"].is_string ()) {
 	    return { .command = std::nullopt, .errorResponse = failure (id, "show requires a string args.id") };
@@ -293,11 +300,11 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 	}
 
 	if (args.contains ("order")) {
-	    static const std::set<std::string> ORDERS = { "sequential", "shuffle", "random" };
+	    static const std::set<std::string> ORDERS = { "sequential", "shuffle", "random", "static" };
 
 	    if (!args["order"].is_string () || ORDERS.find (args["order"].get<std::string> ()) == ORDERS.end ()) {
 		return { .command = std::nullopt,
-			 .errorResponse = failure (id, "args.order must be one of sequential/shuffle/random") };
+			 .errorResponse = failure (id, "args.order must be one of sequential/shuffle/random/static") };
 	    }
 	}
 
@@ -312,6 +319,147 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 	    && (!args["label"].is_string () || args["label"].get<std::string> ().size () > 128)) {
 	    return { .command = std::nullopt,
 		     .errorResponse = failure (id, "args.label must be a string of at most 128 chars") };
+	}
+    }
+
+    if (cmd == "playlist-set") {
+	if (!args.contains ("slug") || !args["slug"].is_string ()
+	    || !validBackgroundId (args["slug"].get<std::string> ())) {
+	    return { .command = std::nullopt,
+		     .errorResponse = failure (id, "playlist-set requires args.slug matching [A-Za-z0-9_-]{1,64}") };
+	}
+
+	if (!args.contains ("entries") || !args["entries"].is_array () || args["entries"].size () > 512) {
+	    return { .command = std::nullopt,
+		     .errorResponse
+		     = failure (id, "playlist-set requires args.entries, an array of at most 512 entries") };
+	}
+
+	for (const auto& entry : args["entries"]) {
+	    if (!entry.is_object () || !entry.contains ("id") || !entry["id"].is_string ()
+		|| !validBackgroundId (entry["id"].get<std::string> ())) {
+		return { .command = std::nullopt,
+			 .errorResponse
+			 = failure (id, "every playlist entry needs an id matching [A-Za-z0-9_-]{1,64}") };
+	    }
+
+	    const auto error = validateShowArgs (entry);
+
+	    if (!error.empty ()) {
+		return { .command = std::nullopt,
+			 .errorResponse = failure (id, "entry " + entry["id"].get<std::string> () + ": " + error) };
+	    }
+	}
+
+	for (const auto* field : { "part", "of" }) {
+	    if (args.contains (field)
+		&& (!args[field].is_number_integer () || args[field].get<int64_t> () < 1
+		    || args[field].get<int64_t> () > 64)) {
+		return { .command = std::nullopt,
+			 .errorResponse
+			 = failure (id, std::string ("args.") + field + " must be an integer in 1..64") };
+	    }
+	}
+
+	if (args.contains ("part") && !args.contains ("of")) {
+	    return { .command = std::nullopt, .errorResponse = failure (id, "args.part requires args.of") };
+	}
+
+	if (args.contains ("part") && args.contains ("of")
+	    && args["part"].get<int64_t> () > args["of"].get<int64_t> ()) {
+	    return { .command = std::nullopt, .errorResponse = failure (id, "args.part must not exceed args.of") };
+	}
+
+	if (args.contains ("interval_s")) {
+	    const auto& interval = args["interval_s"];
+
+	    if (!interval.is_number_integer () || interval.get<int64_t> () < 15 || interval.get<int64_t> () > 604800) {
+		return { .command = std::nullopt,
+			 .errorResponse = failure (id, "args.interval_s must be an integer in 15..604800") };
+	    }
+	}
+
+	if (args.contains ("avoid_repeat") && !args["avoid_repeat"].is_boolean ()) {
+	    return { .command = std::nullopt, .errorResponse = failure (id, "args.avoid_repeat must be a boolean") };
+	}
+
+	if (args.contains ("order")) {
+	    static const std::set<std::string> PLAYLIST_ORDERS = { "sequential", "shuffle", "random", "static" };
+
+	    if (!args["order"].is_string ()
+		|| PLAYLIST_ORDERS.find (args["order"].get<std::string> ()) == PLAYLIST_ORDERS.end ()) {
+		return { .command = std::nullopt,
+			 .errorResponse = failure (id, "args.order must be one of sequential/shuffle/random/static") };
+	    }
+	}
+
+	if (args.contains ("label")
+	    && (!args["label"].is_string () || args["label"].get<std::string> ().size () > 128)) {
+	    return { .command = std::nullopt,
+		     .errorResponse = failure (id, "args.label must be a string of at most 128 chars") };
+	}
+    }
+
+    if (cmd == "lanes-set") {
+	if (!args.contains ("lanes") || !args["lanes"].is_array () || args["lanes"].empty ()
+	    || args["lanes"].size () > 16) {
+	    return { .command = std::nullopt,
+		     .errorResponse = failure (id, "lanes-set requires args.lanes, an array of 1..16 lanes") };
+	}
+
+	for (const auto& lane : args["lanes"]) {
+	    if (!lane.is_object () || !lane.contains ("id") || !lane["id"].is_string ()
+		|| !validBackgroundId (lane["id"].get<std::string> ())) {
+		return { .command = std::nullopt,
+			 .errorResponse = failure (id, "every lane needs an id matching [A-Za-z0-9_-]{1,64}") };
+	    }
+
+	    if (lane.contains ("playlist")
+		&& (!lane["playlist"].is_string () || !validBackgroundId (lane["playlist"].get<std::string> ()))) {
+		return { .command = std::nullopt,
+			 .errorResponse = failure (id, "lane.playlist must match [A-Za-z0-9_-]{1,64}") };
+	    }
+
+	    if (lane.contains ("enabled") && !lane["enabled"].is_boolean ()) {
+		return { .command = std::nullopt, .errorResponse = failure (id, "lane.enabled must be a boolean") };
+	    }
+
+	    if (lane.contains ("group")) {
+		if (!lane["group"].is_array () || lane["group"].size () > 32) {
+		    return { .command = std::nullopt,
+			     .errorResponse = failure (id, "lane.group must be an array of at most 32 screens") };
+		}
+
+		for (const auto& screen : lane["group"]) {
+		    if (!screen.is_object ()) {
+			return { .command = std::nullopt,
+				 .errorResponse = failure (id, "every screen must be an object") };
+		    }
+
+		    for (const auto* field : { "make", "model", "serial", "name" }) {
+			if (screen.contains (field)
+			    && (!screen[field].is_string () || screen[field].get<std::string> ().size () > 128)) {
+			    return { .command = std::nullopt,
+				     .errorResponse = failure (
+					 id, std::string ("screen.") + field + " must be a string of at most 128 chars"
+				     ) };
+			}
+		    }
+		}
+	    }
+
+	    if (lane.contains ("fit")) {
+		if (!lane["fit"].is_object ()) {
+		    return { .command = std::nullopt, .errorResponse = failure (id, "lane.fit must be an object") };
+		}
+
+		for (const auto* field : { "zoom", "pan_x", "pan_y" }) {
+		    if (lane["fit"].contains (field) && !lane["fit"][field].is_number ()) {
+			return { .command = std::nullopt,
+				 .errorResponse = failure (id, std::string ("fit.") + field + " must be a number") };
+		    }
+		}
+	    }
 	}
     }
 

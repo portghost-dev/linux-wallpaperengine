@@ -321,6 +321,53 @@ TEST_CASE ("rotation and transport verbs are validated", "[dispatcher]") {
     }
 }
 
+TEST_CASE ("playlist and lane verbs are validated", "[dispatcher]") {
+    const std::string good[] = {
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"default","entries":[]}})",
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"chill","entries":[{"id":"123","ui_id":"p9"}],)"
+	R"("interval_s":900,"order":"static","avoid_repeat":false,"label":"Chill"}})",
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"big","entries":[{"id":"1"}],"part":2,"of":3}})",
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"big","entries":[{"id":"1"}],"of":2}})",
+	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all"}]}})",
+	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all","playlist":"chill","enabled":true,)"
+	R"("group":[{"make":"LG","model":"27GP950","serial":"1","name":"DP-2"}],"fit":{"zoom":1.5,"pan_x":0.2}}]}})",
+	R"({"id":1,"cmd":"next","args":{"lane":"all"}})",
+	R"({"id":1,"cmd":"show","args":{"id":"1","lane":"all"}})",
+    };
+
+    for (const auto& line : good) {
+	INFO ("input: " << line);
+	CHECK (CommandDispatcher::parse (line).command.has_value ());
+    }
+
+    const std::string bad[] = {
+	R"({"id":1,"cmd":"playlist-set"})",
+	R"({"id":1,"cmd":"playlist-set","args":{"entries":[]}})",
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"../x","entries":[]}})",
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"a","entries":"nope"}})",
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"a","entries":[{"ui_id":"x"}]}})",
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"a","entries":[],"avoid_repeat":"yes"}})",
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"a","entries":[],"part":2}})",
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"a","entries":[],"part":3,"of":2}})",
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"a","entries":[],"part":0,"of":2}})",
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"a","entries":[],"order":"alphabetical"}})",
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"a","entries":[],"interval_s":5}})",
+	R"({"id":1,"cmd":"lanes-set"})",
+	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[]}})",
+	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"playlist":"x"}]}})",
+	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all","playlist":"../x"}]}})",
+	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all","enabled":"yes"}]}})",
+	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all","group":"DP-2"}]}})",
+	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all","fit":{"zoom":"big"}}]}})",
+	R"({"id":1,"cmd":"next","args":{"lane":"../x"}})",
+    };
+
+    for (const auto& line : bad) {
+	INFO ("input: " << line);
+	CHECK_FALSE (CommandDispatcher::parse (line).command.has_value ());
+    }
+}
+
 TEST_CASE ("response builders produce the documented shapes", "[dispatcher]") {
     const auto ack = json::parse (CommandDispatcher::accepted (5));
     CHECK (ack["id"] == 5);

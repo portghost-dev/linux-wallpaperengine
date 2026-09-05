@@ -2,7 +2,7 @@
 #include <atomic>
 
 #include <chrono>
-#include <deque>
+
 #include <random>
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
@@ -21,6 +21,7 @@
 
 #include "WallpaperEngine/Api/CommandDispatcher.h"
 #include "WallpaperEngine/Api/CommandServer.h"
+#include "WallpaperEngine/Api/Lane.h"
 #include "WallpaperEngine/Data/Model/Types.h"
 #include "WallpaperEngine/Media/MediaSource.h"
 
@@ -202,8 +203,19 @@ private:
 	const std::filesystem::path& path, const nlohmann::json& args, bool recordHistory, std::string& error
     );
     void apiRotateSet (int client, int64_t requestId, const nlohmann::json& args);
-    /** rotate-set core, client-free so state restore can replay a persisted set */
+    /** rotate-set shim: binds lane all to playlist default with the legacy set args */
     void applyRotateSet (const nlohmann::json& args);
+    void apiPlaylistSet (int client, int64_t requestId, const nlohmann::json& args);
+    void apiLanesSet (int client, int64_t requestId, const nlohmann::json& args);
+    /** the one lane bound to every screen today */
+    Api::Lane& lane ();
+    [[nodiscard]] const Api::Lane& lane () const;
+    Api::Playlist& playlistOf (const Api::Lane& lane);
+    /** the playlist stored under `slug`, created empty (and named) on first use */
+    Api::Playlist& playlist (const std::string& slug);
+    [[nodiscard]] const Api::Playlist& playlistOf (const Api::Lane& lane) const;
+    void captureLook (Api::Lane& lane, const nlohmann::json& args) const;
+    [[nodiscard]] nlohmann::json laneCanvas () const;
     /**
      * Runtime state persistence: the engine writes its own durable state (current show,
      * rotation set, playback/audio/policy toggles) after every mutating verb and restores
@@ -309,33 +321,15 @@ private:
 	std::map<std::string, WallpaperEngine::Render::WallpaperState::TextureUVsScaling> screenScalings;
 	std::map<std::string, TextureFlags> screenClamps;
     } m_showDefaults {};
-    struct ApiRotationEntry {
-	std::string id;
-	std::string uiId;
-	nlohmann::json args;
+    std::map<std::string, Api::Lane> m_lanes { { "all", Api::Lane {} } };
+    std::map<std::string, Api::Playlist> m_playlists { { "default", Api::Playlist {} } };
+    std::map<std::string, Api::Group> m_groups { { "all", Api::Group {} } };
+    /** playlist-set parts collected until the last one lands, keyed by slug */
+    struct PlaylistParts {
+	int of = 1;
+	std::vector<nlohmann::json> pieces;
     };
-    struct {
-	std::vector<ApiRotationEntry> entries;
-	int intervalSeconds = 900;
-	std::string order = "shuffle";
-	bool avoidRepeat = true;
-	bool enabled = false;
-	std::string label;
-	/** shuffle: exhaust a permutation before re-shuffling (watcher parity) */
-	std::vector<size_t> perm;
-	size_t permIndex = 0;
-	int seqIndex = -1;
-	/** pre-drawn pick consumed by the next advance; SIZE_MAX = none */
-	size_t nextPick = SIZE_MAX;
-	std::chrono::steady_clock::time_point lastShow {};
-	/** countdown freeze (disable pauses the clock; re-enable resumes, never insta-rotates) */
-	int frozenRemainingSeconds = -1;
-    } m_apiRotation {};
-    /** prev-history: complete show records so prev restores the LOOK, not just the id */
-    std::deque<ApiRotationEntry> m_showHistory {};
-    /** what is showing now: engine id, the UI's opaque identity echo, and the args
-     *  as applied (so history entries can restore the full look) */
-    ApiRotationEntry m_currentShow {};
+    std::map<std::string, PlaylistParts> m_playlistParts;
     std::chrono::steady_clock::time_point m_lastPing {};
     bool m_pingSeen = false;
     struct {

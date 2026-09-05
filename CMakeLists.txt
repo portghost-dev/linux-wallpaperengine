@@ -324,6 +324,7 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Debugging/CallStack.h
 
     src/WallpaperEngine/Api/CommandDispatcher.cpp
+    src/WallpaperEngine/Api/Lane.cpp
     src/WallpaperEngine/Api/CommandDispatcher.h
     src/WallpaperEngine/Api/CommandServer.cpp
     src/WallpaperEngine/Api/CommandServer.h
@@ -610,6 +611,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/BinaryParserHardening.cpp
         src/WallpaperEngine/Testing/Cases/InstrumentRegistry.cpp
         src/WallpaperEngine/Testing/Cases/CommandSocket.cpp
+        src/WallpaperEngine/Testing/Cases/LaneState.cpp
         src/WallpaperEngine/Testing/Cases/CommandDispatcher.cpp)
 endif()
 
