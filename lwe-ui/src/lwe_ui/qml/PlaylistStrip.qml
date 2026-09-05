@@ -449,7 +449,7 @@ Item {
             }
             Repeater {
                 model: (strip.folded && nameMenu.foldedModesOpen)
-                       ? ["shuffle", "random", "sequential", "static"] : []
+                       ? ["shuffle", "sequential", "static"] : []
                 delegate: Item {
                     id: fModeRow
                     required property string modelData
@@ -577,7 +577,7 @@ Item {
         contentItem: Column {
             spacing: 2
             Repeater {
-                model: ["shuffle", "random", "sequential", "static"]
+                model: ["shuffle", "sequential", "static"]
                 delegate: Item {
                     id: modeRow
                     required property string modelData

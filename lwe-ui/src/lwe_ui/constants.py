@@ -13,8 +13,8 @@ PARTICLE_OBJECT_WARN = 50
 OBJECT_TYPES = ("image", "particle", "sound", "text", "light", "model", "effect", "generic")
 WALLPAPER_TYPES = ("scene", "video", "web")
 
-ORDERS = ("shuffle", "random", "sequential")
-PLAYLIST_MODES = ("shuffle", "random", "sequential", "static")
+ORDERS = ("shuffle", "sequential")
+PLAYLIST_MODES = ("shuffle", "sequential", "static")
 PLAYLIST_UNITS = ("min", "s")
 TRANSITIONS = ("hardcut", "dimmask", "crossfade")
 MONITOR_MODES = ("mirror", "per_monitor", "span")
@@ -55,8 +55,9 @@ AUDIO_DIAL_ENV = {
 SCHEDULE_UI = False
 
 
-# The engine refuses a rotate-set with more entries than this, and drops a request line
-# longer than 64 KiB outright; the byte cap here leaves room for the request envelope.
+# The engine refuses a rotate-set or playlist-set part with more entries than this, and
+# drops a request line longer than 64 KiB outright. The byte cap counts the entries alone;
+# the 4 KiB left covers the envelope (id, cmd, slug, part/of, label: under 2 KB at worst).
 ENGINE_ROTATE_MAX_ENTRIES = 512
 ENGINE_ROTATE_MAX_BYTES = 60 * 1024
 
@@ -158,7 +159,6 @@ WP_SCHEMA: dict[str, dict] = {
     "AUDIO_REACTIVE": {"type": "bool", "default": False},
     "MOUSE": {"type": "bool", "default": False},
     "FULLSCREEN_PAUSE": {"type": "bool_or_empty", "default": ""},  # "" = inherit global
-    "MONITORS": {"type": "str", "default": "all"},
     "SKIP": {"type": "str", "default": ""},  # space-separated object ids
 }
 WP_PROP_PREFIX = "PROP_"

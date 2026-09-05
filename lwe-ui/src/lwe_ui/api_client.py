@@ -186,6 +186,11 @@ def status(sock: "str | os.PathLike | None" = None) -> dict[str, Any] | None:
     return result if isinstance(result, dict) else None
 
 
+def _clip_label(label: Any) -> str:
+    """At most 128 UTF-8 bytes, the engine's cap, without splitting a character."""
+    return str(label).encode("utf-8")[:128].decode("utf-8", "ignore")
+
+
 def rotate_set(
     entries: list[dict[str, Any]],
     interval_s: int,
@@ -207,9 +212,44 @@ def rotate_set(
         "order": str(order),
         "avoid_repeat": bool(avoid_repeat),
         "enabled": bool(enabled),
-        "label": str(label)[:128],
+        "label": _clip_label(label),
     }
     return request("rotate-set", args)
+
+
+def playlist_set(
+    slug: str,
+    entries: list[dict[str, Any]],
+    order: str,
+    interval_s: int,
+    part: int = 1,
+    of: int = 1,
+    avoid_repeat: bool = True,
+    label: str = "",
+) -> dict[str, Any] | None:
+    """Store one playlist on the engine by slug, in numbered parts when the set is large.
+
+    Parts must arrive 1..of in order; the engine applies the set on the last part. This
+    stores content only - lanes_set binds a lane to it. Entries are complete resolved
+    show-args objects, as for rotate_set.
+    """
+    args: dict[str, Any] = {
+        "slug": str(slug),
+        "entries": entries,
+        "part": int(part),
+        "of": int(of),
+        "interval_s": max(15, min(int(interval_s), 604800)),
+        "order": str(order),
+        "avoid_repeat": bool(avoid_repeat),
+        "label": _clip_label(label),
+    }
+    return request("playlist-set", args)
+
+
+def lanes_set(lanes: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Bind lanes to playlists. Each lane is {id, playlist?, enabled?, group?, fit?}; the
+    engine refuses a playlist it has not been sent and returns every lane's status."""
+    return request("lanes-set", {"lanes": list(lanes)})
 
 
 def next_wallpaper() -> dict[str, Any] | None:

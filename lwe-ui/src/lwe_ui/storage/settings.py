@@ -115,6 +115,8 @@ def _validate(d: dict[str, Any]) -> dict[str, Any]:
                     val = ""
         elif t == "enum":
             choices = spec.get("choices", ())
+            if key == "ORDER" and val == "random":
+                val = "shuffle"  # retired mode, see PLAYLIST_MODES
             if val not in choices:
                 warnings.warn(f"settings: {key}={val!r} not in {choices}; using default")
                 val = spec["default"]

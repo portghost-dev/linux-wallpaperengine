@@ -36,7 +36,6 @@ def _draft(wid: str = "1234567890") -> dict:
         "AUDIO_REACTIVE": False,
         "MOUSE": False,
         "FULLSCREEN_PAUSE": "",
-        "MONITORS": "all",
         "SKIP": "",
         "props": {"schemecolor": "0.2 0.4 0.6"},
     }

@@ -411,9 +411,6 @@ class BenchBridge(QObject):
             return "false"
         return ""
 
-    def _get_monitors(self) -> str:
-        return str(self._draft_get("MONITORS") or "all")
-
     wallpaperId = Property(str, _get_wid, notify=loaded)
     title = Property(str, _get_title, notify=loaded)
     type = Property(str, _get_type, notify=loaded)
@@ -431,7 +428,6 @@ class BenchBridge(QObject):
     audioReactive = Property(bool, _get_audio_reactive, notify=loaded)
     mouse = Property(bool, _get_mouse, notify=loaded)
     fullscreenPause = Property(str, _get_fullscreen_pause, notify=loaded)
-    monitors = Property(str, _get_monitors, notify=loaded)
 
     def _get_bench_available(self) -> bool:
         return self._bench_available
@@ -593,11 +589,6 @@ class BenchBridge(QObject):
         else:
             self._draft["FULLSCREEN_PAUSE"] = ""
         self._persist_draft({"FULLSCREEN_PAUSE": self._draft["FULLSCREEN_PAUSE"]})
-
-    @Slot(str)
-    def setMonitors(self, value: str) -> None:
-        s = str(value).strip()
-        self._set_key("MONITORS", s or "all")
 
     @Slot(str, "QVariant")
     def setProp(self, name: str, value: Any) -> None:

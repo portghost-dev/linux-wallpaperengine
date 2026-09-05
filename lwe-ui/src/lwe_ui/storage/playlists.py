@@ -23,9 +23,12 @@ from . import atomic, paths, settings, tier_a
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
+SLUG_MAX = 60  # the engine's id limit is 64; _unique_slug may append "-NN"
+
+
 def slugify(name: str) -> str:
-    """Display name -> filesystem-safe slug ('' never returned)."""
-    s = _SLUG_RE.sub("-", (name or "").strip().lower()).strip("-")
+    """Display name -> filesystem-safe slug ('' never returned), at most SLUG_MAX chars."""
+    s = _SLUG_RE.sub("-", (name or "").strip().lower()).strip("-")[:SLUG_MAX].rstrip("-")
     return s or "playlist"
 
 
@@ -65,6 +68,8 @@ def _validate(d: dict[str, Any]) -> dict[str, Any]:
             if hi is not None and val > hi:
                 val = hi
         elif spec["type"] == "enum":
+            if key == "MODE" and val == "random":
+                val = "shuffle"  # retired mode; the engine treats the word as shuffle for one release
             if val not in spec.get("choices", ()):
                 warnings.warn(f"playlist: {key}={val!r} not in {spec.get('choices')}; using default")
                 val = spec["default"]
@@ -162,6 +167,35 @@ def toggle_member(slug: str, wid: str) -> bool:
     d["MEMBERS"] = " ".join(ids)
     save(slug, d)
     return now
+
+
+def reorder(slug: str, ids: list[str]) -> list[str]:
+    """Store `ids` as the playlist's order. Members left out keep their old relative order
+    at the end; ids that are not members are ignored. Ordering never adds or removes."""
+    d = load(slug)
+    current = d["MEMBERS"].split()
+    wanted = [w for w in dict.fromkeys(ids) if w in current]
+    rest = [w for w in current if w not in wanted]
+    d["MEMBERS"] = " ".join(wanted + rest)
+    save(slug, d)
+    return wanted + rest
+
+
+def insert_member(slug: str, wid: str, index: int) -> int:
+    """Put `wid` at `index` (clamped), adding it when absent and moving it when present, so
+    a playlist never holds the same id twice. Returns the index it landed at, -1 for an id
+    that cannot be stored."""
+    if not paths.is_safe_wid(wid):
+        return -1
+    d = load(slug)
+    ids = d["MEMBERS"].split()
+    if wid in ids:
+        ids.remove(wid)
+    index = max(0, min(int(index), len(ids)))
+    ids.insert(index, wid)
+    d["MEMBERS"] = " ".join(ids)
+    save(slug, d)
+    return index
 
 
 def active_slug(validate: bool = True) -> str:

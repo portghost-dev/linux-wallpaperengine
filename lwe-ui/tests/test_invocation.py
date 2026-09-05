@@ -26,7 +26,6 @@ def _rep_wp() -> dict:
         "AUDIO_REACTIVE": False,
         "MOUSE": False,
         "FULLSCREEN_PAUSE": "",
-        "MONITORS": "all",
         "SKIP": "461 469 475",
         "props": {"schemecolor": "0.23 0 0.34"},
     }

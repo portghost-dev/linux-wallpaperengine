@@ -510,9 +510,6 @@ class EditorBridge(QObject):
     def _get_mouse(self) -> bool:
         return _as_bool(self._wp_get("MOUSE"), default=False)
 
-    def _get_monitors(self) -> str:
-        return str(self._wp_get("MONITORS") or "all")
-
     def _get_favorite(self) -> bool:
         return bool(self._meta.get("favorite")) if isinstance(self._meta, dict) else False
 
@@ -529,7 +526,6 @@ class EditorBridge(QObject):
     automute = Property(bool, _get_automute, notify=loaded)
     audioReactive = Property(bool, _get_audio_reactive, notify=loaded)
     mouse = Property(bool, _get_mouse, notify=loaded)
-    monitors = Property(str, _get_monitors, notify=loaded)
     favorite = Property(bool, _get_favorite, notify=loaded)
 
     # ----------------------------------------------------------------------------------
@@ -1546,11 +1542,6 @@ class EditorBridge(QObject):
     @Slot(bool)
     def setMouse(self, value: bool) -> None:
         self._set_key("MOUSE", bool(value))
-
-    @Slot(str)
-    def setMonitors(self, value: str) -> None:
-        s = str(value).strip()
-        self._set_key("MONITORS", s or "all")
 
     @Slot(str, "QVariant")
     def setProp(self, name: str, value: Any) -> None:

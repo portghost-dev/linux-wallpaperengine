@@ -217,6 +217,26 @@ def fit_rotation_entries(entries: list[dict]) -> list[dict]:
     return kept
 
 
+def split_playlist_parts(entries: list[dict]) -> list[list[dict]]:
+    """Cut `entries` into the parts one playlist-set transfer carries: every part under the
+    engine's entry and byte caps, at most 64 parts. An entry too large for a part on its own
+    is dropped; entries past the last part are dropped. Always at least one part."""
+    import json
+    parts: list[list[dict]] = []
+    part: list[dict] = []
+    for entry in entries:
+        if len(json.dumps([entry])) > C.ENGINE_ROTATE_MAX_BYTES:
+            continue
+        part.append(entry)
+        if len(part) > C.ENGINE_ROTATE_MAX_ENTRIES or len(json.dumps(part)) > C.ENGINE_ROTATE_MAX_BYTES:
+            part.pop()
+            parts.append(part)
+            part = [entry]
+    if part or not parts:
+        parts.append(part)
+    return parts[:64]
+
+
 def effective_speed(wid: str, factor=None) -> float:
     """The rate the engine runs for `wid`: its conf SPEED times the global factor (the
     stored ENGINE_TIMESCALE when `factor` is None), clamped to the engine's range."""
@@ -908,7 +928,7 @@ class Backend(QObject):
         # byte cap outright, so the set is trimmed to what will land rather than lost whole
         entries = fit_rotation_entries(entries)
         mode = str(d.get("MODE") or "shuffle")
-        order = mode if mode in ("shuffle", "random", "sequential") else "sequential"
+        order = mode if mode in ("shuffle", "sequential") else "sequential"
         enabled = (bool(self._setting("ROTATION_ENABLED", True)) and mode != "static"
                    and bool(entries))
         try:

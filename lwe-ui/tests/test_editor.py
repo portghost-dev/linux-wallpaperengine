@@ -153,7 +153,7 @@ class TestEditorAgainstRealScene(unittest.TestCase):
         self.assertIs(e.automute, True)
         self.assertIs(e.audioReactive, False)
         self.assertIs(e.mouse, False)
-        self.assertEqual(e.monitors, "all")
+        self.assertFalse(hasattr(e, "monitors"))  # per-wallpaper screens left with the lane model
         # resolution unknown (no meta) -> "" so QML hides the line
         self.assertEqual(e.resolution, "")
 

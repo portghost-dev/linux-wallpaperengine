@@ -29,6 +29,9 @@ def main() -> None:
 
     assert playlists.slugify("Chill Evenings!") == "chill-evenings"
     assert playlists.slugify("   ") == "playlist"
+    long_slug = playlists.slugify("Chill " * 20)
+    assert len(long_slug) <= playlists.SLUG_MAX and not long_slug.endswith("-"), long_slug
+    assert len(playlists._unique_slug("Chill " * 20)) <= 64  # the engine's id limit
     a = playlists.create("Chill Evenings!")
     b = playlists.create("Chill evenings")
     assert a == "chill-evenings" and b == "chill-evenings-2", (a, b)
@@ -62,7 +65,7 @@ def main() -> None:
     # the user's pause switch (ROTATION_ENABLED) must survive playlist changes untouched
     assert playlists.active_slug() == ""
     st = settings.load(); st["ROTATION_ENABLED"] = False; settings.save(st)
-    playlists.save(a, {"NAME": "X", "MODE": "random", "INTERVAL": 300, "UNIT": "s", "MEMBERS": ""})
+    playlists.save(a, {"NAME": "X", "MODE": "shuffle", "INTERVAL": 300, "UNIT": "s", "MEMBERS": ""})
     playlists.set_active(a)
     assert playlists.active_slug() == a
     s = settings.load()
@@ -106,8 +109,46 @@ def main() -> None:
     assert r.returncode == 0, r.stderr
     assert r.stdout.split() == ["100", "200"], r.stdout
 
+    # a retired mode on disk reads as shuffle, silently, and is written back as shuffle
+    legacy = playlists.create("Legacy", members=["100", "200", "300"], mode="shuffle")
+    lf = paths.playlist_file(legacy)
+    lf.write_text(lf.read_text().replace("MODE=shuffle", "MODE=random"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert playlists.load(legacy)["MODE"] == "shuffle"
+    playlists.save(legacy, playlists.load(legacy))
+    assert "MODE=shuffle" in lf.read_text()
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        playlists.save(legacy, {"NAME": "Legacy", "MODE": "random", "INTERVAL": 60, "UNIT": "s", "MEMBERS": "100 200 300"})
+    assert playlists.load(legacy)["MODE"] == "shuffle"
+    # the legacy single-playlist ORDER key reads the same way
+    sf = paths.settings_file()
+    st = settings.load(); st["ORDER"] = "sequential"; settings.save(st)
+    sf.write_text(sf.read_text(encoding="utf-8").replace("ORDER=sequential", "ORDER=random"), encoding="utf-8")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert settings.load()["ORDER"] == "shuffle"
+    assert "random" not in C.PLAYLIST_MODES and "random" not in C.ORDERS
+
+    # reorder keeps every member: left-out ids trail in their old order, strangers are ignored
+    assert playlists.reorder(legacy, ["300", "999", "100"]) == ["300", "100", "200"]
+    assert playlists.members(legacy) == ["300", "100", "200"]
+    assert playlists.reorder(legacy, []) == ["300", "100", "200"]
+
+    # insert adds at a clamped index, moves an existing member instead of duplicating it,
+    # and refuses an id that would split the shell list
+    assert playlists.insert_member(legacy, "400", 1) == 1
+    assert playlists.members(legacy) == ["300", "400", "100", "200"]
+    assert playlists.insert_member(legacy, "200", 0) == 0
+    assert playlists.members(legacy) == ["200", "300", "400", "100"]
+    assert playlists.insert_member(legacy, "500", 99) == 4
+    assert playlists.members(legacy) == ["200", "300", "400", "100", "500"]
+    assert playlists.insert_member(legacy, "bad id", 0) == -1
+    assert playlists.members(legacy) == ["200", "300", "400", "100", "500"]
+
     print("OK: playlists store - slug/round-trip/normalize/clamp/toggle/active/mirror/"
-          "tombstone/migration/bash-source all pass")
+          "tombstone/migration/bash-source/legacy-random/reorder/insert all pass")
 
 
 if __name__ == "__main__":

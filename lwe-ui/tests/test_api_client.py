@@ -174,6 +174,55 @@ class ApiClientTests(unittest.TestCase):
     def test_status_none_when_unreachable(self) -> None:
         self.assertIsNone(api_client.status())
 
+    def test_playlist_set_sends_the_documented_shape(self) -> None:
+        engine = FakeEngine(self.sock, ['{"id":1,"ok":true,"status":"done","result":{"slug":"chill","count":1,"bound":false}}'])
+        try:
+            reply = api_client.playlist_set("chill", [{"id": "1", "ui_id": "1"}], "sequential", 5,
+                                            part=2, of=3, avoid_repeat=False, label="\u00e9" * 200)
+        finally:
+            engine.stop()
+        self.assertEqual(reply["result"]["slug"], "chill")
+        sent = json.loads(engine.received[0])
+        self.assertEqual(sent["cmd"], "playlist-set")
+        self.assertEqual(sent["args"]["slug"], "chill")
+        self.assertEqual(sent["args"]["entries"], [{"id": "1", "ui_id": "1"}])
+        self.assertEqual((sent["args"]["part"], sent["args"]["of"]), (2, 3))
+        self.assertEqual(sent["args"]["interval_s"], 15, "the engine floors interval at 15 s")
+        self.assertEqual(sent["args"]["order"], "sequential")
+        self.assertIs(sent["args"]["avoid_repeat"], False)
+        # the engine caps the label at 128 BYTES; a two-byte character must not be split
+        self.assertEqual(sent["args"]["label"], "\u00e9" * 64)
+        self.assertEqual(len(sent["args"]["label"].encode("utf-8")), 128)
+
+    def test_playlist_set_clamps_the_interval_ceiling(self) -> None:
+        engine = FakeEngine(self.sock, ['{"id":1,"ok":true,"status":"done","result":{}}'])
+        try:
+            api_client.playlist_set("chill", [], "shuffle", 10 ** 9)
+        finally:
+            engine.stop()
+        self.assertEqual(json.loads(engine.received[0])["args"]["interval_s"], 604800)
+
+    def test_lanes_set_sends_the_lane_list(self) -> None:
+        engine = FakeEngine(self.sock, ['{"id":1,"ok":true,"status":"done","result":{"lanes":[]}}'])
+        lanes = [{"id": "all", "playlist": "chill", "enabled": True, "fit": {"zoom": 1.5}}]
+        try:
+            reply = api_client.lanes_set(lanes)
+        finally:
+            engine.stop()
+        self.assertEqual(reply["result"], {"lanes": []})
+        sent = json.loads(engine.received[0])
+        self.assertEqual(sent["cmd"], "lanes-set")
+        self.assertEqual(sent["args"], {"lanes": lanes})
+
+    def test_engine_refusal_of_a_verb_is_a_dict(self) -> None:
+        engine = FakeEngine(self.sock, ['{"id":1,"ok":false,"error":"unknown playlist"}'])
+        try:
+            reply = api_client.lanes_set([{"id": "all", "playlist": "ghost"}])
+        finally:
+            engine.stop()
+        self.assertEqual(reply["ok"], False)
+        self.assertIn("unknown playlist", reply["error"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
