@@ -7,8 +7,6 @@ Item {
 
     property bool opensUp: true   // deck opens menus upward; settings opens downward
 
-    property bool foldable: false
-    readonly property bool folded: foldable && Theme.compact
 
     implicitWidth: outer.implicitWidth
     implicitHeight: 26
@@ -31,12 +29,6 @@ Item {
 
     function menuY(menu) { return strip.opensUp ? -menu.height - 4 : strip.height + 4 }
     function titleCase(s) { return s.length ? s.charAt(0).toUpperCase() + s.slice(1) : s }
-    // the interval as the two entry fields DISPLAY it (seconds verbatim, else minutes) -
-    // the comparand that keeps a commit from re-firing when nothing actually changed
-    function shownInterval() {
-        var iv = strip.activePl.interval || 900;
-        return strip.activePl.unit === "s" ? iv : Math.round(iv / 60);
-    }
 
     Rectangle {
         id: outer
@@ -69,6 +61,8 @@ Item {
                 property bool textPrimary: false
                 property bool chevron: false
                 property bool moon: false
+                property bool clock: false
+                property bool inert: false         // the reserved cell: no hover, no tap (R39)
                 property color moonColor: Theme.textTertiary
                 property bool tinted: false        // status tint, distinct from `filled`
                 property color tintColor: "transparent"
@@ -114,6 +108,12 @@ Item {
                         size: 14
                         color: seg.moonColor
                     }
+                    IconClock {
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: seg.clock
+                        size: 14
+                        color: clockMenu.visible ? Theme.textPrimary : Theme.textSecondary
+                    }
                     Label {
                         id: segLabel
                         anchors.verticalCenter: parent.verticalCenter
@@ -127,11 +127,12 @@ Item {
                         color: Theme.textSecondary
                     }
                 }
-                HoverHandler { id: segHover }
-                TapHandler { onTapped: seg.tapped() }
+                HoverHandler { id: segHover; enabled: !seg.inert }
+                TapHandler { enabled: !seg.inert; onTapped: seg.tapped() }
             }
 
             StripSegment {
+                objectName: "cellSchedule"
                 moon: true
                 fixedWidth: 28
                 roundLeft: true
@@ -143,9 +144,9 @@ Item {
             Divider {}
 
             StripSegment {
+                objectName: "cellName"
                 filled: true
                 chevron: true
-                roundRight: strip.folded
                 label: {
                     var n = strip.activePl.name || "no playlist";
                     return n.length > 18 ? n.substring(0, 18) : n;
@@ -158,79 +159,41 @@ Item {
                     else if (!nameMenu.justClosed) nameMenu.open();
                 }
             }
-            Divider { visible: !strip.folded }
+            Divider {}
+            // R39: an empty cell the width of the clock cell, dividers and nothing inside, until the
+            // display target lands or the cell is removed before any release
             StripSegment {
-                visible: !strip.folded
-                textPrimary: true
-                chevron: true
-                label: strip.titleCase(strip.activePl.mode || "shuffle")
-                onTapped: {
-                    if (modeMenu.visible) modeMenu.close();
-                    else if (!modeMenu.justClosed) modeMenu.open();
-                }
+                objectName: "cellReserved"
+                fixedWidth: 28
+                inert: true
             }
-            Divider { visible: !strip.folded }
-            Item {
-                visible: !strip.folded
-                height: row.height
-                width: intervalField.width + Theme.spacingSm
-                opacity: strip.activePl.mode === "static" ? 0.4 : 1
-                TextField {
-                    id: intervalField
-                    objectName: "intervalField"
-                    anchors.centerIn: parent
-                    width: 42
-                    enabled: strip.activePl.mode !== "static"
-                    text: {
-                        var iv = strip.activePl.interval || 900;
-                        return strip.activePl.unit === "s" ? String(iv) : String(Math.round(iv / 60));
-                    }
-                    color: Theme.textPrimary
-                    font.pixelSize: Theme.fontControl
-                    horizontalAlignment: Text.AlignHCenter
-                    validator: IntValidator { bottom: 1; top: 9999 }
-                    background: Item {}
-                    // Enter commits AND releases the caret: editingFinished fires for
-                    // both Enter and focus loss, so the commit is guarded against
-                    // writing the same value twice on the way out.
-                    onEditingFinished: {
-                        var v = parseInt(text);
-                        if (isNaN(v) || v === strip.shownInterval())
-                            return;
-                        backend.setPlaylistInterval(v, strip.activePl.unit || "min");
-                    }
-                    onAccepted: focus = false
-                }
-            }
+            Divider {}
             StripSegment {
-                visible: !strip.folded
-                label: "min"
-                filled: strip.activePl.unit !== "s"
-                dimmed: strip.activePl.mode === "static"
-                onTapped: {
-                    if (strip.activePl.mode === "static") return;
-                    if (strip.activePl.unit !== "s") return;
-                    var iv = strip.activePl.interval || 900;
-                    backend.setPlaylistInterval(Math.max(1, Math.round(iv / 60)), "min");
-                }
-            }
-            StripSegment {
-                visible: !strip.folded
-                label: "s"
+                objectName: "cellClock"
+                fixedWidth: 28
                 roundRight: true
-                filled: strip.activePl.unit === "s"
-                dimmed: strip.activePl.mode === "static"
+                clock: true
                 onTapped: {
-                    if (strip.activePl.mode === "static") return;
-                    if (strip.activePl.unit === "s") return;
-                    backend.setPlaylistInterval(strip.activePl.interval || 900, "s");
+                    if (clockMenu.visible) clockMenu.close();
+                    else if (!clockMenu.justClosed) clockMenu.open();
                 }
             }
         }
     }
 
+    // spec 4: Mode and Every live here and nowhere else
+    ClockPopover {
+        id: clockMenu
+        objectName: "clockPopover"
+        x: outer.width - width
+        y: strip.menuY(clockMenu)
+        activePl: strip.activePl
+    }
+    function openClock() { clockMenu.open() }
+
     Popup {
         id: nameMenu
+        objectName: "nameMenu"
         x: outer.width - width
         y: strip.menuY(nameMenu)
         width: 210
@@ -249,11 +212,8 @@ Item {
         onOpened: {
             plRepeater.model = backend.playlistList();
             nameMenu.entryMode = "";
-            nameMenu.foldedModesOpen = false;
         }
         property string entryMode: ""   // "" | "new" | "saveas" | "rename" | "confirm-delete"
-        // folded (compact) only: the Mode row expands its four options inline
-        property bool foldedModesOpen: false
 
         contentItem: Column {
             spacing: 2
@@ -404,208 +364,6 @@ Item {
                 onTapped: { backend.deleteActivePlaylist(); nameMenu.close() }
             }
 
-            Rectangle {
-                visible: strip.folded
-                width: nameMenu.width - Theme.spacingSm * 2
-                height: 1
-                color: Theme.border
-            }
-            Item {
-                visible: strip.folded
-                width: nameMenu.width - Theme.spacingSm * 2
-                height: 24
-                Rectangle {
-                    anchors.fill: parent
-                    radius: Theme.radiusXs
-                    color: fModeHover.hovered ? Theme.hoverWash : "transparent"
-                }
-                Label {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left
-                    anchors.leftMargin: Theme.spacingSm
-                    text: "Mode"
-                    color: Theme.textSecondary
-                    font.pixelSize: Theme.fontControl
-                }
-                Row {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: parent.right
-                    anchors.rightMargin: Theme.spacingSm
-                    spacing: Theme.spacingXs
-                    Label {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: strip.titleCase(strip.activePl.mode || "shuffle")
-                        color: Theme.textPrimary
-                        font.pixelSize: Theme.fontControl
-                    }
-                    IconChevron {
-                        anchors.verticalCenter: parent.verticalCenter
-                        direction: nameMenu.foldedModesOpen ? "up" : "down"
-                        color: Theme.textSecondary
-                    }
-                }
-                HoverHandler { id: fModeHover }
-                TapHandler { onTapped: nameMenu.foldedModesOpen = !nameMenu.foldedModesOpen }
-            }
-            Repeater {
-                model: (strip.folded && nameMenu.foldedModesOpen)
-                       ? ["shuffle", "sequential", "static"] : []
-                delegate: Item {
-                    id: fModeRow
-                    required property string modelData
-                    width: nameMenu.width - Theme.spacingSm * 2
-                    height: 24
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: Theme.radiusXs
-                        color: fModeRow.modelData === strip.activePl.mode ? Theme.selectionWash
-                             : fModeRowHover.hovered ? Theme.hoverWash : "transparent"
-                    }
-                    Label {
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.left: parent.left
-                        anchors.leftMargin: Theme.spacingLg
-                        text: strip.titleCase(fModeRow.modelData)
-                        color: Theme.textPrimary
-                        font.pixelSize: Theme.fontControl
-                    }
-                    HoverHandler { id: fModeRowHover }
-                    TapHandler {
-                        onTapped: {
-                            backend.setPlaylistMode(fModeRow.modelData);
-                            nameMenu.foldedModesOpen = false;
-                        }
-                    }
-                }
-            }
-            Item {
-                visible: strip.folded
-                width: nameMenu.width - Theme.spacingSm * 2
-                height: 26
-                opacity: strip.activePl.mode === "static" ? 0.4 : 1
-                Label {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left
-                    anchors.leftMargin: Theme.spacingSm
-                    text: "Every"
-                    color: Theme.textSecondary
-                    font.pixelSize: Theme.fontControl
-                }
-                Row {
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: parent.right
-                    anchors.rightMargin: Theme.spacingSm
-                    spacing: Theme.spacingXs
-                    TextField {
-                        id: fIntervalField
-                        objectName: "fIntervalField"
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 42
-                        height: 22
-                        enabled: strip.activePl.mode !== "static"
-                        text: {
-                            var iv = strip.activePl.interval || 900;
-                            return strip.activePl.unit === "s" ? String(iv)
-                                                               : String(Math.round(iv / 60));
-                        }
-                        color: Theme.textPrimary
-                        font.pixelSize: Theme.fontControl
-                        horizontalAlignment: Text.AlignHCenter
-                        validator: IntValidator { bottom: 1; top: 9999 }
-                        background: Rectangle {
-                            color: Theme.inputWell
-                            radius: Theme.radiusXs
-                            border.width: 1
-                            border.color: fIntervalField.activeFocus ? Theme.borderStrong
-                                                                     : Theme.border
-                        }
-                        onEditingFinished: {
-                            var v = parseInt(text);
-                            if (isNaN(v) || v === strip.shownInterval())
-                                return;
-                            backend.setPlaylistInterval(v, strip.activePl.unit || "min");
-                        }
-                        onAccepted: focus = false
-                    }
-                    Label {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "min"
-                        color: strip.activePl.unit !== "s" ? Theme.textPrimary : Theme.textTertiary
-                        font.pixelSize: Theme.fontControl
-                        TapHandler {
-                            onTapped: {
-                                if (strip.activePl.mode === "static") return;
-                                if (strip.activePl.unit !== "s") return;
-                                var iv = strip.activePl.interval || 900;
-                                backend.setPlaylistInterval(Math.max(1, Math.round(iv / 60)), "min");
-                            }
-                        }
-                    }
-                    Label {
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: "s"
-                        color: strip.activePl.unit === "s" ? Theme.textPrimary : Theme.textTertiary
-                        font.pixelSize: Theme.fontControl
-                        TapHandler {
-                            onTapped: {
-                                if (strip.activePl.mode === "static") return;
-                                if (strip.activePl.unit === "s") return;
-                                backend.setPlaylistInterval(strip.activePl.interval || 900, "s");
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Popup {
-        id: modeMenu
-        x: outer.width - width
-        y: strip.menuY(modeMenu)
-        width: 130
-        padding: Theme.spacingSm
-        property bool justClosed: false   // same toggle-race guard as the name menu
-        onClosed: { justClosed = true; modeGuard.restart() }
-        Timer { id: modeGuard; interval: 150; onTriggered: modeMenu.justClosed = false }
-        background: Rectangle {
-            color: Theme.surfaceVariant
-            radius: Theme.radiusMd
-            border.width: 1
-            border.color: Theme.borderStrong
-        }
-        contentItem: Column {
-            spacing: 2
-            Repeater {
-                model: ["shuffle", "sequential", "static"]
-                delegate: Item {
-                    id: modeRow
-                    required property string modelData
-                    width: modeMenu.width - Theme.spacingSm * 2
-                    height: 24
-                    Rectangle {
-                        anchors.fill: parent
-                        radius: Theme.radiusXs
-                        color: modeRow.modelData === strip.activePl.mode ? Theme.selectionWash
-                             : modeRowHover.hovered ? Theme.hoverWash : "transparent"
-                    }
-                    Label {
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.left: parent.left
-                        anchors.leftMargin: Theme.spacingSm
-                        text: strip.titleCase(modeRow.modelData)
-                        color: Theme.textPrimary
-                        font.pixelSize: Theme.fontControl
-                    }
-                    HoverHandler { id: modeRowHover }
-                    TapHandler {
-                        onTapped: {
-                            backend.setPlaylistMode(modeRow.modelData);
-                            modeMenu.close();
-                        }
-                    }
-                }
-            }
         }
     }
 }

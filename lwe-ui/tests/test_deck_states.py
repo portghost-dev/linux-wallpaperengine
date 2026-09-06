@@ -163,10 +163,14 @@ def main() -> None:
         assert _find(deck, "deckNext").property("text") == "Next: 333"
         assert _find(deck, "deckBack").property("enabled") is True
         deck.setProperty("engineStatus", {"state": "up", "current": "111", "last": "", "next_up": "",
-                                          "interval": "", "next_in": "", "back_enabled": False})
+                                          "interval": "", "next_in": "", "back_enabled": False, "order": "static"})
         settle()
         assert _find(deck, "deckLast").property("text") == "Last: ", "an empty Last keeps its label"
         assert _find(deck, "deckBack").property("enabled") is False, "back is off in static"
+        assert deck.property("isStatic") is True
+        assert float(_find(deck, "deckProgressFill").property("width")) == 0, "static: the bar is flat (spec 4)"
+        assert _find(deck, "deckElapsed").property("visible") is False and _find(deck, "deckTotal").property("visible") is False, \
+            "static: the times are hidden (spec 4)"
         deck.setProperty("engineStatus", {"state": "up", "current": "", "interval": "900", "next_in": "300"})
         settle()
         assert left_idle.property("visible") is True, "idle block should show when engine up + not holding"

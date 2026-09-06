@@ -27,6 +27,8 @@ Rectangle {
     readonly property bool engineDown: !engineOff && deck._field("state") === ""
     // back is off in static and on a one-item playlist (engine-reported; absent = on)
     readonly property bool backEnabled: deck._field("back_enabled") !== "false"
+    // static: the timer is stopped, so the bar renders flat with its times hidden (spec 4)
+    readonly property bool isStatic: (deck._field("order") !== "" ? deck._field("order") : deckStrip.activePl.mode) === "static"
     function nameOf(id) {
         if (id === "")
             return "";
@@ -430,7 +432,8 @@ Rectangle {
                 visible: !deck.holding && !deck.outputsReleased
                 opacity: deck.transportDim
                 Rectangle {
-                    width: parent.width * deck._progress()
+                    objectName: "deckProgressFill"
+                    width: deck.isStatic ? 0 : parent.width * deck._progress()
                     height: parent.height
                     radius: 1.5
                     color: Theme.accent
@@ -439,10 +442,11 @@ Rectangle {
             }
             Label {
                 id: elapsedLabel
+                objectName: "deckElapsed"
                 anchors.right: parent.left
                 anchors.rightMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
-                visible: !deck.holding && !deck.outputsReleased
+                visible: !deck.holding && !deck.outputsReleased && !deck.isStatic
                 opacity: deck.transportDim
                 text: {
                     var e = deck.elapsedSecs();
@@ -453,10 +457,11 @@ Rectangle {
                 font.pixelSize: Theme.fontMeta
             }
             Label {
+                objectName: "deckTotal"
                 anchors.left: parent.right
                 anchors.leftMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
-                visible: !deck.holding && !deck.outputsReleased
+                visible: !deck.holding && !deck.outputsReleased && !deck.isStatic
                 opacity: deck.transportDim
                 text: deck.fmtTime(centerProgress.statusInterval())
                 color: Theme.textTertiary
@@ -615,9 +620,9 @@ Rectangle {
 
         // PlaylistStrip.qml is another surface's file - its anchor slot stays as-is.
         PlaylistStrip {
+            id: deckStrip
             anchors.right: parent.right
             opensUp: true
-            foldable: true   // deck shed step 3: mode + interval fold into the playlist menu
             // the schedule doorway lives on the strip, but the modal it opens must center on the
             // WINDOW, not inside the 72px deck - hence the overlay-parented instance below.
             onScheduleRequested: deckSchedModal.open()

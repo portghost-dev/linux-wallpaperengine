@@ -459,12 +459,14 @@ void WallpaperEngine::Api::jumpToEnd (Lane& lane) {
 }
 
 std::string WallpaperEngine::Api::previousUp (const Lane& lane, const Playlist& playlist) {
-    if (playlist.order == "static" || lane.walk.size () < 2) {
-	return "";
-    }
-
+    // history is reported even where back is off (static keeps its Last line); only the walk
+    // fallback needs an ordered walk of two or more
     if (!lane.history.empty ()) {
 	return displayId (lane.history.back ());
+    }
+
+    if (playlist.order == "static" || lane.walk.size () < 2) {
+	return "";
     }
 
     const auto at = walkBehind (lane);

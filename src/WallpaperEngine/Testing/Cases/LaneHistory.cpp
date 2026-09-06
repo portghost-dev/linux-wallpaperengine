@@ -149,6 +149,7 @@ TEST_CASE ("back with nothing behind steps the walk back, wrapping; off in stati
     advance (still, fixed, rng);
     REQUIRE_FALSE (backTarget (still, fixed).has_value ());
     REQUIRE_FALSE (backEnabled (still, fixed));
+    REQUIRE (previousUp (still, fixed) == "wp0"); // static keeps its Last line (spec 4)
     REQUIRE (backEnabled (lane, playlist));
 }
 

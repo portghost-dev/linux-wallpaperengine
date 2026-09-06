@@ -144,7 +144,7 @@ void commitForward (Lane& lane, const Entry& previous, const Entry& target);
 /** Timer rule: a backed-up lane moves to its newest item before the walk advances. */
 void jumpToEnd (Lane& lane);
 
-/** Display id behind the current show, or empty. */
+/** Display id behind the current show (history even in static), or empty. */
 std::string previousUp (const Lane& lane, const Playlist& playlist);
 
 /** Display id ahead: forward history, else the walk's next. */

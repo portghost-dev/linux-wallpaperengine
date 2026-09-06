@@ -90,6 +90,16 @@ def test_strip_anatomy(app, backend, tokens) -> None:
         if _near(img.pixelColor(x, y), surface_variant)
     )
     assert name_hits > 0, "name head-segment should be filled surfaceVariant (F11)"
+    # spec 3.2 as amended (R39): four cells, schedule | name | reserved | clock, and no Mode or
+    # Every anywhere on the strip itself
+    cells = [strip.findChild(QObject, n) for n in ("cellSchedule", "cellName", "cellReserved", "cellClock")]
+    assert all(c is not None and c.property("visible") for c in cells), "the pill must show its four cells"
+    assert int(cells[0].property("width")) == 28 and int(cells[2].property("width")) == 28 and int(cells[3].property("width")) == 28
+    pop = strip.findChild(QObject, "clockPopover")
+    assert pop is not None and pop.findChild(QObject, "modeSegment") is not None, "Mode lives in the clock popover"
+    menu = strip.findChild(QObject, "nameMenu")
+    assert menu is not None and menu.findChild(QObject, "intervalField") is None \
+        and menu.findChild(QObject, "modeSegment") is None, "no Mode or Every in the playlist menu"
     print(f"OK test_strip_anatomy (name segment {name_hits} surfaceVariant px hits)")
 
 
@@ -131,11 +141,11 @@ def test_strip_static_dims_unit_cells(app, backend) -> None:
             QCoreApplication.processEvents()
 
         active_pl = strip.property("activePl")
-        assert active_pl["mode"] == "static", (
-            "strip.activePl.mode must reach 'static' - both unit StripSegments bind their "
-            "'dimmed' property to this exact expression (F11 acceptance 5)"
-        )
-        print("OK test_strip_static_dims_unit_cells (activePl.mode == 'static' reaches the strip)")
+        assert active_pl["mode"] == "static", "strip.activePl.mode must reach 'static'"
+        every = strip.findChild(QObject, "everyRow")
+        assert every is not None and abs(float(every.property("opacity")) - 0.55) < 0.01, \
+            "static must put the popover's Every row to sleep at 0.55 (spec 4)"
+        print("OK test_strip_static_dims_unit_cells (static reaches the strip; Every row asleep)")
     finally:
         backend.setPlaylistMode("shuffle")
 
@@ -231,6 +241,9 @@ def test_interval_enter_releases_focus(app, backend) -> None:
     for _ in range(5):
         QCoreApplication.processEvents()
 
+    strip.openClock()   # the field lives in the clock popover now (spec 4)
+    for _ in range(5):
+        QCoreApplication.processEvents()
     field = strip.findChild(QObject, "intervalField")
     assert field is not None, "interval TextField needs objectName intervalField"
 
@@ -252,12 +265,32 @@ def test_interval_enter_releases_focus(app, backend) -> None:
     after = int(backend.activePlaylist()["interval"])
     assert after == typed * 60, f"Enter must commit the typed minutes (got {after}s, want {typed*60}s)"
     assert int(strip.property("activePl")["interval"]) == after
-    shown = strip.shownInterval()
+    shown = strip.findChild(QObject, "clockPopover").shownInterval()
     assert shown == typed, \
         f"post-commit the guard comparand must equal the typed value (got {shown}) - " \
         "this is what makes the focus-loss editingFinished a no-op"
     print(f"OK test_interval_enter_releases_focus (committed {typed} min, focus released, "
           "re-commit guarded)")
+
+    # spec 4: empty or zero rejects and re-reads; over the range never commits (R47: 1..1440 min)
+    stored = int(backend.activePlaylist()["interval"])
+    for bad in ("0", ""):
+        field.setProperty("focus", True)
+        field.metaObject().invokeMethod(field, "forceActiveFocus")
+        field.setProperty("text", bad)
+        QTest.keyClick(view, Qt.Key_Return)
+        for _ in range(5):
+            QCoreApplication.processEvents()
+        assert int(backend.activePlaylist()["interval"]) == stored, f"{bad!r} must not commit"
+        assert field.property("text") == str(stored // 60), f"{bad!r} must re-read the stored value"
+    field.setProperty("focus", True)
+    field.metaObject().invokeMethod(field, "forceActiveFocus")
+    field.setProperty("text", "1441")
+    QTest.keyClick(view, Qt.Key_Return)
+    for _ in range(5):
+        QCoreApplication.processEvents()
+    assert int(backend.activePlaylist()["interval"]) == stored, "1441 minutes is over the range and must not commit"
+    print("OK test_interval_rejects (0, empty and 1441 leave the stored interval alone)")
 
 
 def main() -> None:

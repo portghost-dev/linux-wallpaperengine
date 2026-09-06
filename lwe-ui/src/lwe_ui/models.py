@@ -1955,6 +1955,7 @@ class Backend(QObject):
                 if isinstance(lanes, list) and lanes and isinstance(lanes[0], dict):
                     lane = lanes[0]
                     result["last"] = str(lane.get("previous") or "")
+                    result["order"] = str(lane.get("order") or "")
                     result["next_up"] = str(lane.get("next") or "")
                     result["back_enabled"] = bool(lane.get("back_enabled", True))
 
