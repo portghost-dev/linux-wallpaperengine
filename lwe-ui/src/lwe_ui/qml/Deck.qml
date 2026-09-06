@@ -98,7 +98,7 @@ Rectangle {
     readonly property bool holding: deck.testing || deck.devHold || deck.wizBenching
     // during a hold the transport + right column dim (the bench owns the display); off/engine-down
     // dims the transport + overrides but NOT the left block (F24 - the status message stays legible).
-    // all three named bench modes dim the transport to 0.45 so the center breathing BenchBar
+    // all three named bench modes dim the transport to 0.45 so the center breathing bench bar
     // (the shared "lease cover") reads identically across Workshop / Editor / Developer benching.
     readonly property real transportDim: (deck.testing || deck.wizBenching || deck.devHold) ? 0.45
                                        : deck.engineOff ? 0.35 : 1
@@ -409,8 +409,9 @@ Rectangle {
             width: barSlot.barWidth
             height: 14
             anchors.horizontalCenter: parent.horizontalCenter
-            BenchBar {
+            GlowBar {
                 objectName: "deckBenchBar"
+                color: Theme.warning
                 width: barSlot.barWidth
                 anchors.verticalCenter: parent.verticalCenter
                 visible: deck.holding
@@ -425,20 +426,21 @@ Rectangle {
                 color: Theme.textSecondary
                 font.pixelSize: Theme.fontMeta
             }
-            Rectangle {
-                width: barSlot.barWidth; height: 3; radius: 1.5
+            // the progress bar: the bench bar's filament on the accent, lit to the elapsed
+            // portion, with half the bench's bloom reach; paused slows its breath, static is flat
+            GlowBar {
+                objectName: "deckProgressBar"
+                fillName: "deckProgressFill"
+                color: Theme.accent
+                bloomReach: 6
+                width: barSlot.barWidth
+                height: 3
                 anchors.verticalCenter: parent.verticalCenter
-                color: Theme.border
                 visible: !deck.holding && !deck.outputsReleased
                 opacity: deck.transportDim
-                Rectangle {
-                    objectName: "deckProgressFill"
-                    width: deck.isStatic ? 0 : parent.width * deck._progress()
-                    height: parent.height
-                    radius: 1.5
-                    color: Theme.accent
-                    opacity: deck.rotationOn ? 1 : 0.5
-                }
+                progress: deck._progress()
+                paused: !deck.rotationOn
+                flat: deck.isStatic
             }
             Label {
                 id: elapsedLabel

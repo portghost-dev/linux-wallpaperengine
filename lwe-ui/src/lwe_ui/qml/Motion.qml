@@ -29,6 +29,10 @@ QtObject {
     // shimmer rest: a pause at the end of each sweep so it glimmers periodically, not a conveyor.
     readonly property int shimmerRest: 700
 
+    // the bloom's opacity peak on the light theme: the 0.7 swell of the dark theme washes out
+    // on a light ground
+    readonly property real bloomCeiling: 0.5
+
     // --- grid removal (v2.3.1 interaction contract) ----------------------------------------
     // On Add-to-library / Trash / Purge the model drop is synchronous (kills the stale-cell
     // glitch); the leaving cell fades, the rest reflow. Shared by every item grid and list.

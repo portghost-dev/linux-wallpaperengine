@@ -169,6 +169,11 @@ def main() -> None:
         assert _find(deck, "deckBack").property("enabled") is False, "back is off in static"
         assert deck.property("isStatic") is True
         assert float(_find(deck, "deckProgressFill").property("width")) == 0, "static: the bar is flat (spec 4)"
+        # the progress bar is the shared glow filament (spec 5, R38): static is the flat bed
+        pbar = _find(deck, "deckProgressBar")
+        assert pbar is not None, "the deck progress bar needs its objectName"
+        assert pbar.property("flat") is True and pbar.property("shimmerOn") is False \
+            and pbar.property("breathing") is False, "static: no fill, no breath, no shimmer"
         assert _find(deck, "deckElapsed").property("visible") is False and _find(deck, "deckTotal").property("visible") is False, \
             "static: the times are hidden (spec 4)"
         deck.setProperty("engineStatus", {"state": "up", "current": "", "interval": "900", "next_in": "300"})
@@ -176,6 +181,70 @@ def main() -> None:
         assert left_idle.property("visible") is True, "idle block should show when engine up + not holding"
         assert left_testing.property("visible") is False and left_dev.property("visible") is False, \
             "hold blocks must be hidden in the idle face"
+
+        # ---- progress bar motion states (spec 5, R38) ---------------------------------------
+        # playing: lit to the elapsed portion (600 of 900 = two thirds), breathing on the bible's
+        # inhale/exhale, shimmer sweeping inside the fill
+        assert pbar.property("flat") is False and pbar.property("breathing") is True \
+            and pbar.property("shimmerOn") is True, "playing: breath and shimmer on"
+        fill_w = float(_find(deck, "deckProgressFill").property("width"))
+        bar_w = float(pbar.property("width"))
+        assert abs(fill_w / bar_w - 600 / 900) < 0.02, f"fill is the elapsed portion ({fill_w}/{bar_w})"
+        assert int(pbar.property("breathInhale")) == 1100 and int(pbar.property("breathExhale")) == 1300
+        # paused: the shimmer rests and the breath doubles; the fill stays lit
+        deck.setProperty("rotationOn", False)
+        settle()
+        assert pbar.property("paused") is True and pbar.property("shimmerOn") is False, \
+            "paused: shimmer off"
+        assert int(pbar.property("breathInhale")) == 2200 and int(pbar.property("breathExhale")) == 2600, \
+            "paused: the breath period doubles"
+        assert pbar.property("breathing") is True, "paused still breathes, slower"
+        deck.setProperty("rotationOn", True)
+        settle()
+        assert pbar.property("shimmerOn") is True
+        # a pause change restarts the breath from the bottom and the bloom follows a beat later:
+        # right after the toggle the fill has restarted low and the bloom has not moved yet;
+        # after the lag both are rising, fill ahead
+        deck.setProperty("rotationOn", False)
+        QTest.qWait(40)
+        f0 = float(pbar.property("fillPulse")); b0 = float(pbar.property("bloomPulse"))
+        assert 0.85 <= f0 < 0.90, f"pause restarts the fill breath from the bottom (got {f0})"
+        assert abs(b0 - 0.25) < 1e-6, f"the bloom waits out the lag before it starts (got {b0})"
+        QTest.qWait(500)
+        f1 = float(pbar.property("fillPulse")); b1 = float(pbar.property("bloomPulse"))
+        assert f1 > f0 and b1 > b0, f"both rise after the lag (fill {f0}->{f1}, bloom {b0}->{b1})"
+        deck.setProperty("rotationOn", True)
+        settle()
+        # nothing lit, nothing breathing: an empty fill does not wake the render loop
+        deck.setProperty("engineStatus", {"state": "up", "current": "111", "interval": "900", "next_in": "900"})
+        settle()
+        assert float(_find(deck, "deckProgressFill").property("width")) == 0
+        assert pbar.property("breathing") is False and pbar.property("shimmerOn") is False, \
+            "an empty fill has no breath or shimmer"
+        deck.setProperty("engineStatus", {"state": "up", "current": "111", "interval": "900", "next_in": "300"})
+        settle()
+        assert pbar.property("breathing") is True
+        # reduced motion: static fill, no breath, no shimmer (the Motion singleton's flag)
+        from PySide6.QtQml import QQmlComponent
+        flag = QQmlComponent(view.engine())
+        flag.setData(b'import QtQuick\nimport "."\nQtObject { function set(v) { Motion.reducedMotion = v } }',
+                     QUrl.fromLocalFile(str(_QML_DIR / "_probe.qml")))
+        assert flag.status() == QQmlComponent.Status.Ready, [e.toString() for e in flag.errors()]
+        probe = flag.create()
+        probe.set(True)
+        settle()
+        assert pbar.property("breathing") is False and pbar.property("shimmerOn") is False, \
+            "reduced motion: no breath, no shimmer"
+        assert float(_find(deck, "deckProgressFill").property("width")) > 0, "reduced motion keeps the fill"
+        probe.set(False)
+        settle()
+        assert pbar.property("breathing") is True
+        # the bench bar is the same component on the warning colour, always fully lit
+        bb = _find(deck, "deckBenchBar")
+        assert bb.property("color").name().upper() == _WARNING and float(bb.property("progress")) == 1.0 \
+            and bb.property("flat") is False, "bench bar: warning colour, full filament, unchanged"
+        assert int(bb.property("bloomReach")) == 12 and int(pbar.property("bloomReach")) == 6, \
+            "the deck bar's bloom reaches half as far as the bench bar's (R62)"
 
         # ---- smooth clock: elapsed interpolates BETWEEN the 2s status polls ----------------
         # anchor: interval 900, next_in 300 -> elapsed base 600. Waiting ~1.2s of wall clock
