@@ -125,6 +125,9 @@ bool dueForAdvance (const Lane& lane, const Playlist& playlist, Clock::time_poin
 /** Seconds until the next timed advance: the frozen remainder while disabled, -1 when idle. */
 int nextInSeconds (const Lane& lane, const Playlist& playlist, Clock::time_point now);
 
+/** Seat the clock after a restart: a running lane resumes its saved remainder less the downtime. */
+void resumeCountdown (Lane& lane, const Playlist& playlist, int remaining, int downtime, Clock::time_point now);
+
 /** Display id the walk shows next, or empty when a fresh shuffle cycle is still to be drawn. */
 std::string nextUp (const Lane& lane, const Playlist& playlist);
 

@@ -516,3 +516,82 @@ TEST_CASE ("both fit layers persist with the lane and a hand-edited value cannot
     CHECK (mistyped.fit.zoom == 1.0f);
     CHECK (mistyped.look.fit.zoom == 1.0f);
 }
+
+TEST_CASE ("a same-set push to a running lane keeps its countdown and its forward history", "[lane]") {
+    Lane lane;
+    Playlist playlist;
+    const auto set = makePlaylist (3, "sequential");
+
+    applySet (lane, playlist, set, true, t0 ());
+    lane.forward.push_back (set.entries[2]);
+
+    // the panel re-pushes its policy on open and after every conf save: nothing changed
+    applySet (lane, playlist, set, true, t0 () + std::chrono::seconds (100));
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (100)) == 800);
+    REQUIRE (lane.forward.size () == 1);
+
+    // a different interval is a new set: the clock restarts, forward targets are gone
+    auto longer = set;
+    longer.intervalSeconds = 1200;
+    applySet (lane, playlist, longer, true, t0 () + std::chrono::seconds (200));
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (200)) == 1200);
+    REQUIRE (lane.forward.empty ());
+
+    // a changed membership too
+    lane.forward.push_back (set.entries[1]);
+    applySet (lane, playlist, makePlaylist (4, "sequential"), true, t0 () + std::chrono::seconds (300));
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (300)) == 900);
+    REQUIRE (lane.forward.empty ());
+}
+
+TEST_CASE ("a restart resumes a running lane's remainder less the downtime", "[lane]") {
+    Lane lane;
+    Playlist playlist;
+    applySet (lane, playlist, makePlaylist (3, "sequential"), true, t0 ());
+
+    resumeCountdown (lane, playlist, 300, 100, t0 ());
+    REQUIRE (nextInSeconds (lane, playlist, t0 ()) == 200);
+
+    // away longer than the remainder: due on the first tick, never negative
+    resumeCountdown (lane, playlist, 300, 5000, t0 ());
+    REQUIRE (nextInSeconds (lane, playlist, t0 ()) == 0);
+    REQUIRE (dueForAdvance (lane, playlist, t0 ()));
+
+    // no remainder saved (an older state file): the full interval
+    resumeCountdown (lane, playlist, -1, 100, t0 ());
+    REQUIRE (nextInSeconds (lane, playlist, t0 ()) == 900);
+
+    // a frozen lane keeps its frozen remainder; a disabled one has no countdown
+    lane.frozenRemainingSeconds = 250;
+    resumeCountdown (lane, playlist, 300, 100, t0 ());
+    REQUIRE (nextInSeconds (lane, playlist, t0 ()) == 250);
+    lane.frozenRemainingSeconds = -1;
+    lane.enabled = false;
+    resumeCountdown (lane, playlist, 300, 100, t0 ());
+    REQUIRE (nextInSeconds (lane, playlist, t0 ()) == -1);
+}
+
+TEST_CASE ("leaving static is a new play; a shuffle switch and a paused re-push are not", "[lane]") {
+    Lane lane;
+    Playlist playlist;
+    const auto set = makePlaylist (3, "sequential");
+    applySet (lane, playlist, set, true, t0 ());
+
+    // sequential to shuffle keeps the clock (the walk is redrawn, the countdown is not)
+    applySet (lane, playlist, makePlaylist (3, "shuffle"), true, t0 () + std::chrono::seconds (100));
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (100)) == 800);
+
+    // static stops the clock; coming back hours later starts a full interval, not an overdue advance
+    applySet (lane, playlist, makePlaylist (3, "static"), true, t0 () + std::chrono::seconds (200));
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (200)) == -1);
+    applySet (lane, playlist, set, true, t0 () + std::chrono::seconds (8000));
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (8000)) == 900);
+    REQUIRE_FALSE (dueForAdvance (lane, playlist, t0 () + std::chrono::seconds (8000)));
+
+    // a disabled lane with no frozen value (an older state file) re-pushed the same set shows
+    // the full interval, not idle
+    lane.enabled = false;
+    lane.frozenRemainingSeconds = -1;
+    applySet (lane, playlist, set, false, t0 () + std::chrono::seconds (8100));
+    REQUIRE (lane.frozenRemainingSeconds == 900);
+}

@@ -299,6 +299,7 @@ void WallpaperEngine::Api::applySet (
     const bool wasEnabled = lane.enabled;
     const int previousInterval = playlist.intervalSeconds;
     const int frozen = lane.frozenRemainingSeconds;
+    const bool wasStatic = playlist.order == "static";
 
     // a change between ordered and shuffled starts a fresh walk: the cycle was drawn for the old kind
     if (isShuffle (playlist) != isShuffle (incoming)) {
@@ -310,17 +311,29 @@ void WallpaperEngine::Api::applySet (
     playlist.entries = incoming.entries;
     playlist.intervalSeconds = incoming.intervalSeconds;
     playlist.order = incoming.order;
-    lane.forward.clear ();
     playlist.avoidRepeat = incoming.avoidRepeat;
     playlist.label = incoming.label;
+
+    const bool sameSet = idsOf (playlist) == previousIds && playlist.intervalSeconds == previousInterval;
+    // forward targets belong to the set they were stepped back from
+    if (!sameSet) {
+	lane.forward.clear ();
+    }
 
     lane.enabled = enabled && !playlist.entries.empty ();
     // a push never restarts a cycle: the walk is re-seated by identity, not rebuilt
     std::mt19937 rng (std::random_device {}());
     reseat (lane, playlist, rng);
 
-    const bool sameSet = idsOf (playlist) == previousIds && playlist.intervalSeconds == previousInterval;
-    if (!lane.enabled) {
+    // leaving static is a new play: the clock did not run while the mode was static
+    const bool leftStatic = wasStatic && playlist.order != "static";
+
+    if (sameSet && lane.enabled == wasEnabled && !leftStatic) {
+	// the same set in the same state is a re-push, not a new play: the clock runs on
+	if (!lane.enabled && lane.frozenRemainingSeconds < 0) {
+	    lane.frozenRemainingSeconds = playlist.intervalSeconds;
+	}
+    } else if (!lane.enabled) {
 	lane.frozenRemainingSeconds = sameSet && frozen >= 0 ? frozen : playlist.intervalSeconds;
     } else if (sameSet && !wasEnabled && frozen >= 0) {
 	lane.lastShow = now - std::chrono::seconds (playlist.intervalSeconds - frozen);
@@ -337,6 +350,21 @@ bool WallpaperEngine::Api::dueForAdvance (const Lane& lane, const Playlist& play
     }
 
     return elapsedSeconds (lane, now) >= playlist.intervalSeconds;
+}
+
+void WallpaperEngine::Api::resumeCountdown (
+    Lane& lane, const Playlist& playlist, int remaining, int downtime, Clock::time_point now
+) {
+    lane.lastShow = now;
+
+    if (!lane.enabled || lane.frozenRemainingSeconds >= 0 || remaining < 0) {
+	return;
+    }
+
+    // the saved remainder less the time the engine was away; an overdue lane advances on
+    // the first tick
+    const int left = std::clamp (remaining - std::max (0, downtime), 0, playlist.intervalSeconds);
+    lane.lastShow = now - std::chrono::seconds (playlist.intervalSeconds - left);
 }
 
 int WallpaperEngine::Api::nextInSeconds (const Lane& lane, const Playlist& playlist, Clock::time_point now) {

@@ -2108,6 +2108,8 @@ void WallpaperApplication::apiShow (
     nlohmann::json showArgs = args;
     showArgs.erase ("lane");
 
+    const std::string beforeId = Api::displayId (this->lane ().current);
+
     if (!this->applyShowCore (*path, showArgs, true, error)) {
 	this->m_commandServer->respond (
 	    client, Api::CommandDispatcher::failure (requestId, std::string ("show failed: ") + error)
@@ -2115,12 +2117,14 @@ void WallpaperApplication::apiShow (
 	return;
     }
 
-    // a manual show restarts the rotation countdown (watcher parity: show-request
-    // stamped the rotation clock)
-    this->lane ().lastShow = std::chrono::steady_clock::now ();
+    // a manual show of another wallpaper restarts the rotation countdown (watcher parity:
+    // show-request stamped the rotation clock); a re-show of the same id is a refresh
+    if (beforeId != Api::displayId (this->lane ().current)) {
+	this->lane ().lastShow = std::chrono::steady_clock::now ();
 
-    if (this->lane ().frozenRemainingSeconds >= 0) {
-	this->lane ().frozenRemainingSeconds = this->playlistOf (this->lane ()).intervalSeconds;
+	if (this->lane ().frozenRemainingSeconds >= 0) {
+	    this->lane ().frozenRemainingSeconds = this->playlistOf (this->lane ()).intervalSeconds;
+	}
     }
 
     this->m_commandServer->respond (client, Api::CommandDispatcher::done (requestId, { { "path", path->string () } }));
@@ -2787,10 +2791,17 @@ void WallpaperApplication::persistRuntimeState () const {
 			  { "enabled", lane.enabled },
 			  { "label", playlist.label },
 			  { "frozen_remaining_s", lane.frozenRemainingSeconds } };
+    const auto now = std::chrono::steady_clock::now ();
     nlohmann::json lanes = nlohmann::json::array ();
     for (const auto& [key, item] : this->m_lanes) {
-	lanes.push_back (Api::toJson (item));
+	auto entry = Api::toJson (item);
+	entry["remaining_s"] = Api::nextInSeconds (item, this->playlistOf (item), now);
+	lanes.push_back (entry);
     }
+    state["saved_at"] = std::chrono::duration_cast<std::chrono::seconds> (
+			    std::chrono::system_clock::now ().time_since_epoch ()
+    )
+			    .count ();
     nlohmann::json playlists = nlohmann::json::array ();
     for (const auto& [key, item] : this->m_playlists) {
 	playlists.push_back (Api::toJson (item));
@@ -3014,11 +3025,23 @@ void WallpaperApplication::restoreRuntimeState () {
 		}
 	    }
 	    if (state.contains ("lanes") && state["lanes"].is_array ()) {
+		const auto nowWall = std::chrono::duration_cast<std::chrono::seconds> (
+					 std::chrono::system_clock::now ().time_since_epoch ()
+		)
+					 .count ();
+		const auto savedAt = state.contains ("saved_at") && state["saved_at"].is_number ()
+		    ? state["saved_at"].get<int64_t> ()
+		    : nowWall;
+		const int downtime = static_cast<int> (std::max<int64_t> (0, nowWall - savedAt));
+
 		for (const auto& item : state["lanes"]) {
 		    auto lane = Api::laneFromJson (item);
-		    lane.lastShow = std::chrono::steady_clock::now ();
 		    const auto bound = this->m_playlists.find (lane.playlistSlug);
 		    lane.enabled = lane.enabled && bound != this->m_playlists.end () && !bound->second.entries.empty ();
+		    Api::resumeCountdown (
+			lane, this->playlistOf (lane), item.value ("remaining_s", -1), downtime,
+			std::chrono::steady_clock::now ()
+		    );
 		    this->m_lanes[lane.id] = lane;
 		}
 	    }
@@ -3038,7 +3061,7 @@ void WallpaperApplication::restoreRuntimeState () {
 	    } else if (!this->applyShowCore (*path, showArgs, false, error)) {
 		sLog.error ("state restore: show failed: ", error);
 	    } else {
-		this->lane ().lastShow = std::chrono::steady_clock::now ();
+		// the replay is not a new play: the countdown was seated by resumeCountdown
 		sLog.out (
 		    "state restore: showing ", showId, " (rotation ", this->lane ().enabled ? "enabled" : "disabled",
 		    ", ", this->playlistOf (this->lane ()).entries.size (), " entries)"
