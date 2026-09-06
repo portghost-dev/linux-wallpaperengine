@@ -129,6 +129,23 @@ Rectangle {
     }
 
     // two significant figures, with a decimal kept below 10x so the detent reads 1.0x
+    // --- Fit window (per wallpaper): the pan is a fraction of the travel the zoom leaves, so
+    // the chip reports the offset that produces in percent of the picture (zoom 2, pan 1 = 25)
+    function panPercent(pan, zoom) {
+        var off = Math.round(Number(pan) * 50 * (1 - 1 / Math.max(1, Number(zoom))));
+        return (off < 0 ? "-" : "+") + Math.abs(off) + "%";
+    }
+    // a typed "12%" is an offset of the picture and needs the zoom to become a fraction; a
+    // plain number is the fraction itself. NaN when the entry cannot be honoured.
+    function panFromEntry(t, zoom) {
+        var s = String(t).trim();
+        if (s.endsWith("%")) {
+            var travel = 50 * (1 - 1 / Math.max(1, Number(zoom)));
+            return travel > 0 ? parseFloat(s) / travel : NaN;
+        }
+        return parseFloat(s);
+    }
+
     function speedText(v) {
         var r = Number(Number(v).toPrecision(2));
         return ((r < 10 && r === Math.round(r)) ? r.toFixed(1) : String(r)) + "x";
@@ -1377,6 +1394,112 @@ Rectangle {
                                 return v.charAt(0).toUpperCase() + v.slice(1);
                             }
                             onPicked: function(v) { editor.setScalingValue(v) }
+                        }
+                    }
+
+                    // the fit window nests inside the scaling mode above: zoom is inward only,
+                    // 1.00 to 2.00 (identity default), and the pans ride the travel it leaves
+                    PRow {
+                        label: "Zoom"
+                        Row {
+                            spacing: Theme.spacingSm
+                            PSlider {
+                                id: editorFitZoom
+                                objectName: "editorFitZoom"
+                                anchors.verticalCenter: parent.verticalCenter
+                                from: 1
+                                to: 2
+                                value: {
+                                    var raw = (view.rev, editor.fitValue("zoom"));
+                                    return raw === "" ? 1 : Number(raw);
+                                }
+                                onCommit: function(v) { editor.setFit("zoom", v.toFixed(2)) }
+                            }
+                            PChip {
+                                anchors.verticalCenter: parent.verticalCenter
+                                ckey: "FIT_ZOOM"
+                                text: editorFitZoom.value.toFixed(2)
+                                entries: [
+                                    { label: "Default (1.00)", value: "" },
+                                    { label: "Enter a value", value: "@entry" }
+                                ]
+                                onPicked: function(v) { if (v === "") editor.setFit("zoom", "") }
+                                onEntered: function(t) {
+                                    var n = parseFloat(String(t).replace("x", ""));
+                                    if (isNaN(n)) { editor.reportFailure(["FIT_ZOOM"]); return }
+                                    editor.setFit("zoom", String(Math.max(1, Math.min(2, n))));
+                                }
+                            }
+                        }
+                    }
+
+                    PRow {
+                        label: "Pan X"
+                        Row {
+                            spacing: Theme.spacingSm
+                            PSlider {
+                                id: editorPanX
+                                objectName: "editorPanX"
+                                anchors.verticalCenter: parent.verticalCenter
+                                from: -1
+                                to: 1
+                                tickAt: 0.5
+                                value: {
+                                    var raw = (view.rev, editor.fitValue("pan_x"));
+                                    return raw === "" ? 0 : Number(raw);
+                                }
+                                onCommit: function(v) { editor.setFit("pan_x", v.toFixed(3)) }
+                            }
+                            PChip {
+                                anchors.verticalCenter: parent.verticalCenter
+                                ckey: "FIT_PAN_X"
+                                text: view.panPercent(editorPanX.value, editorFitZoom.value)
+                                entries: [
+                                    { label: "Default (+0%)", value: "" },
+                                    { label: "Enter a value", value: "@entry" }
+                                ]
+                                onPicked: function(v) { if (v === "") editor.setFit("pan_x", "") }
+                                onEntered: function(t) {
+                                    var n = view.panFromEntry(t, editorFitZoom.value);
+                                    if (isNaN(n)) { editor.reportFailure(["FIT_PAN_X"]); return }
+                                    editor.setFit("pan_x", Math.max(-1, Math.min(1, n)).toFixed(3));
+                                }
+                            }
+                        }
+                    }
+
+                    PRow {
+                        label: "Pan Y"
+                        Row {
+                            spacing: Theme.spacingSm
+                            PSlider {
+                                id: editorPanY
+                                objectName: "editorPanY"
+                                anchors.verticalCenter: parent.verticalCenter
+                                from: -1
+                                to: 1
+                                tickAt: 0.5
+                                value: {
+                                    var raw = (view.rev, editor.fitValue("pan_y"));
+                                    return raw === "" ? 0 : Number(raw);
+                                }
+                                onCommit: function(v) { editor.setFit("pan_y", v.toFixed(3)) }
+                            }
+                            PChip {
+                                anchors.verticalCenter: parent.verticalCenter
+                                ckey: "FIT_PAN_Y"
+                                text: view.panPercent(editorPanY.value, editorFitZoom.value)
+                                entries: [
+                                    { label: "Default (+0%)", value: "" },
+                                    { label: "Enter a value", value: "@entry" }
+                                ]
+                                onPicked: function(v) { if (v === "") editor.setFit("pan_y", "") }
+                                onEntered: function(t) {
+                                    var n = view.panFromEntry(t, editorFitZoom.value);
+                                    if (isNaN(n)) { editor.reportFailure(["FIT_PAN_Y"]); return }
+                                    editor.setFit("pan_y", Math.max(-1, Math.min(1, n)).toFixed(3));
+                                }
+                            }
                         }
                     }
 

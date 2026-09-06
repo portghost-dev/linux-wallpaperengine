@@ -542,6 +542,13 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 		     .errorResponse = failure (id, "set-fit lane must be a string of at most 64 chars") };
 	}
 
+	if (args.contains ("layer")
+	    && (!args["layer"].is_string ()
+		|| (args["layer"].get<std::string> () != "lane" && args["layer"].get<std::string> () != "wallpaper"))) {
+	    return { .command = std::nullopt,
+		     .errorResponse = failure (id, "set-fit layer must be \"lane\" or \"wallpaper\"") };
+	}
+
 	if (!args.contains ("zoom") && !args.contains ("pan_x") && !args.contains ("pan_y")) {
 	    return { .command = std::nullopt,
 		     .errorResponse = failure (id, "set-fit requires at least one of zoom, pan_x, pan_y") };

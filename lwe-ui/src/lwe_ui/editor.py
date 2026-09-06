@@ -20,7 +20,7 @@ DELETES the key.
 APPLY MECHANICS. Keys the realtime API can set live are pushed live; keys the engine
 consumes while BUILDING a scene auto-apply through one re-show of the current wallpaper,
 debounced 600 ms trailing so rapid edits coalesce. The user is never asked to reload.
-  live:      SPEED, VOLUME, AUDIO_REACTIVE, MOUSE, SKIP
+  live:      SPEED, VOLUME, AUDIO_REACTIVE, MOUSE, SKIP, FIT_ZOOM, FIT_PAN_X, FIT_PAN_Y
   relaunch:  SCALING, AUTOMUTE, CC, every PROP_<name>
 SCOPE GATE: the editor can be open on a wallpaper that is NOT playing, and every engine verb
 is engine-global - it would retune whatever is on screen. So a live push (and the re-show)
@@ -70,6 +70,7 @@ from . import constants as C
 from .discovery import objects as objects_disc
 from .discovery import project as project_disc
 from .discovery import properties as properties_disc
+from .models import resolve_fit
 from .storage import atomic, meta, paths, settings, tier_a, wp
 from .wp_session import SESSION
 
@@ -113,7 +114,8 @@ _RESHOW_MS = 600
 
 # Wallpaper-scoped keys the realtime API can set on the running scene without a rebuild.
 _LIVE_WP_KEYS = ("SPEED", "VOLUME", "AUDIO_REACTIVE", "MOUSE", "SKIP",
-                 "AUDIO_GAIN", "CLASSIC_K", "CLASSIC_EXP")
+                 "AUDIO_GAIN", "CLASSIC_K", "CLASSIC_EXP",
+                 "FIT_ZOOM", "FIT_PAN_X", "FIT_PAN_Y")
 
 # per-wallpaper conf key -> the engine tuning field it resolves to
 _WP_DIAL_KEYS = {"audio_gain": "AUDIO_GAIN", "classic_k": "CLASSIC_K", "classic_exp": "CLASSIC_EXP"}
@@ -635,6 +637,10 @@ class EditorBridge(QObject):
                               _as_bool(self._wp_get("MOUSE"), default=False))
         if key == "SKIP":
             return self._push(api_client.set_skip, key, self._skip_ids())
+        if key in C.FIT_FIELDS.values():
+            # the wallpaper layer, all three fields resolved from the conf (absent = identity)
+            return self._push(lambda fit: api_client.set_fit(layer="wallpaper", **fit), key,
+                              resolve_fit(self._wp))
         for field, wp_key in _WP_DIAL_KEYS.items():
             if key == wp_key:
                 return self._push(lambda d: api_client.set_tuning(**d), key,
@@ -1067,6 +1073,32 @@ class EditorBridge(QObject):
             self.commitFailed.emit(["VOLUME"])
             return False
         return self._set_key("VOLUME", v)
+
+    @Slot(str, result=str)
+    def fitValue(self, field: str) -> str:
+        """The stored fit value for `field` (zoom, pan_x, pan_y), or "" when the key is absent."""
+        key = C.FIT_FIELDS.get(str(field or ""))
+        return self._present_str(key) if key else ""
+
+    @Slot(str, str, result=bool)
+    def setFit(self, field: str, text: str) -> bool:
+        """"" deletes the key (identity, the default entry); else clamp into the schema range."""
+        key = C.FIT_FIELDS.get(str(field or ""))
+        if not key:
+            return False
+        s = str(text or "").strip()
+        if not s:
+            return self._set_key(key, None)
+        try:
+            v = float(s)
+        except (TypeError, ValueError):
+            self.commitFailed.emit([key])
+            return False
+        if v != v:
+            self.commitFailed.emit([key])
+            return False
+        spec = C.WP_SCHEMA[key]
+        return self._set_key(key, max(float(spec["min"]), min(float(spec["max"]), v)))
 
     @Slot(result=str)
     def audioReactiveValue(self) -> str:

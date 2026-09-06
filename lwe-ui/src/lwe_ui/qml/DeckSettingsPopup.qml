@@ -99,6 +99,23 @@ Popup {
     }
 
     // two significant figures, with a decimal kept below 10x so the detent reads 1.0x
+    // --- Fit window (per wallpaper): the pan is a fraction of the travel the zoom leaves, so
+    // the chip reports the offset that produces in percent of the picture (zoom 2, pan 1 = 25)
+    function panPercent(pan, zoom) {
+        var off = Math.round(Number(pan) * 50 * (1 - 1 / Math.max(1, Number(zoom))));
+        return (off < 0 ? "-" : "+") + Math.abs(off) + "%";
+    }
+    // a typed "12%" is an offset of the picture and needs the zoom to become a fraction; a
+    // plain number is the fraction itself. NaN when the entry cannot be honoured.
+    function panFromEntry(t, zoom) {
+        var s = String(t).trim();
+        if (s.endsWith("%")) {
+            var travel = 50 * (1 - 1 / Math.max(1, Number(zoom)));
+            return travel > 0 ? parseFloat(s) / travel : NaN;
+        }
+        return parseFloat(s);
+    }
+
     function speedText(v) {
         var r = Number(Number(v).toPrecision(2));
         return ((r < 10 && r === Math.round(r)) ? r.toFixed(1) : String(r)) + "x";
@@ -798,6 +815,97 @@ Popup {
                             return v.charAt(0).toUpperCase() + v.slice(1);
                         }
                         onPicked: function(v) { deckPopup.setScaling(v) }
+                    }
+                }
+
+                // the fit window nests inside the scaling mode above: zoom is inward only,
+                // 1.00 to 2.00 (identity default), and the pans ride the travel it leaves
+                PRow {
+                    label: "Zoom"
+                    Row {
+                        spacing: Theme.spacingSm
+                        PSlider {
+                            id: popupFitZoom
+                            objectName: "popupFitZoom"
+                            anchors.verticalCenter: parent.verticalCenter
+                            from: 1
+                            to: 2
+                            value: {
+                                var raw = (pop.rev, deckPopup.fitValue("zoom"));
+                                return raw === "" ? 1 : Number(raw);
+                            }
+                            onCommit: function(v) { deckPopup.setFit("zoom", v.toFixed(2)) }
+                        }
+                        PChip {
+                            anchors.verticalCenter: parent.verticalCenter
+                            ckey: "FIT_ZOOM"
+                            text: popupFitZoom.value.toFixed(2)
+                            onEntered: function(t) {
+                                var n = parseFloat(String(t).replace("x", ""));
+                                if (isNaN(n)) { deckPopup.reportFailure(["FIT_ZOOM"]); return }
+                                deckPopup.setFit("zoom", String(Math.max(1, Math.min(2, n))));
+                            }
+                        }
+                    }
+                }
+
+                PRow {
+                    label: "Pan X"
+                    Row {
+                        spacing: Theme.spacingSm
+                        PSlider {
+                            id: popupPanX
+                            objectName: "popupPanX"
+                            anchors.verticalCenter: parent.verticalCenter
+                            from: -1
+                            to: 1
+                            tickAt: 0.5
+                            value: {
+                                var raw = (pop.rev, deckPopup.fitValue("pan_x"));
+                                return raw === "" ? 0 : Number(raw);
+                            }
+                            onCommit: function(v) { deckPopup.setFit("pan_x", v.toFixed(3)) }
+                        }
+                        PChip {
+                            anchors.verticalCenter: parent.verticalCenter
+                            ckey: "FIT_PAN_X"
+                            text: pop.panPercent(popupPanX.value, popupFitZoom.value)
+                            onEntered: function(t) {
+                                var n = pop.panFromEntry(t, popupFitZoom.value);
+                                if (isNaN(n)) { deckPopup.reportFailure(["FIT_PAN_X"]); return }
+                                deckPopup.setFit("pan_x", Math.max(-1, Math.min(1, n)).toFixed(3));
+                            }
+                        }
+                    }
+                }
+
+                PRow {
+                    label: "Pan Y"
+                    Row {
+                        spacing: Theme.spacingSm
+                        PSlider {
+                            id: popupPanY
+                            objectName: "popupPanY"
+                            anchors.verticalCenter: parent.verticalCenter
+                            from: -1
+                            to: 1
+                            tickAt: 0.5
+                            value: {
+                                var raw = (pop.rev, deckPopup.fitValue("pan_y"));
+                                return raw === "" ? 0 : Number(raw);
+                            }
+                            onCommit: function(v) { deckPopup.setFit("pan_y", v.toFixed(3)) }
+                        }
+                        PChip {
+                            anchors.verticalCenter: parent.verticalCenter
+                            ckey: "FIT_PAN_Y"
+                            text: pop.panPercent(popupPanY.value, popupFitZoom.value)
+                            onEntered: function(t) {
+                                var n = pop.panFromEntry(t, popupFitZoom.value);
+                                if (isNaN(n)) { deckPopup.reportFailure(["FIT_PAN_Y"]); return }
+                                deckPopup.setFit("pan_y", Math.max(-1, Math.min(1, n)).toFixed(3));
+                            }
+                        }
                     }
                 }
 

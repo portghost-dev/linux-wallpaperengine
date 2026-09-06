@@ -246,6 +246,8 @@ TEST_CASE ("fit window args are validated on show and set-fit", "[dispatcher]") 
 	R"({"id":1,"cmd":"show","args":{"id":"1","fit":{}}})",
 	R"({"id":1,"cmd":"set-fit","args":{"zoom":1.5}})",
 	R"({"id":1,"cmd":"set-fit","args":{"lane":"all","pan_x":0.25,"pan_y":-0.25}})",
+	R"({"id":1,"cmd":"set-fit","args":{"layer":"wallpaper","zoom":1.5}})",
+	R"({"id":1,"cmd":"set-fit","args":{"layer":"lane","pan_y":1}})",
     };
 
     for (const auto& line : good) {
@@ -265,6 +267,8 @@ TEST_CASE ("fit window args are validated on show and set-fit", "[dispatcher]") 
 	R"({"id":1,"cmd":"set-fit","args":{"lane":7,"zoom":1.5}})",
 	R"({"id":1,"cmd":"set-fit","args":{"zoom":3}})",
 	R"({"id":1,"cmd":"set-fit","args":{"pan_x":"left"}})",
+	R"({"id":1,"cmd":"set-fit","args":{"layer":"scene","zoom":1.5}})",
+	R"({"id":1,"cmd":"set-fit","args":{"layer":2,"zoom":1.5}})",
     };
 
     for (const auto& line : bad) {

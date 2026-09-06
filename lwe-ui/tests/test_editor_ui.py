@@ -72,7 +72,7 @@ def main() -> None:
         from lwe_ui.app import _resolve_theme_tokens, _QML_DIR, _TOKENS_URI, _TOKENS_NAME
 
         paths.ensure_dirs()
-        for name, val in (("synthwp_hi", 0.9), ("synthwp_lo", 0.1)):
+        for name, val in (("synthwp_hi", 0.9), ("synthwp_lo", 0.1), ("synthwp_fit", 0.5)):
             wd = os.path.join(str(paths.default_wallpapers_dir()), name)
             os.makedirs(wd, exist_ok=True)
             json.dump({"type": "scene", "file": "scene.json", "title": name, "general": {"properties": {
@@ -105,6 +105,9 @@ def main() -> None:
         _wizb = WizardBridge(engine.rootContext().contextProperty("backend"),
                              engine.rootContext().contextProperty("workshop"))
         engine.rootContext().setContextProperty("wizardBridge", _wizb)
+        from lwe_ui.deck_popup import DeckPopupBridge
+        deck_popup = DeckPopupBridge(backend)
+        engine.rootContext().setContextProperty("deckPopup", deck_popup)
         engine.load(QUrl.fromLocalFile(str(_QML_DIR / "Main.qml")))
         assert engine.rootObjects(), "Main.qml failed to load"
         win = engine.rootObjects()[0]
@@ -169,6 +172,79 @@ def main() -> None:
             "collapsing must preserve per-workspace state, not reset it (T11)"
         mode_at(1280)
         print("OK T11/T12 - compact law collapses at 640, restores at 1280, state survives")
+
+        # fit rows: present on both surfaces, seated from the store, round trip, revert. A
+        # wallpaper not opened before, so its session seat is the values written here.
+        from lwe_ui.storage import wp as _wp
+        _wp.update_set("synthwp_fit", {"FIT_ZOOM": 1.5, "FIT_PAN_X": 0.5})
+        editor.open("synthwp_fit")
+        QTest.qWait(200)
+        sliders = {name: win.findChild(QObject, name)
+                   for name in ("editorFitZoom", "editorPanX", "editorPanY",
+                                "popupFitZoom", "popupPanX", "popupPanY")}
+        missing = [n for n, s in sliders.items() if s is None]
+        assert not missing, f"fit rows must be reachable by objectName: missing {missing}"
+        assert abs(float(sliders["editorFitZoom"].property("value")) - 1.5) < 1e-6, \
+            "the Zoom slider must seat from the stored FIT_ZOOM"
+        assert abs(float(sliders["editorPanX"].property("value")) - 0.5) < 1e-6, \
+            "the Pan X slider must seat from the stored FIT_PAN_X"
+        assert abs(float(sliders["editorPanY"].property("value"))) < 1e-6, \
+            "an absent FIT_PAN_Y seats the Pan Y slider at centre"
+        # the chip arithmetic: pan is a fraction of the travel the zoom leaves (zoom 2, pan 1 =
+        # a quarter of the picture), +x right; a % entry converts back through the zoom
+        from PySide6.QtCore import QMetaObject, Q_RETURN_ARG, Q_ARG
+        def call(obj, name, *args):
+            return QMetaObject.invokeMethod(obj, name, Q_RETURN_ARG("QVariant"),
+                                            *[Q_ARG("QVariant", a) for a in args])
+        popup_root = next(c for c in win.findChildren(QObject)
+                          if c.metaObject().className().startswith("DeckSettingsPopup"))
+        for surface in (ev, popup_root):
+            assert call(surface, "panPercent", 1.0, 2.0) == "+25%"
+            assert call(surface, "panPercent", -1.0, 2.0) == "-25%"
+            assert call(surface, "panPercent", 0.5, 1.6) == "+9%"
+            assert call(surface, "panPercent", 0.7, 1.0) == "+0%"
+            assert call(surface, "panPercent", -0.01, 1.6) == "+0%", "a rounded zero is never -0%"
+            assert abs(float(call(surface, "panFromEntry", "12%", 1.6)) - 0.64) < 1e-9
+            assert abs(float(call(surface, "panFromEntry", "-0.25", 1.6)) + 0.25) < 1e-9
+            import math
+            assert math.isnan(float(call(surface, "panFromEntry", "12%", 1.0))), \
+                "a % entry at zoom 1.00 has no travel to spend and is refused"
+        assert not editor.setFit("zoom", "wide"), "a non-number is refused"
+        assert editor.setFit("zoom", "1.25")
+        QTest.qWait(120)
+        assert abs(float(sliders["editorFitZoom"].property("value")) - 1.25) < 1e-6, \
+            "a bridge write must re-seat the Zoom slider through the store"
+        assert _wp.load_set("synthwp_fit").get("FIT_ZOOM") == 1.25
+        assert editor.isMarked("FIT_ZOOM"), "a changed fit row wears the mark"
+        # live class: when the edited wallpaper is the one on screen, a fit write pushes the
+        # wallpaper layer through set-fit instead of queueing a re-show; otherwise nothing is sent
+        from lwe_ui import editor as _editor_mod
+        pushes = []
+        _editor_mod.api_client.available = lambda: True
+        _editor_mod.api_client.set_fit = lambda **kw: (pushes.append(dict(kw)) or {"ok": True})
+        editor.syncCurrent("synthwp_fit")
+        assert editor.setFit("pan_x", "0.25")
+        assert pushes == [{"layer": "wallpaper", "zoom": 1.25, "pan_x": 0.25, "pan_y": 0.0}], pushes
+        assert not editor._reshow.isActive(), "a fit write must not queue a re-show"
+        editor.syncCurrent("")
+        assert editor.setFit("pan_x", "0.5")
+        assert len(pushes) == 1, "an editor open on a wallpaper not on screen sends nothing"
+        assert editor.revertChanges()
+        QTest.qWait(120)
+        assert _wp.load_set("synthwp_fit").get("FIT_ZOOM") == 1.5, "revert restores the seated value"
+        assert abs(float(sliders["editorFitZoom"].property("value")) - 1.5) < 1e-6
+        assert not editor.isMarked("FIT_ZOOM")
+        # the popup reads the same store once its bridge is seated on the wallpaper. Last,
+        # and read without waiting: the deck's status tick re-syncs the popup to whatever the
+        # engine shows (nothing here), which is the popup's own mark boundary.
+        deck_popup.syncCurrent("synthwp_fit")
+        assert abs(float(sliders["popupFitZoom"].property("value")) - 1.5) < 1e-6, \
+            "the popup Zoom slider must seat from the same stored FIT_ZOOM"
+        assert abs(float(sliders["popupPanX"].property("value")) - 0.5) < 1e-6, \
+            "the popup Pan X slider must seat from the same stored FIT_PAN_X"
+        assert abs(float(sliders["popupPanY"].property("value"))) < 1e-6
+        print("OK fit rows - six sliders present, seated from the store on both surfaces, "
+              "round trip, revert, chip arithmetic pinned")
     finally:
         for k, v in orig.items():
             if v is None:

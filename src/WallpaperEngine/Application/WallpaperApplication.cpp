@@ -2578,20 +2578,32 @@ void WallpaperApplication::apiSetFit (int client, int64_t requestId, const nlohm
 	return;
     }
 
-    auto& fit = laneIt->second.fit;
+    // the wallpaper layer is the show's own window: it is written to the look and into the
+    // current show record, so prev and a restart carry it like a fit arg would
+    const bool wallpaperLayer = args.value ("layer", "lane") == std::string ("wallpaper");
+    auto& lane = laneIt->second;
+    auto& fit = wallpaperLayer ? lane.look.fit : lane.fit;
     fit.zoom = std::clamp (args.value ("zoom", fit.zoom), 1.0f, 2.0f);
     fit.panX = std::clamp (args.value ("pan_x", fit.panX), -1.0f, 1.0f);
     fit.panY = std::clamp (args.value ("pan_y", fit.panY), -1.0f, 1.0f);
 
+    if (wallpaperLayer && !lane.current.id.empty ()) {
+	lane.current.args["fit"] = { { "zoom", fit.zoom }, { "pan_x", fit.panX }, { "pan_y", fit.panY } };
+    }
+
     this->applyFitWindow ();
     const auto effective = this->effectiveFit ();
-    sLog.out ("API: lane ", laneId, " fit zoom ", fit.zoom, " pan ", fit.panX, ",", fit.panY);
+    sLog.out (
+	"API: lane ", laneId, wallpaperLayer ? " wallpaper" : " lane", " fit zoom ", fit.zoom, " pan ", fit.panX, ",",
+	fit.panY
+    );
 
     this->m_commandServer->respond (
 	client,
 	Api::CommandDispatcher::done (
 	    requestId,
 	    { { "lane", laneId },
+	      { "layer", wallpaperLayer ? "wallpaper" : "lane" },
 	      { "fit", { { "zoom", fit.zoom }, { "pan_x", fit.panX }, { "pan_y", fit.panY } } },
 	      { "fit_effective",
 		{ { "zoom", effective.zoom }, { "pan_x", effective.panX }, { "pan_y", effective.panY } } } }

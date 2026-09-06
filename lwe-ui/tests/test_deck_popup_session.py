@@ -118,6 +118,60 @@ class DeckPopupSessionTests(unittest.TestCase):
             self.wp.load_set = real_load_set
             self.session_mod.wp.load_set = real_load_set
 
+    def test_fit_rows_round_trip_clamp_and_revert(self) -> None:
+        wid = "1000003"
+        self.wp.update_set(wid, {"SCALING": "fill"})
+        self.popup.syncCurrent(wid)
+        self.assertEqual(self.popup.fitValue("zoom"), "")
+
+        self.assertTrue(self.popup.setFit("zoom", "1.5"))
+        self.assertTrue(self.popup.setFit("pan_x", "-3"))
+        self.assertEqual(self.wp.load_set(wid).get("FIT_ZOOM"), 1.5)
+        self.assertEqual(self.wp.load_set(wid).get("FIT_PAN_X"), -1.0)
+        self.assertEqual(self.popup.fitValue("zoom"), "1.5")
+        self.assertTrue(self.session_mod.SESSION.is_marked(wid, "FIT_ZOOM"))
+        self.assertTrue(self.session_mod.SESSION.is_marked(wid, "FIT_PAN_X"))
+
+        # a value that is not a number is the failure grammar, never a silent default
+        self.assertFalse(self.popup.setFit("pan_y", "up"))
+        self.assertIn(["FIT_PAN_Y"], self.failures)
+        self.assertNotIn("FIT_PAN_Y", self.wp.load_set(wid))
+        self.assertFalse(self.popup.setFit("nope", "1"))
+
+        # the empty entry deletes the key: identity is absence, not a stored 1.0
+        self.assertTrue(self.popup.setFit("zoom", ""))
+        self.assertNotIn("FIT_ZOOM", self.wp.load_set(wid))
+        self.assertEqual(self.popup.fitValue("zoom"), "")
+
+        self.assertTrue(self.popup.revertChanges())
+        self.assertNotIn("FIT_PAN_X", self.wp.load_set(wid))
+        self.assertFalse(self.popup.hasMarks())
+
+    def test_fit_writes_go_live_through_the_wallpaper_layer_not_a_reshow(self) -> None:
+        wid = "1000004"
+        self.wp.update_set(wid, {"SCALING": "fill"})
+        self.popup.syncCurrent(wid)
+        pushes: list[dict] = []
+        self.popup_mod.api_client.available = lambda: True
+        self.popup_mod.api_client.set_fit = lambda **kw: (pushes.append(dict(kw)) or {"ok": True})
+
+        self.assertTrue(self.popup.setFit("zoom", "1.5"))
+        self.assertEqual(pushes, [{"layer": "wallpaper", "zoom": 1.5, "pan_x": 0.0, "pan_y": 0.0}])
+        # the re-show timer is not armed for a fit-only write; the present pass handles it
+        self.assertFalse(self.popup._reshow.isActive())
+        self.assertEqual(self.popup._pending, set())
+
+        # a build-class key beside it still queues the re-show, with the fit pushed as well
+        self.assertTrue(self.popup._write_wp({"SCALING": "fit", "FIT_PAN_X": 0.25}))
+        self.assertEqual(pushes[-1], {"layer": "wallpaper", "zoom": 1.5, "pan_x": 0.25, "pan_y": 0.0})
+        self.assertTrue(self.popup._reshow.isActive())
+        self.assertEqual(self.popup._pending, {"SCALING"})
+
+        # a refused push is the failure grammar
+        self.popup_mod.api_client.set_fit = lambda **kw: {"ok": False, "error": "no"}
+        self.popup.setFit("pan_y", "0.5")
+        self.assertIn(["FIT_PAN_Y"], self.failures)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

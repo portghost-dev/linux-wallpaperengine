@@ -166,6 +166,9 @@ WP_SCHEMA: dict[str, dict] = {
     "FIT_PAN_Y": {"type": "float", "default": 0.0, "min": -1.0, "max": 1.0},
     "SKIP": {"type": "str", "default": ""},  # space-separated object ids
 }
+
+# the fit window's three fields, engine name -> conf key
+FIT_FIELDS = {"zoom": "FIT_ZOOM", "pan_x": "FIT_PAN_X", "pan_y": "FIT_PAN_Y"}
 WP_PROP_PREFIX = "PROP_"
 
 # --------------------------------------------------------------------------------------

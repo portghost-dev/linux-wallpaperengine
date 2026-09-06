@@ -301,13 +301,17 @@ def set_fit(
     pan_x: float | None = None,
     pan_y: float | None = None,
     lane: str = "all",
+    layer: str = "lane",
 ) -> dict[str, Any] | None:
-    """The lane layer of the fit window, partial update: only the fields given change.
+    """One layer of the fit window, partial update: only the fields given change.
 
-    Live: the present pass recomputes its UV window on the next frame, no rebuild. The
-    reply carries the lane layer and the effective (composed) window.
+    `layer` is "lane" (follows the display group, the default) or "wallpaper" (the current
+    show's own window, the one a wallpaper's FIT_* keys resolve into; the engine also writes it
+    into the show record so prev and a restart keep it). Live: the present pass recomputes its
+    UV window on the next frame, no rebuild. The reply carries the layer written and the
+    effective (composed) window.
     """
-    args: dict[str, Any] = {"lane": str(lane)}
+    args: dict[str, Any] = {"lane": str(lane), "layer": str(layer)}
     if zoom is not None:
         args["zoom"] = float(zoom)
     if pan_x is not None:

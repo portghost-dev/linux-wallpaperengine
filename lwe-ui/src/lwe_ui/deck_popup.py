@@ -50,6 +50,7 @@ from . import constants as C
 from .discovery import project as project_disc
 from .discovery import properties as properties_disc
 from .storage import meta, paths, settings, tier_a, wp
+from .models import resolve_fit
 from .wp_session import SESSION
 
 # The engine's own set-fps validation bounds, read from the dispatcher rather than guessed:
@@ -333,6 +334,38 @@ class DeckPopupBridge(QObject):
             return False
         return self._write_wp({"SCALING": s or None})
 
+    @Slot(str, result=str)
+    def fitValue(self, field: str) -> str:
+        """The stored fit value for `field` (zoom, pan_x, pan_y), or "" when the key is absent."""
+        key = C.FIT_FIELDS.get(str(field or ""))
+        if not key or not self._wid:
+            return ""
+        try:
+            present = wp.load_set(self._wid)
+        except Exception:
+            return ""
+        return str(present.get(key)) if key in present else ""
+
+    @Slot(str, str, result=bool)
+    def setFit(self, field: str, text: str) -> bool:
+        """"" deletes the key (identity); else clamp into the schema range and store it."""
+        key = C.FIT_FIELDS.get(str(field or ""))
+        if not key:
+            return False
+        s = str(text or "").strip()
+        if not s:
+            return self._write_wp({key: None})
+        try:
+            v = float(s)
+        except (TypeError, ValueError):
+            self.commitFailed.emit([key])
+            return False
+        if v != v:
+            self.commitFailed.emit([key])
+            return False
+        spec = C.WP_SCHEMA[key]
+        return self._write_wp({key: max(float(spec["min"]), min(float(spec["max"]), v))})
+
     @Slot(result="QVariantList")
     def sceneProperties(self) -> list:
         """The scene author's own properties, in project.json order, with overrides applied."""
@@ -394,18 +427,34 @@ class DeckPopupBridge(QObject):
         return True
 
     def _write_wp(self, changes: dict[str, Any]) -> bool:
-        """Write wallpaper-scoped keys, mark them, and queue the debounced re-show."""
+        """Write wallpaper-scoped keys, mark them, and apply: fit live, the rest by re-show."""
         if not self._wid:
             return False
         if not self._commit_conf(changes):
             return False
         SESSION.mark(self._wid, changes.keys())
-        self._pending.update(changes.keys())
-        self._reshow.start()
+        self._apply_keys(changes.keys())
         self.stateChanged.emit()
         if any(k.startswith(C.WP_PROP_PREFIX) for k in changes):
             self.propsEdited.emit()
         return True
+
+    def _apply_keys(self, keys) -> None:
+        """Route committed keys: the fit window is live through set-fit's wallpaper layer (the
+        present pass recomputes, no rebuild); everything else queues the debounced re-show."""
+        keys = set(keys)
+        fit_keys = keys & set(C.FIT_FIELDS.values())
+        if fit_keys:
+            try:
+                conf = wp.load(self._wid)
+            except Exception:
+                conf = {}
+            self._push(lambda fit: api_client.set_fit(layer="wallpaper", **fit),
+                       sorted(fit_keys)[0], resolve_fit(conf))
+        rest = keys - fit_keys
+        if rest:
+            self._pending.update(rest)
+            self._reshow.start()
 
     def _fire_reshow(self) -> None:
         """Apply every coalesced wallpaper-scoped edit with one re-show of the current wallpaper."""
@@ -471,8 +520,7 @@ class DeckPopupBridge(QObject):
         if not self._commit_conf(changes):
             return False
         SESSION.clear_marks(self._wid)
-        self._pending.update(changes.keys())
-        self._reshow.start()
+        self._apply_keys(changes.keys())
         self.stateChanged.emit()
         if any(k.startswith(C.WP_PROP_PREFIX) for k in changes):
             self.propsEdited.emit()
@@ -487,8 +535,7 @@ class DeckPopupBridge(QObject):
         if not self._commit_conf(changes):
             return False
         SESSION.clear_marks(self._wid)
-        self._pending.update(changes.keys())
-        self._reshow.start()
+        self._apply_keys(changes.keys())
         self.stateChanged.emit()
         self.propsEdited.emit()
         return True
