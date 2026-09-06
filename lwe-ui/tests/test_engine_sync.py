@@ -228,6 +228,24 @@ class EngineSyncTest(unittest.TestCase):
         self.assertEqual(args["fullscreen_behavior"], "off")
         self.assertFalse(args["fullscreen_pause"])
 
+    def test_show_args_carry_the_fit_window(self) -> None:
+        """The wallpaper layer rides every show resolved: identity when unset, the conf's
+        values clamped to the engine's range otherwise; playlist entries carry it too."""
+        wp.save("111", {"SPEED": 1.0})
+        _, args = models.resolve_show_args("111")
+        self.assertEqual(args["fit"], {"zoom": 1.0, "pan_x": 0.0, "pan_y": 0.0})
+        wp.save("111", {"FIT_ZOOM": 1.5, "FIT_PAN_X": -0.25, "FIT_PAN_Y": 0.5})
+        _, args = models.resolve_show_args("111")
+        self.assertEqual(args["fit"], {"zoom": 1.5, "pan_x": -0.25, "pan_y": 0.5})
+        wp.save("111", {"FIT_ZOOM": 3.0, "FIT_PAN_X": -2.0, "FIT_PAN_Y": 9.0})
+        _, args = models.resolve_show_args("111")
+        self.assertEqual(args["fit"], {"zoom": 2.0, "pan_x": -1.0, "pan_y": 1.0}, "clamped, never refused")
+        self._seed_playlist(["111", "222"])
+        wp.save("111", {"FIT_ZOOM": 1.25})
+        entries, *_ = self.backend._playlist_payload(playlists.active_slug())
+        self.assertEqual(entries[0]["fit"]["zoom"], 1.25)
+        self.assertEqual(entries[1]["fit"], {"zoom": 1.0, "pan_x": 0.0, "pan_y": 0.0})
+
     def test_setting_the_mode_pushes_it_live_and_refreshes_rotation(self) -> None:
         self._seed_playlist(["111"])
         sent: list[str] = []

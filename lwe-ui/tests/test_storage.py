@@ -164,6 +164,20 @@ def check_wp(S):
     assert "FULLSCREEN_PAUSE=true" in raw2, raw2
     assert wp.load(wid)["FULLSCREEN_PAUSE"] is True
 
+    # the fit window's wallpaper layer: identity by default, floats round-trip, garbage
+    # reads as the default
+    assert (r["FIT_ZOOM"], r["FIT_PAN_X"], r["FIT_PAN_Y"]) == (1.0, 0.0, 0.0)
+    r["FIT_ZOOM"] = 1.5
+    r["FIT_PAN_X"] = -0.25
+    r["FIT_PAN_Y"] = 0.5
+    wp.save(wid, r)
+    raw3 = paths.wp_file(wid).read_text(encoding="utf-8")
+    assert "FIT_ZOOM=1.5" in raw3, raw3
+    f = wp.load(wid)
+    assert (f["FIT_ZOOM"], f["FIT_PAN_X"], f["FIT_PAN_Y"]) == (1.5, -0.25, 0.5), f
+    paths.wp_file(wid).write_text(raw3.replace("FIT_ZOOM=1.5", "FIT_ZOOM=wide"), encoding="utf-8")
+    assert wp.load(wid)["FIT_ZOOM"] == 1.0
+
 
 def check_wp_unreadable(S):
     """An unreadable conf must never be rewritten as if it were empty."""

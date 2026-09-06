@@ -159,6 +159,11 @@ WP_SCHEMA: dict[str, dict] = {
     "AUDIO_REACTIVE": {"type": "bool", "default": False},
     "MOUSE": {"type": "bool", "default": False},
     "FULLSCREEN_PAUSE": {"type": "bool_or_empty", "default": ""},  # "" = inherit global
+    # the wallpaper layer of the fit window (R28/R29): zoom inward only, pans as fractions
+    # of the travel the zoom leaves; identity is the default at both levels
+    "FIT_ZOOM": {"type": "float", "default": 1.0, "min": 1.0, "max": 2.0},
+    "FIT_PAN_X": {"type": "float", "default": 0.0, "min": -1.0, "max": 1.0},
+    "FIT_PAN_Y": {"type": "float", "default": 0.0, "min": -1.0, "max": 1.0},
     "SKIP": {"type": "str", "default": ""},  # space-separated object ids
 }
 WP_PROP_PREFIX = "PROP_"

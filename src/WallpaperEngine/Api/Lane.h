@@ -68,6 +68,8 @@ struct Look {
     bool automute = true;
     std::string scaling;
     std::string clamp;
+    /** the wallpaper layer of the fit window, from the show's fit arg */
+    Fit fit;
 };
 
 constexpr std::size_t HISTORY_BOUND = 100;
@@ -161,6 +163,8 @@ Entry entryFromJson (const nlohmann::json& j);
 Playlist playlistFromJson (const nlohmann::json& j);
 Group groupFromJson (const nlohmann::json& j);
 Lane laneFromJson (const nlohmann::json& j);
+/** a fit from a state-file or show-arg object: missing keys default, bad types default, values clamp */
+Fit fitFromJson (const nlohmann::json& j);
 
 /** Build one lane and its playlist from a version-1 state file. */
 void fromLegacyState (const nlohmann::json& state, Lane& lane, Playlist& playlist);

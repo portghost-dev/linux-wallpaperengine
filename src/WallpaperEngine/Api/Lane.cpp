@@ -34,6 +34,25 @@ std::array<float, 4> floatsFromJson (const nlohmann::json& j, const std::array<f
 }
 } // namespace
 
+// the state file is hand-editable: a missing key is the default, a stray type or an
+// out-of-range value lands on the contract's bounds instead of throwing
+Fit WallpaperEngine::Api::fitFromJson (const nlohmann::json& j) {
+    Fit fit;
+
+    if (!j.is_object ()) {
+	return fit;
+    }
+
+    const auto number = [&j] (const char* key, const float fallback) {
+	return j.contains (key) && j[key].is_number () ? j[key].get<float> () : fallback;
+    };
+
+    fit.zoom = std::clamp (number ("zoom", 1.0f), 1.0f, 2.0f);
+    fit.panX = std::clamp (number ("pan_x", 0.0f), -1.0f, 1.0f);
+    fit.panY = std::clamp (number ("pan_y", 0.0f), -1.0f, 1.0f);
+    return fit;
+}
+
 namespace {
 void boundHistory (Lane& lane) {
     while (lane.history.size () + lane.forward.size () > HISTORY_BOUND && !lane.history.empty ()) {
@@ -551,7 +570,11 @@ nlohmann::json WallpaperEngine::Api::toJson (const Lane& lane) {
 		 { "mouse", lane.look.mouse },
 		 { "automute", lane.look.automute },
 		 { "scaling", lane.look.scaling },
-		 { "clamp", lane.look.clamp } } } };
+		 { "clamp", lane.look.clamp },
+		 { "fit",
+		   { { "zoom", lane.look.fit.zoom },
+		     { "pan_x", lane.look.fit.panX },
+		     { "pan_y", lane.look.fit.panY } } } } } };
 }
 
 Entry WallpaperEngine::Api::entryFromJson (const nlohmann::json& j) {
@@ -682,11 +705,8 @@ Lane WallpaperEngine::Api::laneFromJson (const nlohmann::json& j) {
 
     boundHistory (lane);
 
-    if (j.contains ("fit") && j["fit"].is_object ()) {
-	const auto& fit = j["fit"];
-	lane.fit.zoom = fit.value ("zoom", 1.0f);
-	lane.fit.panX = fit.value ("pan_x", 0.0f);
-	lane.fit.panY = fit.value ("pan_y", 0.0f);
+    if (j.contains ("fit")) {
+	lane.fit = fitFromJson (j["fit"]);
     }
 
     if (j.contains ("look") && j["look"].is_object ()) {
@@ -704,6 +724,7 @@ Lane WallpaperEngine::Api::laneFromJson (const nlohmann::json& j) {
 	lane.look.automute = look.value ("automute", true);
 	lane.look.scaling = look.value ("scaling", "");
 	lane.look.clamp = look.value ("clamp", "");
+	lane.look.fit = look.contains ("fit") ? fitFromJson (look["fit"]) : Fit {};
     }
 
     return lane;

@@ -239,6 +239,40 @@ TEST_CASE ("show vocabulary args are validated", "[dispatcher]") {
     }
 }
 
+TEST_CASE ("fit window args are validated on show and set-fit", "[dispatcher]") {
+    const std::string good[] = {
+	R"({"id":1,"cmd":"show","args":{"id":"1","fit":{"zoom":1.0,"pan_x":0,"pan_y":0}}})",
+	R"({"id":1,"cmd":"show","args":{"id":"1","fit":{"zoom":2,"pan_x":-1,"pan_y":1}}})",
+	R"({"id":1,"cmd":"show","args":{"id":"1","fit":{}}})",
+	R"({"id":1,"cmd":"set-fit","args":{"zoom":1.5}})",
+	R"({"id":1,"cmd":"set-fit","args":{"lane":"all","pan_x":0.25,"pan_y":-0.25}})",
+    };
+
+    for (const auto& line : good) {
+	INFO ("input: " << line);
+	CHECK (CommandDispatcher::parse (line).command.has_value ());
+    }
+
+    const std::string bad[] = {
+	R"({"id":1,"cmd":"show","args":{"id":"1","fit":1}})",
+	R"({"id":1,"cmd":"show","args":{"id":"1","fit":{"zoom":0.5}}})",
+	R"({"id":1,"cmd":"show","args":{"id":"1","fit":{"zoom":2.01}}})",
+	R"({"id":1,"cmd":"show","args":{"id":"1","fit":{"zoom":"2"}}})",
+	R"({"id":1,"cmd":"show","args":{"id":"1","fit":{"pan_x":1.5}}})",
+	R"({"id":1,"cmd":"show","args":{"id":"1","fit":{"pan_y":-1.5}}})",
+	R"({"id":1,"cmd":"set-fit","args":{}})",
+	R"({"id":1,"cmd":"set-fit","args":{"lane":"all"}})",
+	R"({"id":1,"cmd":"set-fit","args":{"lane":7,"zoom":1.5}})",
+	R"({"id":1,"cmd":"set-fit","args":{"zoom":3}})",
+	R"({"id":1,"cmd":"set-fit","args":{"pan_x":"left"}})",
+    };
+
+    for (const auto& line : bad) {
+	INFO ("input: " << line);
+	CHECK_FALSE (CommandDispatcher::parse (line).command.has_value ());
+    }
+}
+
 TEST_CASE ("rotation and transport verbs are validated", "[dispatcher]") {
     const std::string good[] = {
 	R"({"id":1,"cmd":"next"})",
@@ -359,6 +393,9 @@ TEST_CASE ("playlist and lane verbs are validated", "[dispatcher]") {
 	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all","enabled":"yes"}]}})",
 	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all","group":"DP-2"}]}})",
 	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all","fit":{"zoom":"big"}}]}})",
+	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all","fit":{"zoom":3}}]}})",
+	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all","fit":{"pan_x":-2}}]}})",
+	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all","fit":7}]}})",
 	R"({"id":1,"cmd":"next","args":{"lane":"../x"}})",
     };
 

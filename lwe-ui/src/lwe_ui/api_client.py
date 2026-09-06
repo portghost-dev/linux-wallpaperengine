@@ -129,6 +129,7 @@ def show(
     fullscreen_behavior: str | None = None,
     skip_objects: list[int] | None = None,
     ui_id: str | None = None,
+    fit: dict[str, float] | None = None,
     sock: "str | os.PathLike | None" = None,
 ) -> dict[str, Any] | None:
     """Hot-swap every output to this wallpaper id. Default waits only for the ack.
@@ -142,7 +143,8 @@ def show(
     PROP_ overrides as raw strings; presets like OLED Black are ALL properties.
     scaling in stretch/fit/fill/default; clamp in clamp/border/repeat; volume 0..128.
     skip_objects is the wallpaper's conf SKIP list (object ids hidden for this
-    wallpaper only).
+    wallpaper only). fit is the wallpaper layer of the fit window, {zoom 1..2,
+    pan_x, pan_y -1..1}; the engine composes it with the lane layer (set_fit).
     """
     args: dict[str, Any] = {"id": wid}
     if cc is not None:
@@ -170,6 +172,8 @@ def show(
         args["fullscreen_behavior"] = str(fullscreen_behavior)
     if skip_objects:
         args["skip_objects"] = [int(x) for x in skip_objects]
+    if fit is not None:
+        args["fit"] = {str(k): float(v) for k, v in fit.items()}
     if ui_id:
         # opaque identity echo: the engine stores + reports it so Now Playing can name
         # the preset TILE the user picked, not the base wallpaper the engine renders
@@ -290,6 +294,27 @@ def set_skip(ids: list[int], sock: "str | os.PathLike | None" = None) -> dict[st
     reveals objects with no rebuild and no relaunch.
     """
     return request("set-skip", {"ids": [int(i) for i in ids]}, sock=sock)
+
+
+def set_fit(
+    zoom: float | None = None,
+    pan_x: float | None = None,
+    pan_y: float | None = None,
+    lane: str = "all",
+) -> dict[str, Any] | None:
+    """The lane layer of the fit window, partial update: only the fields given change.
+
+    Live: the present pass recomputes its UV window on the next frame, no rebuild. The
+    reply carries the lane layer and the effective (composed) window.
+    """
+    args: dict[str, Any] = {"lane": str(lane)}
+    if zoom is not None:
+        args["zoom"] = float(zoom)
+    if pan_x is not None:
+        args["pan_x"] = float(pan_x)
+    if pan_y is not None:
+        args["pan_y"] = float(pan_y)
+    return request("set-fit", args)
 
 
 def set_fps(fps: int) -> dict[str, Any] | None:

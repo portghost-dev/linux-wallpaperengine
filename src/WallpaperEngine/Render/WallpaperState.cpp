@@ -8,12 +8,44 @@ using namespace WallpaperEngine::Render;
 WallpaperState::WallpaperState (const TextureUVsScaling& textureUVsMode, const uint32_t& clampMode) :
     m_textureUVsMode (textureUVsMode), m_clampingMode (clampMode) { }
 
+WallpaperState::Fit WallpaperState::composeFit (const Fit& wallpaper, const Fit& lane) {
+    return { .zoom = std::clamp (wallpaper.zoom * lane.zoom, 1.0f, 2.0f),
+	     .panX = std::clamp (wallpaper.panX + lane.panX, -1.0f, 1.0f),
+	     .panY = std::clamp (wallpaper.panY + lane.panY, -1.0f, 1.0f) };
+}
+
 bool WallpaperState::hasChanged (
     const glm::ivec4& viewport, const bool& vflip, const int& projectionWidth, const int& projectionHeight
 ) const {
     return this->m_viewport.width != viewport.z || this->m_viewport.height != viewport.w
 	|| this->m_projection.width != projectionWidth || this->m_projection.height != projectionHeight
-	|| this->m_vflip != vflip;
+	|| this->m_vflip != vflip || !(this->m_fit == this->m_appliedFit);
+}
+
+void WallpaperState::setFit (const Fit& fit) {
+    this->m_fit = { .zoom = std::clamp (fit.zoom, 1.0f, 2.0f),
+		    .panX = std::clamp (fit.panX, -1.0f, 1.0f),
+		    .panY = std::clamp (fit.panY, -1.0f, 1.0f) };
+}
+
+const WallpaperState::Fit& WallpaperState::getFit () const { return this->m_fit; }
+
+// v runs backwards unless flipped; the half-span shrinks by the zoom and the centre
+// moves by the pan, always toward the viewport's right (+x) and top (+y)
+void WallpaperState::applyFit () {
+    const float zoom = this->m_fit.zoom;
+
+    const float uHalf = (this->m_UVs.uend - this->m_UVs.ustart) / 2.0f;
+    const float uCenter = (this->m_UVs.ustart + this->m_UVs.uend) / 2.0f + this->m_fit.panX * (uHalf - uHalf / zoom);
+    this->m_UVs.ustart = uCenter - uHalf / zoom;
+    this->m_UVs.uend = uCenter + uHalf / zoom;
+
+    const float vHalf = (this->m_UVs.vstart - this->m_UVs.vend) / 2.0f;
+    const float vCenter = (this->m_UVs.vstart + this->m_UVs.vend) / 2.0f + this->m_fit.panY * (vHalf - vHalf / zoom);
+    this->m_UVs.vstart = vCenter + vHalf / zoom;
+    this->m_UVs.vend = vCenter - vHalf / zoom;
+
+    this->m_appliedFit = this->m_fit;
 }
 
 // Reset UVs to 0/1 values
@@ -183,4 +215,6 @@ void WallpaperState::updateState (
 	    );
 	    break;
     }
+
+    this->applyFit ();
 }

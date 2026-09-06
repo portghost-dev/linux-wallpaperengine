@@ -209,6 +209,13 @@ private:
     void applyRotateSet (const nlohmann::json& args);
     void apiPlaylistSet (int client, int64_t requestId, const nlohmann::json& args);
     void apiLanesSet (int client, int64_t requestId, const nlohmann::json& args);
+    /** the set-fit verb: writes the lane layer of the fit window and applies it live */
+    void apiSetFit (int client, int64_t requestId, const nlohmann::json& args);
+    /** the wallpaper layer (this show's args) composed with the lane layer */
+    [[nodiscard]] WallpaperEngine::Render::WallpaperState::Fit effectiveFit () const;
+    [[nodiscard]] WallpaperEngine::Render::WallpaperState::Fit effectiveFit (const Api::Lane& lane) const;
+    /** hands the composed fit window to every wallpaper on screen; no rebuild */
+    void applyFitWindow ();
     /** the one lane bound to every screen today */
     Api::Lane& lane ();
     [[nodiscard]] const Api::Lane& lane () const;

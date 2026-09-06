@@ -46,6 +46,7 @@
 #include <algorithm>
 #include <climits>
 #include <numeric>
+#include <ranges>
 #include <sys/mman.h>
 #include <unistd.h>
 #include <utility>
@@ -549,6 +550,9 @@ void WallpaperApplication::advancePlaylist (
 		    this->m_webHelper.get (), scaling, clamp
 		)
 	    );
+	    // a legacy advance carries no show args: the wallpaper layer is identity
+	    this->lane ().look.fit = {};
+	    this->applyFitWindow ();
 	}
 
 	this->m_context.settings.general.screenBackgrounds[screen] = nextPath;
@@ -1097,6 +1101,8 @@ void WallpaperApplication::buildWallpapers () {
 	    m_renderContext->setWallpaper (screenName, shared);
 	}
     }
+
+    this->applyFitWindow ();
 }
 
 void WallpaperApplication::setupOpenGLDebugging () {
@@ -1348,7 +1354,8 @@ void WallpaperApplication::processApiRequests () {
 							      "set-tuning",
 							      "set-app-conditions",
 							      "playlist-set",
-							      "lanes-set" };
+							      "lanes-set",
+							      "set-fit" };
 
 	if (MUTATING_VERBS.find (outcome.command->cmd) != MUTATING_VERBS.end ()) {
 	    this->persistRuntimeState ();
@@ -1416,6 +1423,11 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 
     if (command.cmd == "lanes-set") {
 	this->apiLanesSet (client, command.id, command.args);
+	return;
+    }
+
+    if (command.cmd == "set-fit") {
+	this->apiSetFit (client, command.id, command.args);
 	return;
     }
 
@@ -1910,6 +1922,8 @@ nlohmann::json WallpaperApplication::apiStatus () const {
     for (const auto& [key, item] : this->m_lanes) {
 	auto block = Api::laneStatus (item, this->playlistOf (item), now);
 	block["canvas"] = this->laneCanvas ();
+	const auto composed = this->effectiveFit (item);
+	block["fit_effective"] = { { "zoom", composed.zoom }, { "pan_x", composed.panX }, { "pan_y", composed.panY } };
 
 	if (item.current.id.empty ()) {
 	    block["now"] = currentId;
@@ -1986,6 +2000,13 @@ nlohmann::json WallpaperApplication::apiStatus () const {
 	// all-outputs show semantics: every non-span screen carries the same values
 	break;
     }
+
+    // the fit window: the wallpaper layer as this show set it, and what is on screen
+    // once the lane layer is composed in
+    const auto effective = this->effectiveFit ();
+    const auto& shown = this->lane ().look.fit;
+    result["fit"] = { { "zoom", shown.zoom }, { "pan_x", shown.panX }, { "pan_y", shown.panY } };
+    result["fit_effective"] = { { "zoom", effective.zoom }, { "pan_x", effective.panX }, { "pan_y", effective.panY } };
 
     return result;
 }
@@ -2142,6 +2163,7 @@ bool WallpaperApplication::applyShowCore (
     const auto previousProperties = this->m_context.settings.general.properties;
     const auto previousScalings = this->m_context.settings.general.screenScalings;
     const auto previousClamps = this->m_context.settings.general.screenClamps;
+    const auto previousFit = this->lane ().look.fit;
     const auto previousVolume = this->m_context.settings.audio.volume;
     const auto previousAudioProcessing = this->m_context.settings.audio.audioprocessing;
     const auto previousMouse = this->m_context.settings.mouse.enabled;
@@ -2238,6 +2260,10 @@ bool WallpaperApplication::applyShowCore (
 	this->m_context.settings.general.screenClamps = this->m_showDefaults.screenClamps;
     }
 
+    // the wallpaper layer of the fit window: omitted means identity, set before the
+    // rebuild so buildWallpapers applies it, rolled back with the show
+    this->lane ().look.fit = args.contains ("fit") ? Api::fitFromJson (args["fit"]) : Api::Fit {};
+
     try {
 	for (auto& [screen, bg] : this->m_context.settings.general.screenBackgrounds) {
 	    if (screen.rfind ("span:", 0) == 0) {
@@ -2260,6 +2286,7 @@ bool WallpaperApplication::applyShowCore (
 	this->m_context.settings.general.properties = previousProperties;
 	this->m_context.settings.general.screenScalings = previousScalings;
 	this->m_context.settings.general.screenClamps = previousClamps;
+	this->lane ().look.fit = previousFit;
 	this->m_context.settings.audio.volume = previousVolume;
 	this->m_context.state.audio.volume = previousVolume;
 	this->m_context.settings.audio.audioprocessing = previousAudioProcessing;
@@ -2502,6 +2529,8 @@ void WallpaperApplication::apiLanesSet (int client, int64_t requestId, const nlo
 	);
     }
 
+    this->applyFitWindow ();
+
     nlohmann::json lanes = nlohmann::json::array ();
 
     for (const auto& [key, item] : this->m_lanes) {
@@ -2509,6 +2538,65 @@ void WallpaperApplication::apiLanesSet (int client, int64_t requestId, const nlo
     }
 
     this->m_commandServer->respond (client, Api::CommandDispatcher::done (requestId, { { "lanes", lanes } }));
+}
+
+WallpaperEngine::Render::WallpaperState::Fit WallpaperApplication::effectiveFit () const {
+    return this->effectiveFit (this->lane ());
+}
+
+WallpaperEngine::Render::WallpaperState::Fit WallpaperApplication::effectiveFit (const Api::Lane& lane) const {
+    const auto& shown = lane.look.fit;
+    const auto& laneFit = lane.fit;
+
+    return WallpaperEngine::Render::WallpaperState::composeFit (
+	{ .zoom = shown.zoom, .panX = shown.panX, .panY = shown.panY },
+	{ .zoom = laneFit.zoom, .panX = laneFit.panX, .panY = laneFit.panY }
+    );
+}
+
+void WallpaperApplication::applyFitWindow () {
+    if (!this->m_renderContext) {
+	return;
+    }
+
+    const auto fit = this->effectiveFit ();
+
+    // mirror and span groups share one wallpaper; setting it per screen is idempotent
+    for (const auto& wallpaper : this->m_renderContext->getWallpapers () | std::views::values) {
+	wallpaper->setFit (fit);
+    }
+}
+
+void WallpaperApplication::apiSetFit (int client, int64_t requestId, const nlohmann::json& args) {
+    const auto laneId = args.value ("lane", "all");
+    const auto laneIt = this->m_lanes.find (laneId);
+
+    if (laneIt == this->m_lanes.end ()) {
+	this->m_commandServer->respond (
+	    client, Api::CommandDispatcher::failure (requestId, "unknown lane '" + laneId + "'")
+	);
+	return;
+    }
+
+    auto& fit = laneIt->second.fit;
+    fit.zoom = std::clamp (args.value ("zoom", fit.zoom), 1.0f, 2.0f);
+    fit.panX = std::clamp (args.value ("pan_x", fit.panX), -1.0f, 1.0f);
+    fit.panY = std::clamp (args.value ("pan_y", fit.panY), -1.0f, 1.0f);
+
+    this->applyFitWindow ();
+    const auto effective = this->effectiveFit ();
+    sLog.out ("API: lane ", laneId, " fit zoom ", fit.zoom, " pan ", fit.panX, ",", fit.panY);
+
+    this->m_commandServer->respond (
+	client,
+	Api::CommandDispatcher::done (
+	    requestId,
+	    { { "lane", laneId },
+	      { "fit", { { "zoom", fit.zoom }, { "pan_x", fit.panX }, { "pan_y", fit.panY } } },
+	      { "fit_effective",
+		{ { "zoom", effective.zoom }, { "pan_x", effective.panX }, { "pan_y", effective.panY } } } }
+	)
+    );
 }
 
 WallpaperEngine::Api::Lane& WallpaperApplication::lane () { return this->m_lanes["all"]; }
@@ -2950,6 +3038,9 @@ void WallpaperApplication::restoreRuntimeState () {
     } catch (const std::exception& e) {
 	sLog.error ("state restore failed: ", e.what ());
     }
+
+    // outside the try: a lane layer that loaded before a later failure still reaches the screen
+    this->applyFitWindow ();
 }
 
 void WallpaperApplication::markBootSurvived () {

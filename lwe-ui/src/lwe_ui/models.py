@@ -246,6 +246,21 @@ def effective_speed(wid: str, factor=None) -> float:
     return C.resolve_speed(conf_speed, factor)
 
 
+def resolve_fit(conf: dict[str, Any]) -> dict[str, float]:
+    """The conf's FIT_* keys as the engine's fit object, clamped to the schema's range."""
+    out: dict[str, float] = {}
+    for key, name in (("FIT_ZOOM", "zoom"), ("FIT_PAN_X", "pan_x"), ("FIT_PAN_Y", "pan_y")):
+        spec = C.WP_SCHEMA[key]
+        try:
+            value = float(conf.get(key, spec["default"]))
+        except (TypeError, ValueError):
+            value = float(spec["default"])
+        if value != value:  # NaN never reaches the engine
+            value = float(spec["default"])
+        out[name] = max(float(spec["min"]), min(float(spec["max"]), value))
+    return out
+
+
 def resolve_show_args(wid: str) -> tuple[str, dict[str, Any]]:
     """Resolve a wallpaper's FULL per-show vocabulary: conf overrides first, engine-global
     settings fill the gaps, session overrides win last. Returns (engine_wid, kwargs for
@@ -305,6 +320,10 @@ def resolve_show_args(wid: str) -> tuple[str, dict[str, Any]]:
     clamp = str(conf.get("CLAMPING") or s.get("ENGINE_CLAMP") or "").strip()
     if clamp:
         args["clamp"] = clamp
+
+    # the wallpaper layer of the fit window, always sent resolved so an omitted key is
+    # identity on the engine too; the lane layer is the engine's own (set_fit)
+    args["fit"] = resolve_fit(conf)
 
     try:
         volume_present = "VOLUME" in wp.load_set(wid)

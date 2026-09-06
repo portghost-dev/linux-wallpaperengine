@@ -21,6 +21,18 @@ public:
 	StretchUVs,
     };
 
+    /** Zoom/pan window nested in the scaling mode: zoom 1..2 inward, pans -1..1 (see FORK-MAP). */
+    struct Fit {
+	float zoom = 1.0f;
+	float panX = 0.0f;
+	float panY = 0.0f;
+
+	bool operator== (const Fit&) const = default;
+    };
+
+    /** the two fit layers composed: zooms multiply, pans add, the result clamped */
+    [[nodiscard]] static Fit composeFit (const Fit& wallpaper, const Fit& lane);
+
     WallpaperState (const TextureUVsScaling& textureUVsMode, const uint32_t& clampMode);
 
     /**
@@ -70,6 +82,14 @@ public:
     void updateState (
 	const glm::ivec4& viewport, const bool& vflip, const int& projectionWidth, const int& projectionHeight
     );
+
+    /** Sets the fit window; the next updateState recomputes the UVs (hasChanged reports it). */
+    void setFit (const Fit& fit);
+
+    /**
+     * @return The requested fit window
+     */
+    [[nodiscard]] const Fit& getFit () const;
 
     /**
      * @return The texture scaling mode
@@ -131,6 +151,13 @@ private:
 
     // Are Vs coordinates fliped
     bool m_vflip = false;
+
+    // The fit window asked for, and the one the cached UVs were computed with
+    Fit m_fit {};
+    Fit m_appliedFit {};
+
+    /** Narrows m_UVs to the fit window; runs after the scaling mode set the full range */
+    void applyFit ();
 
     // Texture scaling mode
     TextureUVsScaling m_textureUVsMode = TextureUVsScaling::DefaultUVs;

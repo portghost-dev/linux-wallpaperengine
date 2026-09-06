@@ -35,7 +35,37 @@ const std::set<std::string> KNOWN_VERBS = { "status",
 					    "set-instrument",
 					    "set-tuning",
 					    "set-app-conditions",
-					    "set-overlay" };
+					    "set-overlay",
+					    "set-fit" };
+
+// the fit vocabulary shared by the show arg and set-fit: zoom 1..2, pans -1..1, all finite
+std::string validateFit (const json& fit, const std::string& prefix) {
+    if (!fit.is_object ()) {
+	return prefix + " must be an object";
+    }
+
+    if (fit.contains ("zoom")) {
+	const auto& zoom = fit["zoom"];
+
+	if (!zoom.is_number () || !std::isfinite (zoom.get<double> ()) || zoom.get<double> () < 1.0
+	    || zoom.get<double> () > 2.0) {
+	    return prefix + ".zoom must be a number in 1..2";
+	}
+    }
+
+    for (const auto* field : { "pan_x", "pan_y" }) {
+	if (fit.contains (field)) {
+	    const auto& pan = fit[field];
+
+	    if (!pan.is_number () || !std::isfinite (pan.get<double> ()) || pan.get<double> () < -1.0
+		|| pan.get<double> () > 1.0) {
+		return prefix + "." + field + " must be a number in -1..1";
+	    }
+	}
+    }
+
+    return "";
+}
 
 std::string validateShowArgs (const json& args) {
     if (args.contains ("cc")) {
@@ -112,6 +142,12 @@ std::string validateShowArgs (const json& args) {
 
 	if (!volume.is_number_integer () || volume.get<int64_t> () < 0 || volume.get<int64_t> () > 128) {
 	    return "args.volume must be an integer in 0..128";
+	}
+    }
+
+    if (args.contains ("fit")) {
+	if (const auto error = validateFit (args["fit"], "args.fit"); !error.empty ()) {
+	    return error;
 	}
     }
 
@@ -449,15 +485,8 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 	    }
 
 	    if (lane.contains ("fit")) {
-		if (!lane["fit"].is_object ()) {
-		    return { .command = std::nullopt, .errorResponse = failure (id, "lane.fit must be an object") };
-		}
-
-		for (const auto* field : { "zoom", "pan_x", "pan_y" }) {
-		    if (lane["fit"].contains (field) && !lane["fit"][field].is_number ()) {
-			return { .command = std::nullopt,
-				 .errorResponse = failure (id, std::string ("fit.") + field + " must be a number") };
-		    }
+		if (const auto error = validateFit (lane["fit"], "lane.fit"); !error.empty ()) {
+		    return { .command = std::nullopt, .errorResponse = failure (id, error) };
 		}
 	    }
 	}
@@ -503,6 +532,23 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 		return { .command = std::nullopt,
 			 .errorResponse = failure (id, "set-skip ids must be integers in 0..1000000") };
 	    }
+	}
+    }
+
+    if (cmd == "set-fit") {
+	// the lane layer of the fit window; at least one field, lane optional
+	if (args.contains ("lane") && (!args["lane"].is_string () || args["lane"].get<std::string> ().size () > 64)) {
+	    return { .command = std::nullopt,
+		     .errorResponse = failure (id, "set-fit lane must be a string of at most 64 chars") };
+	}
+
+	if (!args.contains ("zoom") && !args.contains ("pan_x") && !args.contains ("pan_y")) {
+	    return { .command = std::nullopt,
+		     .errorResponse = failure (id, "set-fit requires at least one of zoom, pan_x, pan_y") };
+	}
+
+	if (const auto error = validateFit (args, "set-fit"); !error.empty ()) {
+	    return { .command = std::nullopt, .errorResponse = failure (id, error) };
 	}
     }
 

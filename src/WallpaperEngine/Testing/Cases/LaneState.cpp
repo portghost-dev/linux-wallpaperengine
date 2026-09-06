@@ -485,3 +485,34 @@ TEST_CASE ("a stale next cycle is rebuilt and a fresh ordered walk starts after 
     restored.cursor = -1;
     REQUIRE (pickNext (restored, ordered, rng) == 2);
 }
+
+TEST_CASE ("both fit layers persist with the lane and a hand-edited value cannot escape the contract", "[lane]") {
+    Lane lane;
+    lane.fit = { .zoom = 1.5f, .panX = 0.25f, .panY = -0.5f };
+    lane.look.fit = { .zoom = 1.2f, .panX = -1.0f, .panY = 1.0f };
+
+    const auto restored = laneFromJson (toJson (lane));
+    CHECK (restored.fit.zoom == 1.5f);
+    CHECK (restored.fit.panX == 0.25f);
+    CHECK (restored.fit.panY == -0.5f);
+    CHECK (restored.look.fit.zoom == 1.2f);
+    CHECK (restored.look.fit.panX == -1.0f);
+    CHECK (restored.look.fit.panY == 1.0f);
+
+    // out of range clamps, a wrong type is the default, a missing block is identity
+    auto edited = toJson (lane);
+    edited["fit"] = { { "zoom", 9.0 }, { "pan_x", -3.0 }, { "pan_y", "up" } };
+    edited["look"].erase ("fit");
+    const auto clamped = laneFromJson (edited);
+    CHECK (clamped.fit.zoom == 2.0f);
+    CHECK (clamped.fit.panX == -1.0f);
+    CHECK (clamped.fit.panY == 0.0f);
+    CHECK (clamped.look.fit.zoom == 1.0f);
+    CHECK (clamped.look.fit.panX == 0.0f);
+
+    edited["fit"] = "none";
+    edited["look"]["fit"] = 3;
+    const auto mistyped = laneFromJson (edited);
+    CHECK (mistyped.fit.zoom == 1.0f);
+    CHECK (mistyped.look.fit.zoom == 1.0f);
+}

@@ -81,6 +81,11 @@ public:
     [[nodiscard]] const WallpaperState& getState () const;
 
     /**
+     * Sets the composed fit window; the next present pass recomputes the UVs
+     */
+    void setFit (const WallpaperState::Fit& fit);
+
+    /**
      * @return The scene's framebuffer
      */
     [[nodiscard]] virtual GLuint getWallpaperFramebuffer () const;
