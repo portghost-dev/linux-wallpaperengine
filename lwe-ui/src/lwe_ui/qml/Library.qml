@@ -14,7 +14,7 @@ Item {
     property string searchQuery: ""
     property string nowPlayingId: ""
 
-    // drag state (spec 2.1-2.3): the lifted card follows the pointer, the origin slot stays
+    // drag state: the lifted card follows the pointer, the origin slot stays
     // open, the slot under the pointer is marked, the model holds the provisional order
     property string dragId: ""
     property var dragSource: null
@@ -116,7 +116,7 @@ Item {
         clip: true
 
         readonly property int gap: Theme.compact ? Theme.gridGapCompact : Theme.spacingLg
-        // the hairline band between the blocks: one gap above the line and one below (spec 1.1),
+        // the hairline band between the blocks: one gap above the line and one below,
         // so the pool rows sit poolOffset lower than the grid lays them
         readonly property int poolOffset: backend.orderModel.hairlineIndex >= 0 ? gap + 1 : 0
         readonly property int memberRows: Math.ceil((backend.orderModel.memberCount + backend.orderModel.fillerCount) / cols)
@@ -126,8 +126,8 @@ Item {
                 return -1;
             return originY + memberRows * cellHeight - gap;
         }
-        // columns: the count whose tiles land nearest the target width (R54), never a floor
-        // target tile: 176 compact; flagship ramps 216 at a 1280 window to 260 at 2560 (R55)
+        // columns: the count whose tiles land nearest the target width, never a floor
+        // target tile: 176 compact; flagship ramps 216 at a 1280 window to 260 at 2560
         readonly property int targetTile: Theme.compact ? 176
                                         : Math.round(Math.max(216, Math.min(260, 216 + (width - 1200) * 44 / 1280)))
         readonly property int maxTile: 320

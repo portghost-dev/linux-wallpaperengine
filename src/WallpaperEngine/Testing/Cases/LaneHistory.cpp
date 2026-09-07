@@ -117,7 +117,7 @@ TEST_CASE ("a re-show of the item on screen adds no history entry (A5, R13)", "[
     recordShow (lane, playlist.entries[1], true);
     recordShow (lane, playlist.entries[0], true);
     REQUIRE (lane.history.size () == 2);
-    REQUIRE (lane.forward.empty ()); // a new show discards forward history (R12)
+    REQUIRE (lane.forward.empty ()); // a new show discards forward history
 }
 
 TEST_CASE ("back with nothing behind steps the walk back, wrapping; off in static (A9)", "[history]") {
@@ -138,7 +138,7 @@ TEST_CASE ("back with nothing behind steps the walk back, wrapping; off in stati
     advance (lone, one, rng);
     REQUIRE_FALSE (backTarget (lone, one).has_value ());
     REQUIRE_FALSE (backEnabled (lone, one));
-    recordShow (lone, detourEntry ("elsewhere"), true); // history behind, still one item: off (R31)
+    recordShow (lone, detourEntry ("elsewhere"), true); // history behind, still one item: off
     REQUIRE_FALSE (backTarget (lone, one).has_value ());
     REQUIRE_FALSE (backEnabled (lone, one));
 
@@ -149,7 +149,7 @@ TEST_CASE ("back with nothing behind steps the walk back, wrapping; off in stati
     advance (still, fixed, rng);
     REQUIRE_FALSE (backTarget (still, fixed).has_value ());
     REQUIRE_FALSE (backEnabled (still, fixed));
-    REQUIRE (previousUp (still, fixed) == "wp0"); // static keeps its Last line (spec 4)
+    REQUIRE (previousUp (still, fixed) == "wp0"); // static keeps its Last line
     REQUIRE (backEnabled (lane, playlist));
 }
 

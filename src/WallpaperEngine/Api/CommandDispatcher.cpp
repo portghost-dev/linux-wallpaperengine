@@ -595,6 +595,10 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 		     .errorResponse = failure (id, "set-fit layer must be \"lane\" or \"wallpaper\"") };
 	}
 
+	if (args.contains ("id") && (!args["id"].is_string () || !validBackgroundId (args["id"].get<std::string> ()))) {
+	    return { .command = std::nullopt, .errorResponse = failure (id, "set-fit id must match [A-Za-z0-9_-]{1,64}") };
+	}
+
 	if (!args.contains ("zoom") && !args.contains ("pan_x") && !args.contains ("pan_y")) {
 	    return { .command = std::nullopt,
 		     .errorResponse = failure (id, "set-fit requires at least one of zoom, pan_x, pan_y") };

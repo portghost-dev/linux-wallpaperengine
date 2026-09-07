@@ -176,6 +176,7 @@ Popup {
                     font.pixelSize: Theme.fontControl
                     font.family: Theme.monoFamily
                     horizontalAlignment: Text.AlignHCenter
+                    selectByMouse: true
                     validator: RegularExpressionValidator { regularExpression: /^\d{2}:\d{2}$/ }
                     background: Rectangle {
                         color: Theme.inputWell
@@ -189,114 +190,146 @@ Popup {
             EntryRow { id: entryA; objectName: "entryA"; dotColor: Theme.warning; sun: true }
             EntryRow { id: entryB; objectName: "entryB"; dotColor: Theme.accent }
 
-            // 24h strip with the two spans + boundary ticks. Colors bind to whichever ENTRY
-            // owns each boundary (not to the sorted lo/hi numbers) so the association survives
-            // entry B's time landing earlier in the day than entry A's (F25 fix).
+            // 24h strip: two spans and one handle per entry. Colours bind to the ENTRY that owns
+            // each boundary, not to the sorted numbers, so the association survives entry B's
+            // time landing earlier in the day than entry A's. A handle drags its entry's time.
             Item {
                 id: dayStripRow
                 objectName: "dayStripRow"   // stable test hook (findChild reaches objectName, not id)
                 width: parent.width - parent.leftPadding - parent.rightPadding
-                height: 14
+                height: 26
 
                 property int a: modal.toMin(entryA.time.text)
                 property int b: modal.toMin(entryB.time.text)
                 property bool ok: a >= 0 && b >= 0 && a !== b
-                // the earlier boundary owns the span that runs from it to the later boundary;
-                // the later boundary owns the wraparound span (itself -> midnight -> the
-                // earlier boundary), since that entry's assignment carries over past 24:00.
                 property bool aIsEarlier: a < b
                 property int loMin: aIsEarlier ? a : b
                 property int hiMin: aIsEarlier ? b : a
                 property color loColor: aIsEarlier ? entryA.dotColor : entryB.dotColor
                 property color hiColor: aIsEarlier ? entryB.dotColor : entryA.dotColor
+                readonly property int barY: 9
+                readonly property int barH: 7
+
+                // a drag snaps to the quarter hour; the field takes any minute typed
+                readonly property int snap: 15
+                function minuteAt(px) {
+                    var m = Math.round(px / width * 1440 / snap) * snap;
+                    return Math.max(0, Math.min(1440 - snap, m));
+                }
 
                 Rectangle {
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    y: 6
-                    height: 2
-                    radius: 1
+                    y: parent.barY
+                    height: parent.barH
+                    radius: height / 2
                     color: Theme.border
                 }
                 Rectangle {
                     // middle span: loMin -> hiMin, owned by the earlier boundary's entry
                     visible: parent.ok
                     x: parent.width * (parent.loMin / 1440)
-                    y: 6
+                    y: parent.barY
                     width: parent.width * ((parent.hiMin - parent.loMin) / 1440)
-                    height: 2
-                    radius: 1
+                    height: parent.barH
                     color: parent.loColor
                     opacity: 0.8
                 }
                 Rectangle {
-                    // tail span: hiMin -> 24:00, owned by the later boundary's entry
+                    // tail span: hiMin -> midnight, owned by the later boundary's entry
                     visible: parent.ok
                     x: parent.width * (parent.hiMin / 1440)
-                    y: 6
+                    y: parent.barY
                     width: parent.width * ((1440 - parent.hiMin) / 1440)
-                    height: 2
-                    radius: 1
+                    height: parent.barH
+                    radius: height / 2
                     color: parent.hiColor
                     opacity: 0.8
                 }
                 Rectangle {
-                    // wraparound head: 00:00 -> loMin, same entry as the tail (carries over midnight)
+                    // wraparound head: midnight -> loMin, same entry as the tail (carries over midnight)
                     visible: parent.ok
                     x: 0
-                    y: 6
+                    y: parent.barY
                     width: parent.width * (parent.loMin / 1440)
-                    height: 2
-                    radius: 1
+                    height: parent.barH
+                    radius: height / 2
                     color: parent.hiColor
                     opacity: 0.8
                 }
-                Rectangle {
-                    visible: parent.ok
-                    x: parent.width * (parent.loMin / 1440) - 0.75
-                    y: 2
-                    width: 1.5
-                    height: 10
-                    color: Theme.textPrimary
+
+                component TimeHandle: Item {
+                    id: handle
+                    property var entry           // the EntryRow whose time this handle moves
+                    property int minute: 0
+                    objectName: "timeHandle"
+                    visible: dayStripRow.ok
+                    width: 18
+                    height: dayStripRow.height
+                    x: dayStripRow.width * (minute / 1440) - width / 2
+                    y: 0
+                    z: 2
+                    Rectangle {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        y: 3
+                        width: 4
+                        height: 20
+                        radius: 2
+                        color: Theme.textPrimary
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.SizeHorCursor
+                        preventStealing: true
+                        onPositionChanged: function(mouse) {
+                            if (!pressed) return;
+                            var px = handle.x + handle.width / 2 + (mouse.x - handle.width / 2);
+                            handle.entry.time.text = modal.fmtMin(dayStripRow.minuteAt(px));
+                        }
+                    }
                 }
-                Rectangle {
-                    visible: parent.ok
-                    x: parent.width * (parent.hiMin / 1440) - 0.75
-                    y: 2
-                    width: 1.5
-                    height: 10
-                    color: Theme.textPrimary
-                }
+                TimeHandle { objectName: "handleA"; entry: entryA; minute: dayStripRow.a }
+                TimeHandle { objectName: "handleB"; entry: entryB; minute: dayStripRow.b }
             }
-            Row {
+            Item {
+                // the times sit under their own positions on the strip; midnight at both ends.
+                // Two times close together stack their labels instead of colliding.
+                id: stripLabels
                 width: parent.width - parent.leftPadding - parent.rightPadding
+                readonly property real xA: Math.max(0, Math.min(width - labelA.width, width * (dayStripRow.a / 1440) - labelA.width / 2))
+                readonly property real xB: Math.max(0, Math.min(width - labelB.width, width * (dayStripRow.b / 1440) - labelB.width / 2))
+                readonly property bool collide: dayStripRow.ok && Math.abs(xA - xB) < Math.max(labelA.width, labelB.width) + 4
+                height: collide ? 28 : 14
                 Label {
-                    width: parent.width / 4
+                    x: 0
                     text: "00:00"
                     color: Theme.textTertiary
                     font.pixelSize: Theme.fontMicro
-                    horizontalAlignment: Text.AlignLeft
                 }
                 Label {
-                    width: parent.width / 4
-                    text: dayStripRow.ok ? modal.fmtMin(dayStripRow.loMin) : "--:--"
-                    color: Theme.textTertiary
+                    id: labelA
+                    objectName: "labelA"
+                    visible: dayStripRow.ok
+                    x: stripLabels.xA
+                    text: modal.fmtMin(dayStripRow.a)
+                    color: entryA.dotColor
                     font.pixelSize: Theme.fontMicro
-                    horizontalAlignment: Text.AlignHCenter
                 }
                 Label {
-                    width: parent.width / 4
-                    text: dayStripRow.ok ? modal.fmtMin(dayStripRow.hiMin) : "--:--"
-                    color: Theme.textTertiary
+                    id: labelB
+                    objectName: "labelB"
+                    visible: dayStripRow.ok
+                    x: stripLabels.xB
+                    y: stripLabels.collide ? 14 : 0
+                    text: modal.fmtMin(dayStripRow.b)
+                    color: entryB.dotColor
                     font.pixelSize: Theme.fontMicro
-                    horizontalAlignment: Text.AlignHCenter
                 }
                 Label {
-                    width: parent.width / 4
-                    text: "24:00"
+                    x: parent.width - width
+                    text: "00:00"
                     color: Theme.textTertiary
                     font.pixelSize: Theme.fontMicro
-                    horizontalAlignment: Text.AlignRight
                 }
             }
 

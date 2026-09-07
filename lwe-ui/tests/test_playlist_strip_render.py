@@ -90,7 +90,7 @@ def test_strip_anatomy(app, backend, tokens) -> None:
         if _near(img.pixelColor(x, y), surface_variant)
     )
     assert name_hits > 0, "name head-segment should be filled surfaceVariant (F11)"
-    # spec 3.2 as amended (R39): four cells, schedule | name | reserved | clock, and no Mode or
+    # four cells, schedule | name | reserved | clock, and no Mode or
     # Every anywhere on the strip itself
     cells = [strip.findChild(QObject, n) for n in ("cellSchedule", "cellName", "cellReserved", "cellClock")]
     assert all(c is not None and c.property("visible") for c in cells), "the pill must show its four cells"
@@ -218,7 +218,38 @@ def test_schedule_modal_span_colors_follow_entry_not_position(app, backend) -> N
         f"normal order: hi span should carry entry B's color ({b_dot}), got {hi_color2}"
     )
     print("OK test_schedule_modal_span_colors_follow_entry_not_position "
-          "(verified live in both time orderings, F25)")
+          "(verified live in both time orderings)")
+
+    # the strip is a range bar: one handle per entry at its own time, labels at the same
+    # positions reading the times, midnight at both ends, and a handle drag maps pixels back
+    # to minutes through dayStripRow.minuteAt
+    handle_a = day_strip.findChild(QObject, "handleA")
+    handle_b = day_strip.findChild(QObject, "handleB")
+    assert handle_a and handle_b, "the two time handles need their objectNames"
+    strip_w = float(day_strip.property("width"))
+    assert strip_w > 100
+    expect_a = strip_w * (8 * 60 / 1440) - float(handle_a.property("width")) / 2
+    expect_b = strip_w * ((21 * 60 + 30) / 1440) - float(handle_b.property("width")) / 2
+    assert abs(float(handle_a.property("x")) - expect_a) < 1.0, (handle_a.property("x"), expect_a)
+    assert abs(float(handle_b.property("x")) - expect_b) < 1.0, (handle_b.property("x"), expect_b)
+    assert float(day_strip.property("barH")) >= 6, "the bar is about three times its old 2 px"
+    label_a = win.findChild(QObject, "labelA")
+    label_b = win.findChild(QObject, "labelB")
+    assert label_a.property("text") == "08:00" and label_b.property("text") == "21:30"
+    assert abs(float(label_a.property("x")) + float(label_a.property("width")) / 2 - strip_w * (8 * 60 / 1440)) < 1.0, \
+        "a label is centred under its own time"
+    from PySide6.QtCore import QMetaObject, Q_RETURN_ARG, Q_ARG
+    minute = QMetaObject.invokeMethod(day_strip, "minuteAt", Q_RETURN_ARG("QVariant"),
+                                      Q_ARG("QVariant", strip_w * 0.5))
+    assert int(minute) == 720, f"the middle of the strip is noon, got {minute}"
+    # a drag snaps to the quarter hour (typing still takes any minute); the top stays 23:45
+    near = int(QMetaObject.invokeMethod(day_strip, "minuteAt", Q_RETURN_ARG("QVariant"),
+                                        Q_ARG("QVariant", strip_w * (727 / 1440))))
+    assert near == 720, f"727 minutes along snaps to 12:00, got {near}"
+    assert int(QMetaObject.invokeMethod(day_strip, "minuteAt", Q_RETURN_ARG("QVariant"),
+                                        Q_ARG("QVariant", strip_w * 2))) == 1425, "clamped at 23:45"
+    assert time_a.property("selectByMouse") is True, "a click-and-drag selects from the first press"
+    print("OK schedule modal range bar: handles and labels at their times, minuteAt exact, drag-select on")
 
 
 def test_interval_enter_releases_focus(app, backend) -> None:
@@ -241,7 +272,7 @@ def test_interval_enter_releases_focus(app, backend) -> None:
     for _ in range(5):
         QCoreApplication.processEvents()
 
-    strip.openClock()   # the field lives in the clock popover now (spec 4)
+    strip.openClock()   # the field lives in the clock popover now
     for _ in range(5):
         QCoreApplication.processEvents()
     field = strip.findChild(QObject, "intervalField")
@@ -272,7 +303,7 @@ def test_interval_enter_releases_focus(app, backend) -> None:
     print(f"OK test_interval_enter_releases_focus (committed {typed} min, focus released, "
           "re-commit guarded)")
 
-    # spec 4: empty or zero rejects and re-reads; over the range never commits (R47: 1..1440 min)
+    # empty or zero rejects and re-reads; over the range never commits (1..1440 min)
     stored = int(backend.activePlaylist()["interval"])
     for bad in ("0", ""):
         field.setProperty("focus", True)

@@ -68,7 +68,7 @@ Item {
                 property bool chevron: false
                 property string icon: ""         // "" | "moon" | "sun"
                 property bool clock: false
-                property bool inert: false         // the reserved cell: no hover, no tap (R39)
+                property bool inert: false         // the reserved cell: no hover, no tap
                 property color iconColor: Theme.textTertiary
                 property bool tinted: false        // status tint, distinct from `filled`
                 property color tintColor: "transparent"
@@ -147,12 +147,12 @@ Item {
 
             StripSegment {
                 objectName: "cellSchedule"
-                // spec 3.3: sun by day, moon by night, following the day range even when the
+                // sun by day, moon by night, following the day range even when the
                 // schedule is off; on, the icon takes amber by day and the accent by night
                 icon: strip.schedIsDay ? "sun" : "moon"
                 fixedWidth: 28
                 roundLeft: true
-                iconColor: !strip.schedEnabled ? "#A0A0A0" : (strip.schedIsDay ? Theme.warning : Theme.accent)
+                iconColor: !strip.schedEnabled ? Theme.textSecondary : (strip.schedIsDay ? Theme.warning : Theme.accent)
                 tinted: strip.schedEnabled
                 tintColor: strip.schedIsDay ? Qt.rgba(Theme.warning.r, Theme.warning.g, Theme.warning.b, 0.16)
                                             : Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.16)
@@ -177,7 +177,7 @@ Item {
                 }
             }
             Divider {}
-            // R39: an empty cell the width of the clock cell, dividers and nothing inside, until the
+            // an empty cell the width of the clock cell, dividers and nothing inside, until the
             // display target lands or the cell is removed before any release
             StripSegment {
                 objectName: "cellReserved"
@@ -198,7 +198,7 @@ Item {
         }
     }
 
-    // spec 4: Mode and Every live here and nowhere else
+    // Mode and Every live here and nowhere else
     ClockPopover {
         id: clockMenu
         objectName: "clockPopover"

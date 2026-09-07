@@ -28,7 +28,7 @@ TEST_CASE ("the entry in force is the latest boundary at or before the minute, w
     CHECK (scheduleMinutesToBoundary (schedule, 20 * 60) == 12 * 60);
     CHECK (scheduleMinutesToBoundary (schedule, 23 * 60) == 9 * 60);
 
-    // day is the span from the first entry to the second, wherever the clock puts them (R68)
+    // day is the span from the first entry to the second, wherever the clock puts them
     const auto nightOwl = dayNight (22 * 60, 6 * 60);
     CHECK (scheduleSlugAt (nightOwl, 23 * 60) == "day");
     CHECK (scheduleSlugAt (nightOwl, 3 * 60) == "day");
@@ -44,7 +44,7 @@ TEST_CASE ("the entry in force is the latest boundary at or before the minute, w
 TEST_CASE ("a crossed boundary sets the pending switch; the same slug clears it", "[schedule]") {
     auto schedule = dayNight ();
 
-    // first tick after enabling, mid-day, bound to night: pending day right away (R70 applies it)
+    // first tick after enabling, mid-day, bound to night: pending day right away
     CHECK_FALSE (scheduleTick (schedule, "night", 12 * 60));
     CHECK (schedule.pending == "day");
 
@@ -78,7 +78,7 @@ TEST_CASE ("a manual hold keeps the lane until the next boundary, then the clock
     CHECK (schedule.pending.empty ());
     CHECK (schedule.held);
 
-    // 20:00 crosses: the hold ends and night is pending (R67)
+    // 20:00 crosses: the hold ends and night is pending
     CHECK (scheduleTick (schedule, "party", 20 * 60));
     CHECK_FALSE (schedule.held);
     CHECK (schedule.pending == "night");
@@ -134,4 +134,32 @@ TEST_CASE ("a re-push of the same schedule is not a change; a backward clock ste
     // and moving forward again over 20:00 does cross
     CHECK (scheduleTick (schedule, "party", 20 * 60 + 5));
     CHECK_FALSE (schedule.held);
+}
+
+TEST_CASE ("after a restart a hold whose boundary passed while away has ended", "[schedule]") {
+    auto schedule = dayNight ();
+    scheduleTick (schedule, "party", 15 * 60);
+    schedule.held = true;
+
+    // the last minute rides the state file
+    auto restored = scheduleFromJson (toJson (schedule));
+    CHECK (restored.lastMinute == 15 * 60);
+
+    // away six hours: 20:00 passed, the hold is over and the tick starts fresh
+    scheduleResume (restored, 6 * 60);
+    CHECK_FALSE (restored.held);
+    CHECK (restored.lastMinute == -1);
+
+    // away one hour: the hold stands
+    restored = scheduleFromJson (toJson (schedule));
+    scheduleResume (restored, 60);
+    CHECK (restored.held);
+    CHECK (restored.lastMinute == -1);
+
+    // an older file without the minute cannot judge and keeps the hold
+    auto j = toJson (schedule);
+    j.erase ("last_minute");
+    restored = scheduleFromJson (j);
+    scheduleResume (restored, 6 * 60);
+    CHECK (restored.held);
 }

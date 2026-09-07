@@ -146,7 +146,7 @@ def _first_commit(
         return report  # stays pending; no tag written
 
     # 3-4. rewrite BG (workshop path -> library reference) + tag good, durably. This is the one
-    #      job the pending branch still has over the conf (L-19): the bench built it pointing at
+    #      job the pending branch still has over the conf: the bench built it pointing at
     #      Steam's tree so the test could render, and the library reference is what ships. If
     #      either step fails, roll back the publish so the item stays pending and retryable
     #      (no untagged on-disk orphan).
@@ -161,7 +161,7 @@ def _first_commit(
     except Exception as exc:  # noqa: BLE001 - any promote/tag failure must not partially commit
         shutil.rmtree(dest_dir, ignore_errors=True)
         # put BG back where it pointed, and NOTHING else. Deleting the conf here would have
-        # been safe while a draft held the real work; under L-19 this conf IS the user's
+        # been safe while a draft held the real work; this conf IS the user's
         # tuning session, so a failed tag must cost them the publish, never their edits.
         if prior_bg:
             try:

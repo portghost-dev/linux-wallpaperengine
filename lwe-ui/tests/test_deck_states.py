@@ -154,7 +154,7 @@ def main() -> None:
 
         deck.setProperty("masterActive", True)
         deck.setProperty("engineStatus", {"state": "up", "current": "", "interval": "900", "next_in": "300"})
-        # the three-line left block (spec 3.1, R32, R46) and the back glyph's static gate
+        # the three-line left block and the back glyph's static gate
         deck.setProperty("engineStatus", {"state": "up", "current": "111", "last": "222", "next_up": "333",
                                           "interval": "900", "next_in": "300", "back_enabled": True})
         settle()
@@ -169,7 +169,7 @@ def main() -> None:
         assert _find(deck, "deckBack").property("enabled") is False, "back is off in static"
         assert deck.property("isStatic") is True
         assert float(_find(deck, "deckProgressFill").property("width")) == 0, "static: the bar is flat (spec 4)"
-        # the progress bar is the shared glow filament (spec 5, R38): static is the flat bed
+        # the progress bar is the shared glow filament: static is the flat bed
         pbar = _find(deck, "deckProgressBar")
         assert pbar is not None, "the deck progress bar needs its objectName"
         assert pbar.property("flat") is True and pbar.property("shimmerOn") is False \
@@ -182,7 +182,7 @@ def main() -> None:
         assert left_testing.property("visible") is False and left_dev.property("visible") is False, \
             "hold blocks must be hidden in the idle face"
 
-        # ---- progress bar motion states (spec 5, R38) ---------------------------------------
+        # ---- progress bar motion states ---------------------------------------
         # playing: lit to the elapsed portion (600 of 900 = two thirds), breathing on the bible's
         # inhale/exhale, shimmer sweeping inside the fill
         assert pbar.property("flat") is False and pbar.property("breathing") is True \

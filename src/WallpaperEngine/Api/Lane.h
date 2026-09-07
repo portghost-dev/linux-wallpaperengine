@@ -135,12 +135,12 @@ struct ScheduleEntry {
 };
 
 /** The lane's clock-driven playlist choice. Entries keep the order they were sent in: the first
- *  is where day begins, the second where it ends; the span between them is day (R68). */
+ *  is where day begins, the second where it ends; the span between them is day. */
 struct Schedule {
     bool enabled = false;
     std::vector<ScheduleEntry> entries;
-    bool held = false;          /**< a manual switch is in force until the next boundary (R67) */
-    std::string pending;        /**< a boundary was crossed; applies when the countdown expires (R70) */
+    bool held = false;          /**< a manual switch is in force until the next boundary */
+    std::string pending;        /**< a boundary was crossed; applies when the countdown expires */
     int lastMinute = -1;        /**< the local minute the tick last saw, for boundary detection */
 };
 
@@ -155,6 +155,9 @@ bool scheduleIsDay (const Schedule& schedule, int minute);
 /** One tick of the clock: clears a hold at a crossed boundary and sets or clears the pending
  *  switch against the lane's bound slug. Returns true when a boundary was crossed this tick. */
 bool scheduleTick (Schedule& schedule, const std::string& boundSlug, int minute);
+
+/** After a restart: a hold whose boundary passed during `downtimeMinutes` ends; the tick starts fresh. */
+void scheduleResume (Schedule& schedule, int downtimeMinutes);
 
 /** The same enabled flag and the same entries in the same order: a re-push, not a change. */
 bool sameSchedule (const Schedule& a, const Schedule& b);

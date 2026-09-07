@@ -79,7 +79,7 @@ from .wp_session import SESSION
 FPS_MIN = 1
 FPS_MAX = 480
 
-# Global Speed band - the same four-zone face the popup carries (L8/L-12). The bridge owns
+# Global Speed band - the same four-zone face the popup carries. The bridge owns
 # the endpoints and the clamp; the zone mapping is the control's.
 SPEED_MIN = 0.1
 SPEED_MAX = 10.0
@@ -256,7 +256,7 @@ class EditorBridge(QObject):
     propsEdited = Signal()           # a PROP_<name> scene-property value changed
     objectsEdited = Signal()         # the SKIP set changed (object enable/disable)
 
-    # one or more commits failed: the banner plus a red outline on each named control (L6).
+    # one or more commits failed: the banner plus a red outline on each named control.
     # Keys are the surface's own control keys: "SCALING", "PROP_<name>", "ENGINE_FPS", ...
     commitFailed = Signal(list)
 
@@ -271,7 +271,7 @@ class EditorBridge(QObject):
         self._proj: dict[str, Any] = {}
         self._ident: dict[str, Any] = {}        # identity source (own dir; != render for presets)
         self._wp: dict[str, Any] = {}           # in-memory READ CACHE, re-seeded on every commit
-        self._present: dict[str, Any] = {}      # presence-aware view of the same conf (L4)
+        self._present: dict[str, Any] = {}      # presence-aware view of the same conf
         self._objects: list[dict] = []          # objindex shape: [{objid,name,type}]
         self._props: list[dict] = []            # propindex shape: [{name,kind,label,value,...}]
         self._meta: dict[str, Any] = {}
@@ -350,7 +350,7 @@ class EditorBridge(QObject):
         self._prop_model.reset(self.sceneProperties())
 
         # seat the revert target. A seat failure is a HARD state, surfaced NOW rather than
-        # discovered at revert time when it would have deleted the user's overrides (F16).
+        # discovered at revert time when it would have deleted the user's overrides.
         if not SESSION.seat(wid):
             self.commitFailed.emit(["SNAPSHOT"])
 
@@ -639,7 +639,8 @@ class EditorBridge(QObject):
             return self._push(api_client.set_skip, key, self._skip_ids())
         if key in C.FIT_FIELDS.values():
             # the wallpaper layer, all three fields resolved from the conf (absent = identity)
-            return self._push(lambda fit: api_client.set_fit(layer="wallpaper", **fit), key,
+            wid = self._wid
+            return self._push(lambda fit: api_client.set_fit(layer="wallpaper", id=wid, **fit), key,
                               resolve_fit(self._wp))
         for field, wp_key in _WP_DIAL_KEYS.items():
             if key == wp_key:
@@ -663,11 +664,7 @@ class EditorBridge(QObject):
 
     def _resolved_speed(self) -> float:
         """conf SPEED x the global timescale - exactly the rate the next show would send."""
-        try:
-            conf = float(self._wp_get("SPEED") or 1.0)
-        except (TypeError, ValueError):
-            conf = 1.0
-        return conf * self.globalSpeed()
+        return C.resolve_speed(self._wp_get("SPEED"), self.globalSpeed())
 
     def _resolved_volume(self) -> int:
         """VOLUME present means it (0 included); absent inherits ENGINE_VOLUME."""
@@ -698,7 +695,7 @@ class EditorBridge(QObject):
         # a show carries this wallpaper's own resolved speed args, which would clobber a
         # session state the user set from another door (deck pause, popup speed). Capture the
         # live value first and re-assert it after the swap lands. A status() failure is BY
-        # DESIGN not an error here - the show's own speed args stand (F14).
+        # DESIGN not an error here - the show's own speed args stand.
         live_speed = None
         try:
             snap = api_client.status()
@@ -1603,7 +1600,7 @@ class EditorBridge(QObject):
         color property is space-separated floats in 0..1, so the hex is converted on the way
         in and rebuilt on the way out, and the round trip is stable.
 
-        A string that is not a #RRGGBB color is failure grammar (L6): the banner rises, the
+        A string that is not a #RRGGBB color is failure grammar: the banner rises, the
         control outlines red and the conf is not touched. Silently keeping the old value
         would be indistinguishable from a commit that worked.
         """

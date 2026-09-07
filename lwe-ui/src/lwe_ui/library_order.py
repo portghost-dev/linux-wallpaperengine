@@ -145,7 +145,7 @@ class LibraryOrderModel(QAbstractListModel):
         members = [w for w in self._members_now() if w in shown_set]
         member_set = set(members)
         pool = [w for w in shown if w not in member_set]
-        # padding and the hairline exist only between two non-empty blocks (R40, R44)
+        # padding and the hairline exist only between two non-empty blocks
         fillers = (-len(members)) % self._columns if members and pool else 0
         return ([(MEMBER, w) for w in members] + [(FILLER, "")] * fillers
                 + [(POOL, w) for w in pool])

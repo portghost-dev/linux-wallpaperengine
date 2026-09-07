@@ -156,14 +156,14 @@ class DeckPopupSessionTests(unittest.TestCase):
         self.popup_mod.api_client.set_fit = lambda **kw: (pushes.append(dict(kw)) or {"ok": True})
 
         self.assertTrue(self.popup.setFit("zoom", "1.5"))
-        self.assertEqual(pushes, [{"layer": "wallpaper", "zoom": 1.5, "pan_x": 0.0, "pan_y": 0.0}])
+        self.assertEqual(pushes, [{"layer": "wallpaper", "id": wid, "zoom": 1.5, "pan_x": 0.0, "pan_y": 0.0}])
         # the re-show timer is not armed for a fit-only write; the present pass handles it
         self.assertFalse(self.popup._reshow.isActive())
         self.assertEqual(self.popup._pending, set())
 
         # a build-class key beside it still queues the re-show, with the fit pushed as well
         self.assertTrue(self.popup._write_wp({"SCALING": "fit", "FIT_PAN_X": 0.25}))
-        self.assertEqual(pushes[-1], {"layer": "wallpaper", "zoom": 1.5, "pan_x": 0.25, "pan_y": 0.0})
+        self.assertEqual(pushes[-1], {"layer": "wallpaper", "id": wid, "zoom": 1.5, "pan_x": 0.25, "pan_y": 0.0})
         self.assertTrue(self.popup._reshow.isActive())
         self.assertEqual(self.popup._pending, {"SCALING"})
 

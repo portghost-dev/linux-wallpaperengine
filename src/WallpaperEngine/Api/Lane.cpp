@@ -934,6 +934,18 @@ bool WallpaperEngine::Api::scheduleTick (Schedule& schedule, const std::string& 
     return crossed;
 }
 
+void WallpaperEngine::Api::scheduleResume (Schedule& schedule, int downtimeMinutes) {
+    if (schedule.held && schedule.lastMinute >= 0) {
+	const int toBoundary = scheduleMinutesToBoundary (schedule, schedule.lastMinute);
+
+	if (toBoundary >= 0 && downtimeMinutes >= toBoundary) {
+	    schedule.held = false;
+	}
+    }
+
+    schedule.lastMinute = -1;
+}
+
 bool WallpaperEngine::Api::sameSchedule (const Schedule& a, const Schedule& b) {
     if (a.enabled != b.enabled || a.entries.size () != b.entries.size ()) {
 	return false;
@@ -958,7 +970,8 @@ nlohmann::json WallpaperEngine::Api::toJson (const Schedule& schedule) {
     return { { "enabled", schedule.enabled },
 	     { "entries", entries },
 	     { "held", schedule.held },
-	     { "pending", schedule.pending } };
+	     { "pending", schedule.pending },
+	     { "last_minute", schedule.lastMinute } };
 }
 
 Schedule WallpaperEngine::Api::scheduleFromJson (const nlohmann::json& j) {
@@ -971,6 +984,9 @@ Schedule WallpaperEngine::Api::scheduleFromJson (const nlohmann::json& j) {
     schedule.enabled = j.value ("enabled", false);
     schedule.held = j.value ("held", false);
     schedule.pending = j.value ("pending", "");
+    schedule.lastMinute = j.contains ("last_minute") && j["last_minute"].is_number_integer ()
+	? std::clamp (j["last_minute"].get<int> (), -1, 24 * 60 - 1)
+	: -1;
 
     if (j.contains ("entries") && j["entries"].is_array ()) {
 	for (const auto& item : j["entries"]) {

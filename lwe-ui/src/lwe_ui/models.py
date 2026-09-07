@@ -585,7 +585,7 @@ class LibraryFilterModel(QSortFilterProxyModel):
             return False
         if self._scope == "review" and not bool(src.data(idx, _ROLE_PENDING_REVIEW)):
             return False
-        # Workshop is a funnel (A2): an item lives in exactly one of the two surfaces. Pending
+        # Workshop is a funnel: an item lives in exactly one of the two surfaces. Pending
         # (workshop) items show ONLY under the review scope, never in All/favorites.
         if self._scope != "review" and bool(src.data(idx, _ROLE_PENDING_REVIEW)):
             return False
@@ -640,6 +640,7 @@ class Backend(QObject):
         # crash restart, cutover idle boot) - the poll re-pushes on transition
         self._engine_pid_seen: int | None = None
         self._schedule_held = False
+        self._schedule_refused = False
         # (monotonic, frames, pid) baseline for the measured frame rate. The engine
         # reports a CUMULATIVE frame count, so a rate needs two samples; the pid is
         # part of the key because a fresh engine restarts the counter at zero.
@@ -868,7 +869,7 @@ class Backend(QObject):
             playlists.set_active(slug)
         except Exception:
             return ""
-        self._after_playlist_change()
+        self._after_playlist_change(manual=True)
         return slug
 
     @Slot(str, result=str)
@@ -884,7 +885,7 @@ class Backend(QObject):
             playlists.set_active(slug)
         except Exception:
             return ""
-        self._after_playlist_change()
+        self._after_playlist_change(manual=True)
         return slug
 
     @Slot(str)
@@ -907,7 +908,7 @@ class Backend(QObject):
             playlists.delete(slug)  # tombstones + reassigns the active pointer
         except Exception:
             return
-        self._after_playlist_change()
+        self._after_playlist_change(manual=True)
 
     @Slot(str)
     def setPlaylistMode(self, mode: str) -> None:
@@ -980,7 +981,7 @@ class Backend(QObject):
 
     def _schedule_entries(self) -> list[dict[str, str]]:
         """The stored SCHEDULE as the engine's entries, in stored order (row 1 is where day
-        begins, row 2 where it ends, R68); an entry naming a missing playlist is dropped."""
+        begins, row 2 where it ends); an entry naming a missing playlist is dropped."""
         packed = str(self._setting("SCHEDULE", "") or "")
         out: list[dict[str, str]] = []
         for item in packed.split(";"):
@@ -1006,7 +1007,7 @@ class Backend(QObject):
 
     def _day_range(self) -> tuple[int, int]:
         """Where day begins and ends in minutes of the local day, from the stored times even
-        when the schedule is off; the modal's defaults when nothing is stored (R68)."""
+        when the schedule is off; the modal's defaults when nothing is stored."""
         packed = str(self._setting("SCHEDULE", "") or "")
         times = [self._to_minute(item.partition("=")[0]) for item in packed.split(";") if item.strip()]
         times = [t for t in times if t >= 0]
@@ -1031,8 +1032,8 @@ class Backend(QObject):
     def scheduleState(self) -> dict:
         """What the cell needs: whether the schedule is on, day or night now, and whether a
         manual switch is holding (from the last engine status)."""
-        return {"enabled": self._schedule_enabled(), "is_day": self.scheduleIsDay(),
-                "held": bool(self._schedule_held)}
+        return {"enabled": self._schedule_enabled() and not self._schedule_refused,
+                "is_day": self.scheduleIsDay(), "held": bool(self._schedule_held)}
 
     def _push_schedule(self) -> bool:
         """Send every scheduled playlist the engine does not already hold from the active push,
@@ -1116,8 +1117,9 @@ class Backend(QObject):
                                                 of=len(parts), label=label)
                 if reply is None or not reply.get("ok"):
                     return  # a refused part must never bind a half-sent playlist
-            # a refused or unknown schedule must not leave the lane unbound
-            self._push_schedule()
+            # a refused or unknown schedule must not leave the lane unbound, but the cell
+            # must not claim a schedule the engine did not take
+            self._schedule_refused = not self._push_schedule()
             lane: dict[str, Any] = {"id": "all", "playlist": slug, "enabled": enabled}
             if manual:
                 lane["manual"] = True
@@ -1562,12 +1564,14 @@ class Backend(QObject):
         if not slug:
             return
         try:
-            now = playlists.toggle_member(slug, wid)
-            if now != on:  # already in the requested state; force it
+            playlists.toggle_member(slug, wid)
+            now = wid in set(playlists.members(slug))
+            if now != on:
                 playlists.toggle_member(slug, wid)
-                now = on
+                now = wid in set(playlists.members(slug))
         except Exception:
             return
+        # the store may have refused (an unsafe id): the card shows what the store holds
         self._model.set_in_playlist(wid, now)
         self.countChanged.emit()
         self.playlistsChanged.emit()
@@ -2062,7 +2066,7 @@ class Backend(QObject):
                     result["interval"] = int(rot.get("interval_s") or 0)
                     result["playlist"] = str(rot.get("label") or "")
                     result["next_up"] = str(rot.get("next_up") or "")
-                # the lane's transport view (R32): behind, ahead, and whether back can act
+                # the lane's transport view: behind, ahead, and whether back can act
                 lanes = api.get("lanes")
                 if isinstance(lanes, list) and lanes and isinstance(lanes[0], dict):
                     lane = lanes[0]
@@ -2071,7 +2075,7 @@ class Backend(QObject):
                     result["next_up"] = str(lane.get("next") or "")
                     result["back_enabled"] = bool(lane.get("back_enabled", True))
                     # the schedule executes in the engine: while it is on, the engine's bound
-                    # playlist is the active one and the panel follows it (R69)
+                    # playlist is the active one and the panel follows it
                     sched = api.get("schedule")
                     if isinstance(sched, dict):
                         self._schedule_held = bool(sched.get("held"))

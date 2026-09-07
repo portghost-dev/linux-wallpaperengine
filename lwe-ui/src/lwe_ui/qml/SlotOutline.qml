@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Shapes
 import "."
 
-// A dotted 1.5 px outline over one grid slot (spec 2.2): the origin slot of a lifted card and
+// A dotted 1.5 px outline over one grid slot: the origin slot of a lifted card and
 // the slot under the pointer. Positioned in the grid's content coordinates from the row index.
 Item {
     id: slot

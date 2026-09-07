@@ -1,4 +1,4 @@
-"""The library grid's order model and the drag drop table (design spec 1.1, 2.3; R1, R37, R44).
+"""The library grid's order model and the drag drop table.
 
 Sandboxes HOME/XDG before importing lwe_ui; drives the real Backend offscreen with seven seeded
 wallpapers. Checks the member-first order, the filler padding at three and five columns, the
@@ -113,7 +113,7 @@ class LibraryOrder(unittest.TestCase):
         self.assertEqual([w for k, w in self.rows() if k == POOL], ["100", "200", "600", "700"])
         self.assertEqual(self.resets, 0, "a checkbox is one row move, never a reset")
 
-    # --- drop table (spec 2.3 as amended by R37) ---
+    # --- drop table ---
     def test_member_over_a_member_slot_reorders(self) -> None:
         self.b.orderModel.setColumns(3)
         self.assertTrue(self.b.beginDrag("500"))
@@ -138,7 +138,7 @@ class LibraryOrder(unittest.TestCase):
         self.b.orderModel.setColumns(5)
         self.b.beginDrag("300")
         self.b.dragOver(1)
-        self.b.dragOver(6)  # over the pool: R37, never a removal, and not a move either
+        self.b.dragOver(6)  # over the pool: never a removal, and not a move either
         self.assertEqual([w for k, w in self.rows() if k == MEMBER], ["300", "100", "500"])
         self.assertEqual(self.b.endDrag(True), "none")
         self.assertEqual(playlists.members(self.slug), ["300", "100", "500"])
@@ -207,7 +207,7 @@ class LibraryOrder(unittest.TestCase):
         self.b.toggleFavorite("300"); self.b.toggleFavorite("500"); self.b.toggleFavorite("400")
         self.b.filterModel.setScope("favorites")
         self.assertEqual(self.rows(), [(MEMBER, "300"), (MEMBER, "500"), (POOL, "400")])
-        # a pool card released on its own pool cell: home, never a member (R37)
+        # a pool card released on its own pool cell: home, never a member
         self.b.beginDrag("400"); self.b.dragOver(2)
         self.assertEqual(self.b.endDrag(True), "none")
         # a member released on its own visible slot: nothing is rewritten

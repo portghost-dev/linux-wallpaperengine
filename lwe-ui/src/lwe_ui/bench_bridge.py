@@ -268,7 +268,7 @@ class BenchBridge(QObject):
                               if source == SOURCE_PENDING else st["workshop_dir"])
         self._wallpapers_dir = st["wallpapers_dir"]
 
-        # ---- seed the conf. A pending item has none yet, so build one (L-19); a good item
+        # ---- seed the conf. A pending item has none yet, so build one; a good item
         #      already has its live conf and is tuned forward from it. Either way the working
         #      copy IS the conf - there is no second buffer to keep in step.
         try:

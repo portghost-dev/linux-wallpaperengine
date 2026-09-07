@@ -1374,6 +1374,7 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	// respond first: once keepRunning drops the loop unwinds and never drains again
 	this->m_commandServer->respond (client, Api::CommandDispatcher::done (command.id));
 	sLog.out ("API: quit requested by client");
+	this->markBootSurvived (true);
 	this->m_context.state.general.keepRunning = false;
 	return;
     }
@@ -1462,7 +1463,7 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	    return;
 	}
 
-	// a boundary crossed since the last advance: the step lands on the new playlist (R70)
+	// a boundary crossed since the last advance: the step lands on the new playlist
 	if (this->applyPendingSchedule ()) {
 	    this->m_commandServer->respond (
 		client, Api::CommandDispatcher::done (command.id, { { "id", this->lane ().current.id } })
@@ -2532,7 +2533,7 @@ void WallpaperApplication::apiLanesSet (int client, int64_t requestId, const nlo
 	const bool manual = item.value ("manual", false);
 
 	// with the schedule on, the slug is the clock's to choose: a policy push keeps the
-	// engine's binding, a manual switch holds until the next boundary (R67, R69)
+	// engine's binding, a manual switch holds until the next boundary
 	if (this->m_schedule.enabled && slug != lane.playlistSlug) {
 	    if (manual) {
 		this->m_schedule.held = true;
@@ -2610,8 +2611,8 @@ void WallpaperApplication::tickSchedule () {
     }
 
     // a static playlist has no countdown to wait for: the switch lands at the boundary
-    if (!this->m_schedule.pending.empty () && this->playlistOf (this->lane ()).order == "static"
-	&& this->m_releaseReason == ReleaseReason::Live) {
+    if (!this->m_schedule.pending.empty () && this->m_schedule.pending != this->m_scheduleMissing
+	&& this->playlistOf (this->lane ()).order == "static" && this->m_releaseReason == ReleaseReason::Live) {
 	this->applyPendingSchedule ();
     }
 }
@@ -2623,12 +2624,17 @@ bool WallpaperApplication::applyPendingSchedule () {
 	return false;
     }
 
-    this->m_schedule.pending.clear ();
-
     if (this->m_playlists.find (slug) == this->m_playlists.end ()) {
-	sLog.error ("API: schedule names playlist ", slug, " which the engine was never sent; staying put");
+	if (this->m_scheduleMissing != slug) {
+	    this->m_scheduleMissing = slug;
+	    sLog.error ("API: schedule names playlist ", slug, " which the engine was never sent; staying put");
+	}
+
 	return false;
     }
+
+    this->m_schedule.pending.clear ();
+    this->m_scheduleMissing.clear ();
 
     auto& lane = this->lane ();
     this->bindLane (lane, slug, lane.enabled, std::chrono::steady_clock::now ());
@@ -2687,7 +2693,7 @@ void WallpaperApplication::apiScheduleSet (int client, int64_t requestId, const 
 	);
     }
 
-    // a re-push of the same schedule keeps the hold and the pending switch (R67); a changed
+    // a re-push of the same schedule keeps the hold and the pending switch; a changed
     // one starts clean, and the clock decides on the next tick
     if (Api::sameSchedule (incoming, this->m_schedule)) {
 	incoming.held = this->m_schedule.held;
@@ -2756,6 +2762,19 @@ void WallpaperApplication::apiSetFit (int client, int64_t requestId, const nlohm
     // current show record, so prev and a restart carry it like a fit arg would
     const bool wallpaperLayer = args.value ("layer", "lane") == std::string ("wallpaper");
     auto& lane = laneIt->second;
+
+    // a wallpaper-layer push names its wallpaper: a swap between the panel's poll and its
+    // push must not land the window on the next scene
+    if (wallpaperLayer && args.contains ("id")) {
+	const auto id = args["id"].get<std::string> ();
+
+	if (id != lane.current.id && id != lane.current.uiId) {
+	    this->m_commandServer->respond (
+		client, Api::CommandDispatcher::failure (requestId, "wallpaper '" + id + "' is not on screen")
+	    );
+	    return;
+	}
+    }
     auto& fit = wallpaperLayer ? lane.look.fit : lane.fit;
     fit.zoom = std::clamp (args.value ("zoom", fit.zoom), 1.0f, 2.0f);
     fit.panX = std::clamp (args.value ("pan_x", fit.panX), -1.0f, 1.0f);
@@ -3195,9 +3214,6 @@ void WallpaperApplication::restoreRuntimeState () {
 		    this->m_groups[group.key] = group;
 		}
 	    }
-	    if (state.contains ("schedule")) {
-		this->m_schedule = Api::scheduleFromJson (state["schedule"]);
-	    }
 	    if (state.contains ("lanes") && state["lanes"].is_array ()) {
 		const auto nowWall = std::chrono::duration_cast<std::chrono::seconds> (
 					 std::chrono::system_clock::now ().time_since_epoch ()
@@ -3210,6 +3226,11 @@ void WallpaperApplication::restoreRuntimeState () {
 
 		for (const auto& item : state["lanes"]) {
 		    auto lane = Api::laneFromJson (item);
+
+		    if (lane.id != "all") {
+			continue;
+		    }
+
 		    const auto bound = this->m_playlists.find (lane.playlistSlug);
 		    lane.enabled = lane.enabled && bound != this->m_playlists.end () && !bound->second.entries.empty ();
 		    Api::resumeCountdown (
@@ -3217,6 +3238,11 @@ void WallpaperApplication::restoreRuntimeState () {
 			std::chrono::steady_clock::now ()
 		    );
 		    this->m_lanes[lane.id] = lane;
+		}
+
+		if (state.contains ("schedule")) {
+		    this->m_schedule = Api::scheduleFromJson (state["schedule"]);
+		    Api::scheduleResume (this->m_schedule, downtime / 60);
 		}
 	    }
 	}
@@ -3252,7 +3278,7 @@ void WallpaperApplication::restoreRuntimeState () {
     this->applyFitWindow ();
 }
 
-void WallpaperApplication::markBootSurvived () {
+void WallpaperApplication::markBootSurvived (bool cleanStop) {
     if (this->m_bootSurvivedMarked || !this->m_bootHistoryArmed) {
 	return;
     }
@@ -3260,7 +3286,8 @@ void WallpaperApplication::markBootSurvived () {
     const auto uptime
 	= std::chrono::duration_cast<std::chrono::seconds> (std::chrono::steady_clock::now () - this->m_startTime);
 
-    if (uptime.count () < BOOT_SURVIVED_SECONDS) {
+    // a stop the operator asked for is not a death, however young the boot
+    if (!cleanStop && uptime.count () < BOOT_SURVIVED_SECONDS) {
 	return;
     }
 
@@ -3302,7 +3329,7 @@ bool WallpaperApplication::apiRotationAdvance (std::string& error) {
 	    std::string applyError;
 
 	    if (this->applyShowCore (*path, entry.args, true, applyError)) {
-		rot.lastShow = std::chrono::steady_clock::now ();
+		Api::restartCountdown (rot, this->playlistOf (rot), std::chrono::steady_clock::now ());
 		return true;
 	    }
 
@@ -3724,6 +3751,7 @@ void WallpaperApplication::signal (int signal) {
     }
 
     sLog.out ("Stop requested by signal ", signal);
+    this->markBootSurvived (true);
     this->m_context.state.general.keepRunning = false;
 }
 

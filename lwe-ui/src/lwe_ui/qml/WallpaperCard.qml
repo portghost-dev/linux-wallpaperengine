@@ -67,7 +67,7 @@ Rectangle {
     }
     function pressOnChrome(p) {
         // geometry only: the chrome fades with hover, but a press on its footprint is a press on
-        // it. The play button is not chrome for this purpose (R52): a drag may start over it.
+        // it. The play button is not chrome for this purpose: a drag may start over it.
         return [checkBox, starBtn, gearBtn, trashBtn].some(function(b) {
             var q = b.mapFromItem(card, p.x, p.y);
             return q.x >= 0 && q.y >= 0 && q.x <= b.width && q.y <= b.height;

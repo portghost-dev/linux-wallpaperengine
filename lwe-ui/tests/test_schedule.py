@@ -1,6 +1,6 @@
-"""The schedule executes in the engine (chunk 8, R69): the panel resolves and pushes it,
-follows the engine's bound playlist while it runs, and marks the user's own switch as manual so
-the engine holds it until the next boundary (R67). Day is the range from row 1 to row 2 (R68).
+"""The schedule executes in the engine: the panel resolves and pushes it, follows the engine's
+bound playlist while it runs, and marks the user's own switch as manual so the engine holds it
+until the next boundary. Day is the range from row 1 to row 2.
 
 Headless: sandboxed HOME, api_client verbs replaced by recorders, the engine never reached.
 
@@ -106,6 +106,23 @@ class ScheduleBridgeTests(unittest.TestCase):
         sched = [c for c in self.calls if c[0] == "schedule-set"][0]
         self.assertEqual([e["playlist"] for e in sched[2]], [day, night], "an entry naming a missing playlist is dropped")
         self.assertFalse(hasattr(self.paths, "manual_hold_file"), "the dead hold marker is gone")
+        # the other doors that change the active playlist are the user's own switches too
+        self.calls.clear()
+        self.backend.createPlaylist("Fresh")
+        self.assertEqual([c for c in self.calls if c[0] == "lanes-set"][-1][1][0].get("manual"), True)
+        self.calls.clear()
+        self.backend.deleteActivePlaylist()
+        self.assertEqual([c for c in self.calls if c[0] == "lanes-set"][-1][1][0].get("manual"), True)
+
+    def test_a_refused_schedule_is_not_shown_as_on(self) -> None:
+        day, night = self._slug("Day"), self._slug("Night")
+        self._set_schedule(True, f"08:00={day};20:00={night}")
+        self.api.schedule_set = lambda enabled, entries: {"ok": False, "error": "unknown command"}
+        self.backend._sync_engine()
+        self.assertFalse(self.backend.scheduleState()["enabled"], "an old engine took no schedule: the cell stays off")
+        self.api.schedule_set = lambda enabled, entries: {"ok": True}
+        self.backend._sync_engine()
+        self.assertTrue(self.backend.scheduleState()["enabled"])
 
     def test_disabled_schedule_is_still_pushed_as_disabled(self) -> None:
         day, night = self._slug("Day"), self._slug("Night")

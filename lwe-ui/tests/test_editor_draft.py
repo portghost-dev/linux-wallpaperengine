@@ -339,7 +339,7 @@ class TestEditorLiveCommit(unittest.TestCase):
             self.assertIsNone(hex_to_rgb_floats(bad), f"{bad!r} must not parse")
 
     def test_color_commit_refusal_leaves_the_conf_alone(self) -> None:
-        """An invalid hex raises the failure grammar and writes nothing (L6)."""
+        """An invalid hex raises the failure grammar and writes nothing."""
         e = self.editor
         e.open(_WID)
         e.setProp("glow", "0.5 0.5 0.5")

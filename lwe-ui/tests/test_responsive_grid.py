@@ -85,7 +85,7 @@ def main() -> None:
         thumb = float(grid.property("thumbH"))
         rendered = int(gw / cw) if cw else 0
 
-        # R54: the column count is the one whose tiles land nearest the target, never a floor
+        # the column count is the one whose tiles land nearest the target, never a floor
         target = int(grid.property("targetTile"))
         gap = int(grid.property("gap"))
         def miss(n):
@@ -139,7 +139,7 @@ def main() -> None:
         ws_tile = int(ws.property("tileW")); ws_thumb = int(ws.property("thumbH"))
         assert ws_tile == lib_tile, f"@{w}px workshop tile {ws_tile} != library {lib_tile}"
         assert abs(ws_thumb - lib_thumb) <= 1, f"@{w}px workshop thumb {ws_thumb} != library {lib_thumb}"
-        assert ws_tile <= 320, f"@{w}px workshop tile over the 320 cap: {ws_tile}"  # R54: sizing is the library rule
+        assert ws_tile <= 320, f"@{w}px workshop tile over the 320 cap: {ws_tile}"  # sizing is the library rule
     print("  workshop/library tile parity holds at 1080, 1600, 3840")
 
     print("OK test_responsive_grid - auto-fit columns / 16:10 aspect lock / <=10% optical "

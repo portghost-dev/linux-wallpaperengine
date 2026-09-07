@@ -95,7 +95,7 @@ def main() -> None:
     b.setActivePlaylist(ap["slug"])
     assert b.activePlaylist()["slug"] == ap["slug"]
 
-    # a manual switch is the user's own: the engine holds it until the next boundary (R67);
+    # a manual switch is the user's own: the engine holds it until the next boundary;
     # the old marker file is gone with the watcher that read it
     assert not hasattr(paths, "manual_hold_file")
     b.setActivePlaylist(slug2)

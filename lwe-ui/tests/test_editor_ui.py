@@ -135,7 +135,7 @@ def main() -> None:
         # slider reflects stored value: 0.9 fills more accent track than 0.1. The rest of
         # column 1 (labels, filter field) is identical between the two, so the difference is the
         # slider fill alone; near-equal means the slider ignored its stored value (init stuck
-        # at 0). Threshold calibrated to the canvas-compact 100px slider (T2): a 0.8 value
+        # at 0). Threshold calibrated to the canvas-compact 100px slider: a 0.8 value
         # delta on a 3px-tall 100px track sampled every 2x2 lands ~25-30 px; a stuck-at-0
         # slider lands under 8. 15 separates them with margin on both sides.
         assert hi > lo + 15, (
@@ -224,7 +224,7 @@ def main() -> None:
         _editor_mod.api_client.set_fit = lambda **kw: (pushes.append(dict(kw)) or {"ok": True})
         editor.syncCurrent("synthwp_fit")
         assert editor.setFit("pan_x", "0.25")
-        assert pushes == [{"layer": "wallpaper", "zoom": 1.25, "pan_x": 0.25, "pan_y": 0.0}], pushes
+        assert pushes == [{"layer": "wallpaper", "id": "synthwp_fit", "zoom": 1.25, "pan_x": 0.25, "pan_y": 0.0}], pushes
         assert not editor._reshow.isActive(), "a fit write must not queue a re-show"
         editor.syncCurrent("")
         assert editor.setFit("pan_x", "0.5")

@@ -85,7 +85,7 @@ Rectangle {
 
     // --- Speed mapping: four-zone piecewise logarithmic over 0.1x..10x ---------------------
     //
-    // Identical to the popup's, deliberately: one fact wears one face everywhere (L8/L-12).
+    // Identical to the popup's, deliberately: one fact wears one face everywhere.
     // Each zone is log-smooth (constant RATIO per pixel, which is what "feels even" for a
     // speed) and the zones meet exactly at their knots, so there is no jump crossing 1.0x,
     // 2.0x or 5.0x.
@@ -428,7 +428,7 @@ Rectangle {
         property bool compact: false
         // FPS: "menu ... plus free integer entry". The caret zone opens the menu,
         // the label zone takes typing - the standard editable-dropdown split, which adds the
-        // entry affordance without a second control or one word of new copy (L4, L7).
+        // entry affordance without a second control or one word of new copy.
         property bool editable: false
         property bool editing: false
         signal picked(string value)
@@ -835,7 +835,7 @@ Rectangle {
                 anchors.fill: parent
                 spacing: Theme.spacingSm
                 // the scroll viewport below spans the FULL column; everything that is not the
-                // viewport carries the same content inset so the two stay flush (L-14)
+                // viewport carries the same content inset so the two stay flush
                 readonly property real inset: view.contentInset(true)
 
                 Column {
@@ -1231,7 +1231,7 @@ Rectangle {
                     // --- Global capsule ------------------------------------
                     // Foreign scope, so it wears the capsule rather than a header rule
                     // (C-11). These rows are DIRECT global knobs: they commit outright, they
-                    // never wear the mark, and they are never in the revert set (L5, L-17).
+                    // never wear the mark, and they are never in the revert set.
                     // The popup's -6 px side bleed is dropped: it exists to reach the card's
                     // padding, and a column has no analog.
                     Item {
@@ -1372,11 +1372,11 @@ Rectangle {
                     }
 
                     // --- per-wallpaper tier --------------------------------
-                    // Override grammar (L4): `Global` is an entry INSIDE each control, never
+                    // Override grammar: `Global` is an entry INSIDE each control, never
                     // a second control and never a morphing pill. Choosing it deletes the
                     // key, which is what makes SCALING=default and zero-values expressible
                     // as real overrides. Rows exist only for keys with a real per-wallpaper
-                    // store (L-17).
+                    // store.
                     PRow {
                         label: "Scaling"
                         PDrop {
@@ -1675,9 +1675,9 @@ Rectangle {
 
                     // --- Color correction -----------------------------------
                     // The master is a two-entry menu: `Custom` is a DISPLAYED state entered by
-                    // touching a slider, never a selectable entry (L-4). CC stays materialized
+                    // touching a slider, never a selectable entry. CC stays materialized
                     // as the effective-numbers cache in every mode, so the show path never has
-                    // to parse scene JSON (L-5).
+                    // to parse scene JSON.
                     Item { width: parent.width; height: Theme.spacingMd }
                     PRule {
                         label: "Color correction"

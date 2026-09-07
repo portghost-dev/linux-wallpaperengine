@@ -240,8 +240,8 @@ private:
      */
     void persistRuntimeState () const;
     void restoreRuntimeState ();
-    /** crash-loop guard bookkeeping: flips this boot's history entry once 60s pass */
-    void markBootSurvived ();
+    /** Record this boot as survived once it has run BOOT_SURVIVED_SECONDS, or at once on a requested stop. */
+    void markBootSurvived (bool cleanStop = false);
     [[nodiscard]] static std::filesystem::path runtimeStateDir ();
     bool m_bootSurvivedMarked = false;
     /** true only when THIS boot appended a history entry; the survived flip must never
@@ -340,6 +340,8 @@ private:
     } m_showDefaults {};
     std::map<std::string, Api::Lane> m_lanes { { "all", Api::Lane {} } };
     Api::Schedule m_schedule;
+    /** the pending playlist already reported missing, so the log says it once */
+    std::string m_scheduleMissing;
     std::map<std::string, Api::Playlist> m_playlists { { "default", Api::Playlist {} } };
     std::map<std::string, Api::Group> m_groups { { "all", Api::Group {} } };
     /** playlist-set parts collected until the last one lands, keyed by slug */

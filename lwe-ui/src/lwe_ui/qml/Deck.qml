@@ -27,7 +27,7 @@ Rectangle {
     readonly property bool engineDown: !engineOff && deck._field("state") === ""
     // back is off in static and on a one-item playlist (engine-reported; absent = on)
     readonly property bool backEnabled: deck._field("back_enabled") !== "false"
-    // static: the timer is stopped, so the bar renders flat with its times hidden (spec 4)
+    // static: the timer is stopped, so the bar renders flat with its times hidden
     readonly property bool isStatic: (deck._field("order") !== "" ? deck._field("order") : deckStrip.activePl.mode) === "static"
     function nameOf(id) {
         if (id === "")
@@ -97,7 +97,7 @@ Rectangle {
     readonly property bool wizBenching: (deck.wizRev, wizardBridge.phase() === "p3")
     readonly property bool holding: deck.testing || deck.devHold || deck.wizBenching
     // during a hold the transport + right column dim (the bench owns the display); off/engine-down
-    // dims the transport + overrides but NOT the left block (F24 - the status message stays legible).
+    // dims the transport + overrides but NOT the left block (the status message stays legible).
     // all three named bench modes dim the transport to 0.45 so the center breathing bench bar
     // (the shared "lease cover") reads identically across Workshop / Editor / Developer benching.
     readonly property real transportDim: (deck.testing || deck.wizBenching || deck.devHold) ? 0.45
@@ -115,7 +115,7 @@ Rectangle {
 
 
     // --- left (idle / engine-off / engine-down): now playing ----------------------------
-    // The left block is exempt from the off-state dimming (F24): when the engine is off or the
+    // The left block is exempt from the off-state dimming: when the engine is off or the
     // engine is down the status line renders at full opacity so it stays readable.
     Row {
         id: leftIdle
@@ -155,12 +155,12 @@ Rectangle {
                     asynchronous: true
                 }
             }
-            // three stacked lines (spec 3.1, R32, R46): Last: <name> / <current name> / Next: <name>
+            // three stacked lines: Last: <name> / <current name> / Next: <name>
             Column {
                 id: leftLines
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 0
-                // spec 3.1 caps (190 / 130), and never into the clock: the lines stop short of
+                // caps (190 / 130), and never into the clock: the lines stop short of
                 // the centre block wherever it lands at this width
                 // the clock's elapsed label hangs left of the centred bar: that is the edge to stop at
                 readonly property int clockLeft: (deck.width - barSlot.barWidth) / 2 - 10 - elapsedLabel.width

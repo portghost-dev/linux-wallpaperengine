@@ -261,7 +261,7 @@ def lanes_set(lanes: list[dict[str, Any]]) -> dict[str, Any] | None:
 def schedule_set(enabled: bool, entries: list[dict[str, str]]) -> dict[str, Any] | None:
     """The clock-driven playlist choice, executed by the engine. `entries` are
     {at: "HH:MM", playlist: slug} in stored order: the first is where day begins, the second
-    where it ends (R68). Every playlist named must have been sent with playlist-set first."""
+    where it ends. Every playlist named must have been sent with playlist-set first."""
     return request("schedule-set", {"enabled": bool(enabled), "entries": list(entries)})
 
 
@@ -311,6 +311,7 @@ def set_fit(
     pan_y: float | None = None,
     lane: str = "all",
     layer: str = "lane",
+    id: str | None = None,
 ) -> dict[str, Any] | None:
     """One layer of the fit window, partial update: only the fields given change.
 
@@ -321,6 +322,9 @@ def set_fit(
     effective (composed) window.
     """
     args: dict[str, Any] = {"lane": str(lane), "layer": str(layer)}
+    if id:
+        # the wallpaper the push is for: the engine refuses it if another is on screen
+        args["id"] = str(id)
     if zoom is not None:
         args["zoom"] = float(zoom)
     if pan_x is not None:

@@ -454,7 +454,7 @@ class WorkshopBridge(QObject):
         id."""
         out = []
         for ch in str(name or "").strip():
-            out.append(ch if (ch.isalnum() or ch in "._-") else "-")
+            out.append(ch if ((ch.isascii() and ch.isalnum()) or ch in "._-") else "-")
         stem = "".join(out).strip(".-") or "scene"
         return stem[:64]
 

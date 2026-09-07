@@ -89,7 +89,7 @@ TEST_CASE ("shuffle covers every member once per cycle and pre-draws the next cy
     REQUIRE (nextUp (lane, playlist) == lane.nextCycle[lane.nextCycle[0] == lane.current.uiId ? 1 : 0]);
 
     // the next cycle: its first item is skipped once when it is the one on screen, so the
-    // on-screen item plus six advances is the cycle (R23: a member may show twice)
+    // on-screen item plus six advances is the cycle (a member may show twice)
     const auto onScreen = lane.current.uiId;
     auto second = walkOf (lane, playlist, rng, 6);
     second.push_back (onScreen);
@@ -198,7 +198,7 @@ TEST_CASE ("an order change starts a fresh walk", "[lane]") {
     std::sort (ids.begin (), ids.end ());
     REQUIRE (ids == std::vector<std::string> { "wp0", "wp1", "wp2", "wp3", "wp4", "wp5" });
 
-    // the on-screen item plus one cycle of advances covers the set (R23: it may show twice)
+    // the on-screen item plus one cycle of advances covers the set (it may show twice)
     auto cycle = walkOf (lane, playlist, rng, 6);
     cycle.push_back ("wp2");
     std::sort (cycle.begin (), cycle.end ());
@@ -247,7 +247,7 @@ TEST_CASE ("the same set keeps a frozen countdown across disable and enable", "[
     applySet (lane, playlist, set, true, t0 ());
     REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (100)) == 800);
 
-    // a pause freezes where the countdown stood (R65), and holds there
+    // a pause freezes where the countdown stood, and holds there
     applySet (lane, playlist, set, false, t0 () + std::chrono::seconds (100));
     REQUIRE (lane.frozenRemainingSeconds == 800);
     REQUIRE_FALSE (lane.enabled);
@@ -279,7 +279,7 @@ TEST_CASE ("history is bounded and pops in order", "[lane]") {
     REQUIRE (lane.history.size () == HISTORY_BOUND);
     REQUIRE (lane.current.id == "s149");
     Playlist none;
-    lane.walk = { "a", "b" }; // back needs a walk of two (R31)
+    lane.walk = { "a", "b" }; // back needs a walk of two
     const auto last = backTarget (lane, none);
     REQUIRE (last.has_value ());
     REQUIRE (last->id == "s148");

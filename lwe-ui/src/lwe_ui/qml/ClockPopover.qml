@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import "."
 
-// The clock popover (spec 4, R47): the one home for a playlist's Mode and Every. No title, no
+// The clock popover: the one home for a playlist's Mode and Every. No title, no
 // buttons; every change commits live. Anchored by its owner above the clock cell.
 Popup {
     id: pop
@@ -21,7 +21,7 @@ Popup {
     // the one commit path: a typed value lands, an empty or zero field re-reads the stored one
     function commitField() {
         var v = parseInt(intervalField.text);
-        var top = activePl.unit === "s" ? 86400 : 1440;   // R47
+        var top = activePl.unit === "s" ? 86400 : 1440;
         if (isNaN(v) || v < 1 || v > top) { intervalField.text = String(shownInterval()); return; }
         if (v === shownInterval())
             return;
@@ -137,7 +137,7 @@ Popup {
                     color: Theme.textPrimary
                     font.pixelSize: Theme.fontControl
                     horizontalAlignment: Text.AlignRight
-                    // R47: 1..1440 minutes, 1..86400 seconds. The validator only caps the top so a
+                    // 1..1440 minutes, 1..86400 seconds. The validator only caps the top so a
                     // typed 0 or an emptied field still reaches the handler, which rejects and re-reads
                     validator: IntValidator { bottom: 0; top: pop.activePl.unit === "s" ? 86400 : 1440 }
                     background: Rectangle {

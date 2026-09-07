@@ -99,7 +99,7 @@ class DeckPopupBridge(QObject):
     # the props model re-reads on THIS, not on stateChanged, so a speed/volume/scaling
     # commit no longer rebuilds every property delegate mid-gesture (H28 pattern)
     propsEdited = Signal()
-    # one or more commits failed: the banner plus a red outline on each named control (L6).
+    # one or more commits failed: the banner plus a red outline on each named control.
     # Keys are the popup's own control keys: "SCALING", "PROP_<name>", "ENGINE_FPS", ...
     commitFailed = Signal(list)
 
@@ -449,7 +449,8 @@ class DeckPopupBridge(QObject):
                 conf = wp.load(self._wid)
             except Exception:
                 conf = {}
-            self._push(lambda fit: api_client.set_fit(layer="wallpaper", **fit),
+            wid = self._wid
+            self._push(lambda fit: api_client.set_fit(layer="wallpaper", id=wid, **fit),
                        sorted(fit_keys)[0], resolve_fit(conf))
         rest = keys - fit_keys
         if rest:
