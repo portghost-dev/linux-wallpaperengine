@@ -125,6 +125,9 @@ bool dueForAdvance (const Lane& lane, const Playlist& playlist, Clock::time_poin
 /** Seconds until the next timed advance: the frozen remainder while disabled, -1 when idle. */
 int nextInSeconds (const Lane& lane, const Playlist& playlist, Clock::time_point now);
 
+/** A new wallpaper is a new play: the clock restarts, and a paused lane's frozen remainder becomes the full interval. */
+void restartCountdown (Lane& lane, const Playlist& playlist, Clock::time_point now);
+
 /** Seat the clock after a restart: a running lane resumes its saved remainder less the downtime. */
 void resumeCountdown (Lane& lane, const Playlist& playlist, int remaining, int downtime, Clock::time_point now);
 

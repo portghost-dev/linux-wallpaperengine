@@ -334,8 +334,16 @@ void WallpaperEngine::Api::applySet (
 	    lane.frozenRemainingSeconds = playlist.intervalSeconds;
 	}
     } else if (!lane.enabled) {
-	lane.frozenRemainingSeconds = sameSet && frozen >= 0 ? frozen : playlist.intervalSeconds;
-    } else if (sameSet && !wasEnabled && frozen >= 0) {
+	// a pause is a true pause: the same set freezes where its countdown stood
+	if (sameSet && frozen >= 0) {
+	    lane.frozenRemainingSeconds = frozen;
+	} else if (sameSet && wasEnabled) {
+	    lane.frozenRemainingSeconds
+		= std::clamp (playlist.intervalSeconds - elapsedSeconds (lane, now), 0, playlist.intervalSeconds);
+	} else {
+	    lane.frozenRemainingSeconds = playlist.intervalSeconds;
+	}
+    } else if (sameSet && !wasEnabled && frozen >= 0 && !leftStatic) {
 	lane.lastShow = now - std::chrono::seconds (playlist.intervalSeconds - frozen);
 	lane.frozenRemainingSeconds = -1;
     } else {
@@ -350,6 +358,14 @@ bool WallpaperEngine::Api::dueForAdvance (const Lane& lane, const Playlist& play
     }
 
     return elapsedSeconds (lane, now) >= playlist.intervalSeconds;
+}
+
+void WallpaperEngine::Api::restartCountdown (Lane& lane, const Playlist& playlist, Clock::time_point now) {
+    lane.lastShow = now;
+
+    if (lane.frozenRemainingSeconds >= 0) {
+	lane.frozenRemainingSeconds = playlist.intervalSeconds;
+    }
 }
 
 void WallpaperEngine::Api::resumeCountdown (
@@ -368,6 +384,11 @@ void WallpaperEngine::Api::resumeCountdown (
 }
 
 int WallpaperEngine::Api::nextInSeconds (const Lane& lane, const Playlist& playlist, Clock::time_point now) {
+    // static has no countdown, frozen or running
+    if (playlist.order == "static") {
+	return -1;
+    }
+
     if (lane.frozenRemainingSeconds >= 0) {
 	return lane.frozenRemainingSeconds;
     }

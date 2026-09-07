@@ -247,10 +247,14 @@ TEST_CASE ("the same set keeps a frozen countdown across disable and enable", "[
     applySet (lane, playlist, set, true, t0 ());
     REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (100)) == 800);
 
+    // a pause freezes where the countdown stood (R65), and holds there
     applySet (lane, playlist, set, false, t0 () + std::chrono::seconds (100));
-    REQUIRE (lane.frozenRemainingSeconds == 900);
+    REQUIRE (lane.frozenRemainingSeconds == 800);
     REQUIRE_FALSE (lane.enabled);
-    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (5000)) == 900);
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (5000)) == 800);
+    // a re-push while paused keeps the frozen value; a new set while paused is the full interval
+    applySet (lane, playlist, set, false, t0 () + std::chrono::seconds (150));
+    REQUIRE (lane.frozenRemainingSeconds == 800);
     lane.frozenRemainingSeconds = 300;
 
     applySet (lane, playlist, set, true, t0 () + std::chrono::seconds (200));
@@ -588,10 +592,46 @@ TEST_CASE ("leaving static is a new play; a shuffle switch and a paused re-push 
     REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (8000)) == 900);
     REQUIRE_FALSE (dueForAdvance (lane, playlist, t0 () + std::chrono::seconds (8000)));
 
+    // the panel sends static DISABLED: still no countdown while static, still a full interval after
+    applySet (lane, playlist, makePlaylist (3, "static"), false, t0 () + std::chrono::seconds (8100));
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (8100)) == -1);
+    applySet (lane, playlist, set, true, t0 () + std::chrono::seconds (20000));
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (20000)) == 900);
+    REQUIRE (lane.frozenRemainingSeconds == -1);
+
     // a disabled lane with no frozen value (an older state file) re-pushed the same set shows
     // the full interval, not idle
     lane.enabled = false;
     lane.frozenRemainingSeconds = -1;
     applySet (lane, playlist, set, false, t0 () + std::chrono::seconds (8100));
     REQUIRE (lane.frozenRemainingSeconds == 900);
+}
+
+TEST_CASE ("a paused lane: an overdue pause resumes due, a new wallpaper while paused is a full interval", "[lane]") {
+    Lane lane;
+    Playlist playlist;
+    const auto set = makePlaylist (3, "sequential");
+    applySet (lane, playlist, set, true, t0 ());
+
+    // outputs were released past the interval, then the user paused: nothing negative, due on resume
+    applySet (lane, playlist, set, false, t0 () + std::chrono::seconds (5000));
+    REQUIRE (lane.frozenRemainingSeconds == 0);
+    applySet (lane, playlist, set, true, t0 () + std::chrono::seconds (5100));
+    REQUIRE (dueForAdvance (lane, playlist, t0 () + std::chrono::seconds (5100)));
+
+    // a step lands a new wallpaper at t+6000; pause with 800 left; step again to another
+    // wallpaper (next, prev or a click): the new one gets the full interval when rotation resumes
+    restartCountdown (lane, playlist, t0 () + std::chrono::seconds (6000));
+    applySet (lane, playlist, set, false, t0 () + std::chrono::seconds (6100));
+    REQUIRE (lane.frozenRemainingSeconds == 800);
+    restartCountdown (lane, playlist, t0 () + std::chrono::seconds (6200));
+    REQUIRE (lane.frozenRemainingSeconds == 900);
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (6200)) == 900);
+    applySet (lane, playlist, set, true, t0 () + std::chrono::seconds (6300));
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (6300)) == 900);
+
+    // running: a step simply restarts
+    restartCountdown (lane, playlist, t0 () + std::chrono::seconds (6400));
+    REQUIRE (lane.frozenRemainingSeconds == -1);
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (6400)) == 900);
 }

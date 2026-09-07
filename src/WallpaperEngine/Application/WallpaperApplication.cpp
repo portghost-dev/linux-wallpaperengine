@@ -1478,7 +1478,7 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	    } else if (!this->makeAnyViewportCurrent ()) {
 		error = "no active viewport to switch on";
 	    } else if (this->applyShowCore (*path, entry.args, false, error)) {
-		this->lane ().lastShow = std::chrono::steady_clock::now ();
+		Api::restartCountdown (this->lane (), this->playlistOf (this->lane ()), std::chrono::steady_clock::now ());
 
 		if (command.cmd == "next") {
 		    Api::commitForward (this->lane (), before, entry);
@@ -2120,11 +2120,7 @@ void WallpaperApplication::apiShow (
     // a manual show of another wallpaper restarts the rotation countdown (watcher parity:
     // show-request stamped the rotation clock); a re-show of the same id is a refresh
     if (beforeId != Api::displayId (this->lane ().current)) {
-	this->lane ().lastShow = std::chrono::steady_clock::now ();
-
-	if (this->lane ().frozenRemainingSeconds >= 0) {
-	    this->lane ().frozenRemainingSeconds = this->playlistOf (this->lane ()).intervalSeconds;
-	}
+	Api::restartCountdown (this->lane (), this->playlistOf (this->lane ()), std::chrono::steady_clock::now ());
     }
 
     this->m_commandServer->respond (client, Api::CommandDispatcher::done (requestId, { { "path", path->string () } }));
