@@ -611,43 +611,28 @@ Window { width: 1400; height: 620; visible: true
         QTest.qWait(120)
         section = next((i for i in walk(view)
                         if i.property("objectName") == "scheduleSection"), None)
-        assert section is not None, "the Schedule section must be BUILT, even while gated"
-        assert C.SCHEDULE_UI is False and section.property("visible") is False, \
-            "gated off means ABSENT, not dim and not disabled-and-visible"
+        assert section is not None and section.property("visible") is True, \
+            "the Schedule section renders: the engine executes the schedule (chunk 8)"
 
-        saved = C.SCHEDULE_UI
-        try:
-            C.SCHEDULE_UI = True
-            view.setProperty("pageIndex", 1)
-            QTest.qWait(80)
-            view.setProperty("pageIndex", 0)
-            QTest.qWait(150)
-            section = next(i for i in walk(view)
-                           if i.property("objectName") == "scheduleSection")
-            assert section.property("visible") is True, \
-                "flipping the one constant must render the section, fully wired"
+        sec_rows = [i for i in walk(section)
+                    if cls(i) == "SettingsRow" and i.isVisible()]
+        labels = [r.property("label") for r in sec_rows]
+        assert "Switch playlists by time of day" in labels, labels
+        assert "Daytime playlist" in labels and "Night playlist" in labels, labels
 
-            sec_rows = [i for i in walk(section)
-                        if cls(i) == "SettingsRow" and i.isVisible()]
-            labels = [r.property("label") for r in sec_rows]
-            assert "Switch playlists by time of day" in labels, labels
-            assert "Daytime playlist" in labels and "Night playlist" in labels, labels
+        assert sb.commit("SCHEDULE_ENABLED", True) is True
+        section.setProperty("packed", None)
+        assert sb.commit("SCHEDULE", "07:30=day;19:00=night") is True
+        assert settings.load()["SCHEDULE"] == "07:30=day;19:00=night"
+        assert sb.commit("SCHEDULE", "7:30=day") is False, "HH:MM validation is live"
 
-            assert sb.commit("SCHEDULE_ENABLED", True) is True
-            section.setProperty("packed", None)
-            assert sb.commit("SCHEDULE", "07:30=day;19:00=night") is True
-            assert settings.load()["SCHEDULE"] == "07:30=day;19:00=night"
-            assert sb.commit("SCHEDULE", "7:30=day") is False, "HH:MM validation is live"
-
-            assert sb.commit("SCHEDULE_ENABLED", False) is True
-            QTest.qWait(120)
-            dimmed = [r for r in walk(section)
-                      if cls(r) == "SettingsRow" and r.property("label") == "Daytime playlist"]
-            assert dimmed and abs(dimmed[0].property("opacity") - 0.5) < 0.01, \
-                "a row whose precondition is off renders at 0.5 opacity"
-            print("OK T29 Schedule gate: absent at False, fully wired and packing at True")
-        finally:
-            C.SCHEDULE_UI = saved
+        assert sb.commit("SCHEDULE_ENABLED", False) is True
+        QTest.qWait(120)
+        dimmed = [r for r in walk(section)
+                  if cls(r) == "SettingsRow" and r.property("label") == "Daytime playlist"]
+        assert dimmed and abs(dimmed[0].property("opacity") - 0.5) < 0.01, \
+            "a row whose precondition is off renders at 0.5 opacity"
+        print("OK T29 Schedule section: ungated, fully wired and packing")
     finally:
         for k, v in orig.items():
             if v is None:

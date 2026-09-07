@@ -52,7 +52,6 @@ AUDIO_DIAL_ENV = {
     "ENGINE_CLASSIC_EXP": "LWE_CLASSICEXP",
 }
 
-SCHEDULE_UI = False
 
 
 # The engine refuses a rotate-set or playlist-set part with more entries than this, and

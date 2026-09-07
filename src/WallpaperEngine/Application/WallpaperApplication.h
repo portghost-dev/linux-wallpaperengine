@@ -211,6 +211,14 @@ private:
     void apiLanesSet (int client, int64_t requestId, const nlohmann::json& args);
     /** the set-fit verb: writes the lane layer of the fit window and applies it live */
     void apiSetFit (int client, int64_t requestId, const nlohmann::json& args);
+    void apiScheduleSet (int client, int64_t requestId, const nlohmann::json& args);
+    /** Bind the lane to `slug`: a new walk and, per applySet, a new play. */
+    void bindLane (Api::Lane& lane, const std::string& slug, bool enabled, std::chrono::steady_clock::time_point now);
+    /** The local minute of the day, 0..1439. */
+    [[nodiscard]] static int localMinute ();
+    /** The schedule's pending switch, if any: rebind and show the new playlist's first item. */
+    bool applyPendingSchedule ();
+    void tickSchedule ();
     /** the wallpaper layer (this show's args) composed with the lane layer */
     [[nodiscard]] WallpaperEngine::Render::WallpaperState::Fit effectiveFit () const;
     [[nodiscard]] WallpaperEngine::Render::WallpaperState::Fit effectiveFit (const Api::Lane& lane) const;
@@ -331,6 +339,7 @@ private:
 	std::map<std::string, TextureFlags> screenClamps;
     } m_showDefaults {};
     std::map<std::string, Api::Lane> m_lanes { { "all", Api::Lane {} } };
+    Api::Schedule m_schedule;
     std::map<std::string, Api::Playlist> m_playlists { { "default", Api::Playlist {} } };
     std::map<std::string, Api::Group> m_groups { { "all", Api::Group {} } };
     /** playlist-set parts collected until the last one lands, keyed by slug */

@@ -131,16 +131,26 @@ Popup {
                 property alias combo: comboAlias
                 property alias time: timeAlias
                 property color dotColor: Theme.accent
+                property bool sun: false
                 width: parent.width - parent.leftPadding - parent.rightPadding
                 spacing: Theme.spacingSm
-                Rectangle {
-                    width: 6; height: 6; radius: 3
+                IconSun {
+                    objectName: "entrySun"
+                    visible: er.sun
+                    size: 14
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: er.dotColor
+                }
+                IconMoon {
+                    objectName: "entryMoon"
+                    visible: !er.sun
+                    size: 14
                     anchors.verticalCenter: parent.verticalCenter
                     color: er.dotColor
                 }
                 ThemedCombo {
                     id: comboAlias
-                    width: er.width - 6 - fromLbl.implicitWidth - timeAlias.width - er.spacing * 3
+                    width: er.width - 14 - fromLbl.implicitWidth - timeAlias.width - er.spacing * 3
                     height: 28
                     model: modal.plModel.map(function(p) { return p.name; })
                     background: Rectangle {
@@ -176,7 +186,7 @@ Popup {
                 }
             }
 
-            EntryRow { id: entryA; objectName: "entryA"; dotColor: Theme.warning }
+            EntryRow { id: entryA; objectName: "entryA"; dotColor: Theme.warning; sun: true }
             EntryRow { id: entryB; objectName: "entryB"; dotColor: Theme.accent }
 
             // 24h strip with the two spans + boundary ticks. Colors bind to whichever ENTRY

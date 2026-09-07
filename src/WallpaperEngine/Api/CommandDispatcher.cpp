@@ -36,7 +36,8 @@ const std::set<std::string> KNOWN_VERBS = { "status",
 					    "set-tuning",
 					    "set-app-conditions",
 					    "set-overlay",
-					    "set-fit" };
+					    "set-fit",
+					    "schedule-set" };
 
 // the fit vocabulary shared by the show arg and set-fit: zoom 1..2, pans -1..1, all finite
 std::string validateFit (const json& fit, const std::string& prefix) {
@@ -460,6 +461,10 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 		return { .command = std::nullopt, .errorResponse = failure (id, "lane.enabled must be a boolean") };
 	    }
 
+	    if (lane.contains ("manual") && !lane["manual"].is_boolean ()) {
+		return { .command = std::nullopt, .errorResponse = failure (id, "lane.manual must be a boolean") };
+	    }
+
 	    if (lane.contains ("group")) {
 		if (!lane["group"].is_array () || lane["group"].size () > 32) {
 		    return { .command = std::nullopt,
@@ -531,6 +536,47 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 	    if (!entry.is_number_integer () || entry.get<int64_t> () < 0 || entry.get<int64_t> () > 1000000) {
 		return { .command = std::nullopt,
 			 .errorResponse = failure (id, "set-skip ids must be integers in 0..1000000") };
+	    }
+	}
+    }
+
+    if (cmd == "schedule-set") {
+	// the clock-driven playlist choice: enabled plus up to 8 boundaries, each a 24-hour time
+	// and a playlist the engine has been sent
+	if (!args.contains ("enabled") || !args["enabled"].is_boolean ()) {
+	    return { .command = std::nullopt, .errorResponse = failure (id, "schedule-set requires args.enabled, a boolean") };
+	}
+
+	if (!args.contains ("entries") || !args["entries"].is_array () || args["entries"].size () > 8) {
+	    return { .command = std::nullopt,
+		     .errorResponse = failure (id, "schedule-set requires args.entries, an array of at most 8") };
+	}
+
+	if (args["enabled"].get<bool> () && args["entries"].size () < 2) {
+	    return { .command = std::nullopt,
+		     .errorResponse = failure (id, "an enabled schedule needs at least two entries") };
+	}
+
+	for (const auto& entry : args["entries"]) {
+	    if (!entry.is_object () || !entry.contains ("at") || !entry["at"].is_string () || !entry.contains ("playlist")
+		|| !entry["playlist"].is_string () || !validBackgroundId (entry["playlist"].get<std::string> ())) {
+		return { .command = std::nullopt,
+			 .errorResponse = failure (id, "every entry needs at (HH:MM) and playlist [A-Za-z0-9_-]{1,64}") };
+	    }
+
+	    const auto at = entry["at"].get<std::string> ();
+
+	    if (at.size () != 5 || at[2] != ':' || !std::isdigit (at[0]) || !std::isdigit (at[1]) || !std::isdigit (at[3])
+		|| !std::isdigit (at[4]) || std::stoi (at.substr (0, 2)) > 23 || std::stoi (at.substr (3, 2)) > 59) {
+		return { .command = std::nullopt, .errorResponse = failure (id, "entry.at must be a 24-hour HH:MM") };
+	    }
+	}
+
+	std::set<std::string> minutes;
+
+	for (const auto& entry : args["entries"]) {
+	    if (!minutes.insert (entry["at"].get<std::string> ()).second) {
+		return { .command = std::nullopt, .errorResponse = failure (id, "two entries share the same time") };
 	    }
 	}
     }

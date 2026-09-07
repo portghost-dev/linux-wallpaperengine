@@ -170,6 +170,7 @@ def _test_schedule_packing_is_validated(sb) -> None:
     """T29's validation half: HH:MM 24-hour, or a rejection - never a coerced time."""
     assert sb.commit("SCHEDULE", "08:00=day;20:00=night") is True
     assert settings.load()["SCHEDULE"] == "08:00=day;20:00=night"
+    assert sb.commit("SCHEDULE", "08:00=day;08:00=night") is False, "two entries need two times"
     for bad in ("25:00=day", "8:00=day", "08:60=day", "0800=day", "08:00="):
         assert sb.commit("SCHEDULE", bad) is False, f"{bad} must be rejected"
     assert settings.load()["SCHEDULE"] == "08:00=day;20:00=night", "the store is unchanged"
@@ -370,11 +371,11 @@ def _test_open_logs_reaches_a_file_manager_never_a_terminal(sb) -> None:
           "spawns nothing, and names no terminal")
 
 
-def _test_schedule_ui_flag_is_off_by_default() -> None:
-    """T29's gate half: built and wired, and it does not render."""
-    assert C.SCHEDULE_UI is False, \
-        "the Schedule section ships gated off - nothing executes a schedule in the daemon era"
-    print("OK SCHEDULE_UI gate is False by default, with a named exit")
+def _test_schedule_ui_gate_is_gone() -> None:
+    """The Schedule section renders: the engine executes the schedule now, so the build-time
+    gate that hid an inert section has no reason left."""
+    assert not hasattr(C, "SCHEDULE_UI"), "the SCHEDULE_UI gate must not come back"
+    print("OK the Schedule section is ungated")
 
 
 def main() -> None:
@@ -405,7 +406,7 @@ def main() -> None:
     _test_system_truth_reads_the_live_unit_file(sb)
     _test_disk_usage_and_tombstones_are_two_facts(sb)
     _test_open_logs_reaches_a_file_manager_never_a_terminal(sb)
-    _test_schedule_ui_flag_is_off_by_default()
+    _test_schedule_ui_gate_is_gone()
 
     print("ALL settings bridge checks pass")
 

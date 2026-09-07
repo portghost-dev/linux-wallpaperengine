@@ -128,6 +128,40 @@ int nextInSeconds (const Lane& lane, const Playlist& playlist, Clock::time_point
 /** A new wallpaper is a new play: the clock restarts, and a paused lane's frozen remainder becomes the full interval. */
 void restartCountdown (Lane& lane, const Playlist& playlist, Clock::time_point now);
 
+/** One boundary of the schedule: from `minute` of the local day, the lane plays `slug`. */
+struct ScheduleEntry {
+    int minute = 0; /**< minutes since local midnight, 0..1439 */
+    std::string slug;
+};
+
+/** The lane's clock-driven playlist choice. Entries keep the order they were sent in: the first
+ *  is where day begins, the second where it ends; the span between them is day (R68). */
+struct Schedule {
+    bool enabled = false;
+    std::vector<ScheduleEntry> entries;
+    bool held = false;          /**< a manual switch is in force until the next boundary (R67) */
+    std::string pending;        /**< a boundary was crossed; applies when the countdown expires (R70) */
+    int lastMinute = -1;        /**< the local minute the tick last saw, for boundary detection */
+};
+
+/** The entry in force at `minute`: the latest boundary at or before it, wrapping to the last. -1 when none. */
+int scheduleIndexAt (const Schedule& schedule, int minute);
+/** The slug in force at `minute`, "" when the schedule has no entries. */
+std::string scheduleSlugAt (const Schedule& schedule, int minute);
+/** Minutes until the next boundary strictly after `minute` (wrapping past midnight); -1 when none. */
+int scheduleMinutesToBoundary (const Schedule& schedule, int minute);
+/** True when the span from `minute` of the first entry (day) is in force at `minute`. */
+bool scheduleIsDay (const Schedule& schedule, int minute);
+/** One tick of the clock: clears a hold at a crossed boundary and sets or clears the pending
+ *  switch against the lane's bound slug. Returns true when a boundary was crossed this tick. */
+bool scheduleTick (Schedule& schedule, const std::string& boundSlug, int minute);
+
+/** The same enabled flag and the same entries in the same order: a re-push, not a change. */
+bool sameSchedule (const Schedule& a, const Schedule& b);
+
+nlohmann::json toJson (const Schedule& schedule);
+Schedule scheduleFromJson (const nlohmann::json& j);
+
 /** Seat the clock after a restart: a running lane resumes its saved remainder less the downtime. */
 void resumeCountdown (Lane& lane, const Playlist& playlist, int remaining, int downtime, Clock::time_point now);
 

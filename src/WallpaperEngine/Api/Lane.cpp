@@ -836,3 +836,158 @@ nlohmann::json WallpaperEngine::Api::laneStatus (const Lane& lane, const Playlis
 	     { "web_disabled", false },
 	     { "fit", { { "zoom", lane.fit.zoom }, { "pan_x", lane.fit.panX }, { "pan_y", lane.fit.panY } } } };
 }
+
+int WallpaperEngine::Api::scheduleIndexAt (const Schedule& schedule, int minute) {
+    if (schedule.entries.empty ()) {
+	return -1;
+    }
+
+    // the latest boundary at or before the minute; before the first of the day, the last one
+    // is still in force from yesterday
+    int best = -1;
+    int bestMinute = -1;
+    int last = -1;
+    int lastMinute = -1;
+
+    for (size_t i = 0; i < schedule.entries.size (); i++) {
+	const int at = schedule.entries[i].minute;
+
+	if (at <= minute && at > bestMinute) {
+	    best = static_cast<int> (i);
+	    bestMinute = at;
+	}
+
+	if (at > lastMinute) {
+	    last = static_cast<int> (i);
+	    lastMinute = at;
+	}
+    }
+
+    return best >= 0 ? best : last;
+}
+
+std::string WallpaperEngine::Api::scheduleSlugAt (const Schedule& schedule, int minute) {
+    const int index = scheduleIndexAt (schedule, minute);
+    return index < 0 ? "" : schedule.entries[index].slug;
+}
+
+int WallpaperEngine::Api::scheduleMinutesToBoundary (const Schedule& schedule, int minute) {
+    if (schedule.entries.empty ()) {
+	return -1;
+    }
+
+    int best = -1;
+
+    for (const auto& entry : schedule.entries) {
+	int ahead = entry.minute - minute;
+
+	if (ahead <= 0) {
+	    ahead += 24 * 60;
+	}
+
+	if (best < 0 || ahead < best) {
+	    best = ahead;
+	}
+    }
+
+    return best;
+}
+
+bool WallpaperEngine::Api::scheduleIsDay (const Schedule& schedule, int minute) {
+    return scheduleIndexAt (schedule, minute) == 0;
+}
+
+bool WallpaperEngine::Api::scheduleTick (Schedule& schedule, const std::string& boundSlug, int minute) {
+    // a boundary was crossed when the entry in force changed since the last tick, or when a
+    // boundary minute lies inside the span the clock moved through (wrapping past midnight)
+    bool crossed = false;
+
+    // a backward step shorter than half a day is a clock correction, not a wrap: nothing crossed
+    const bool stepBack = schedule.lastMinute >= 0 && minute < schedule.lastMinute && schedule.lastMinute - minute < 12 * 60;
+
+    if (schedule.lastMinute >= 0 && schedule.lastMinute != minute && !stepBack) {
+	for (const auto& entry : schedule.entries) {
+	    const bool forward = schedule.lastMinute < minute;
+	    const bool inside = forward ? (entry.minute > schedule.lastMinute && entry.minute <= minute)
+					: (entry.minute > schedule.lastMinute || entry.minute <= minute);
+
+	    if (inside) {
+		crossed = true;
+	    }
+	}
+    }
+
+    schedule.lastMinute = minute;
+
+    if (!schedule.enabled) {
+	schedule.pending.clear ();
+	schedule.held = false;
+	return crossed;
+    }
+
+    if (crossed) {
+	schedule.held = false;
+    }
+
+    const auto want = schedule.held ? boundSlug : scheduleSlugAt (schedule, minute);
+    schedule.pending = (!want.empty () && want != boundSlug) ? want : "";
+    return crossed;
+}
+
+bool WallpaperEngine::Api::sameSchedule (const Schedule& a, const Schedule& b) {
+    if (a.enabled != b.enabled || a.entries.size () != b.entries.size ()) {
+	return false;
+    }
+
+    for (size_t i = 0; i < a.entries.size (); i++) {
+	if (a.entries[i].minute != b.entries[i].minute || a.entries[i].slug != b.entries[i].slug) {
+	    return false;
+	}
+    }
+
+    return true;
+}
+
+nlohmann::json WallpaperEngine::Api::toJson (const Schedule& schedule) {
+    nlohmann::json entries = nlohmann::json::array ();
+
+    for (const auto& entry : schedule.entries) {
+	entries.push_back ({ { "minute", entry.minute }, { "playlist", entry.slug } });
+    }
+
+    return { { "enabled", schedule.enabled },
+	     { "entries", entries },
+	     { "held", schedule.held },
+	     { "pending", schedule.pending } };
+}
+
+Schedule WallpaperEngine::Api::scheduleFromJson (const nlohmann::json& j) {
+    Schedule schedule;
+
+    if (!j.is_object ()) {
+	return schedule;
+    }
+
+    schedule.enabled = j.value ("enabled", false);
+    schedule.held = j.value ("held", false);
+    schedule.pending = j.value ("pending", "");
+
+    if (j.contains ("entries") && j["entries"].is_array ()) {
+	for (const auto& item : j["entries"]) {
+	    if (!item.is_object () || !item.contains ("minute") || !item["minute"].is_number_integer ()
+		|| !item.contains ("playlist") || !item["playlist"].is_string ()) {
+		continue;
+	    }
+
+	    const int minute = item["minute"].get<int> ();
+
+	    if (minute < 0 || minute >= 24 * 60) {
+		continue;
+	    }
+
+	    schedule.entries.push_back ({ .minute = minute, .slug = item["playlist"].get<std::string> () });
+	}
+    }
+
+    return schedule;
+}

@@ -83,15 +83,6 @@ class SettingsBridge(QObject):
             return None
         return self._load().get(str(key), spec["default"])
 
-    @Slot(result=bool)
-    def scheduleUi(self) -> bool:
-        """The Schedule section's build-time gate. False = it does not render.
-
-        Not dim, not disabled-and-visible: absent. A visible-but-inert section is the same
-        lie in a quieter voice, and nothing executes the schedule in the daemon era.
-        """
-        return bool(C.SCHEDULE_UI)
-
     def _validate(self, key: str, value: Any) -> tuple[bool, Any, str]:
         """(ok, coerced, reason). Range/choice truth comes from SETTINGS_SCHEMA only."""
         spec = C.SETTINGS_SCHEMA.get(key)
@@ -144,12 +135,16 @@ class SettingsBridge(QObject):
         """`HH:MM=slug;HH:MM=slug` (constants.py SCHEDULE) - 24-hour, rejected not clamped."""
         if packed.strip() == "":
             return True, "", ""
+        times: list[str] = []
         for entry in packed.split(";"):
             if not entry.strip():
                 continue
             head, _, slug = entry.partition("=")
             if not _TIME_RE.match(head.strip()) or not slug.strip():
                 return False, None, "Use a 24-hour time, like 07:30."
+            times.append(head.strip())
+        if len(times) != len(set(times)):
+            return False, None, "Day and night need two different times."
         return True, packed, ""
 
     @Slot(str, result=str)

@@ -251,9 +251,18 @@ def playlist_set(
 
 
 def lanes_set(lanes: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Bind lanes to playlists. Each lane is {id, playlist?, enabled?, group?, fit?}; the
-    engine refuses a playlist it has not been sent and returns every lane's status."""
+    """Bind lanes to playlists. Each lane is {id, playlist?, enabled?, group?, fit?, manual?};
+    the engine refuses a playlist it has not been sent and returns every lane's status. With
+    the schedule on, a playlist change is honoured only with manual=True (the user's own
+    switch, held until the next boundary); a policy push keeps the engine's binding."""
     return request("lanes-set", {"lanes": list(lanes)})
+
+
+def schedule_set(enabled: bool, entries: list[dict[str, str]]) -> dict[str, Any] | None:
+    """The clock-driven playlist choice, executed by the engine. `entries` are
+    {at: "HH:MM", playlist: slug} in stored order: the first is where day begins, the second
+    where it ends (R68). Every playlist named must have been sent with playlist-set first."""
+    return request("schedule-set", {"enabled": bool(enabled), "entries": list(entries)})
 
 
 def next_wallpaper() -> dict[str, Any] | None:

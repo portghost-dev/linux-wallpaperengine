@@ -21,10 +21,16 @@ Item {
         // (this exact trap froze the settings segment highlights in B6). Re-read on the
         // settings-changed pump instead.
         function onSettingsChanged() { strip.refreshSchedule() }
+        function onStatusChanged() { strip.refreshSchedule() }
     }
 
     property bool schedEnabled: false
-    function refreshSchedule() { schedEnabled = backend.getSetting("SCHEDULE_ENABLED") === true }
+    property bool schedIsDay: true
+    function refreshSchedule() {
+        var st = backend.scheduleState();
+        schedEnabled = st.enabled === true;
+        schedIsDay = st.is_day !== false;
+    }
     signal scheduleRequested()
 
     function menuY(menu) { return strip.opensUp ? -menu.height - 4 : strip.height + 4 }
@@ -60,10 +66,10 @@ Item {
                 property bool dimmed: false
                 property bool textPrimary: false
                 property bool chevron: false
-                property bool moon: false
+                property string icon: ""         // "" | "moon" | "sun"
                 property bool clock: false
                 property bool inert: false         // the reserved cell: no hover, no tap (R39)
-                property color moonColor: Theme.textTertiary
+                property color iconColor: Theme.textTertiary
                 property bool tinted: false        // status tint, distinct from `filled`
                 property color tintColor: "transparent"
                 property int fixedWidth: 0         // 0 = size to content
@@ -103,10 +109,18 @@ Item {
                     anchors.centerIn: parent
                     spacing: Theme.spacingXs
                     IconMoon {
+                        objectName: "cellMoon"
                         anchors.verticalCenter: parent.verticalCenter
-                        visible: seg.moon
+                        visible: seg.icon === "moon"
                         size: 14
-                        color: seg.moonColor
+                        color: seg.iconColor
+                    }
+                    IconSun {
+                        objectName: "cellSun"
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: seg.icon === "sun"
+                        size: 14
+                        color: seg.iconColor
                     }
                     IconClock {
                         anchors.verticalCenter: parent.verticalCenter
@@ -133,12 +147,15 @@ Item {
 
             StripSegment {
                 objectName: "cellSchedule"
-                moon: true
+                // spec 3.3: sun by day, moon by night, following the day range even when the
+                // schedule is off; on, the icon takes amber by day and the accent by night
+                icon: strip.schedIsDay ? "sun" : "moon"
                 fixedWidth: 28
                 roundLeft: true
-                moonColor: strip.schedEnabled ? Theme.accent : Theme.textTertiary
+                iconColor: !strip.schedEnabled ? "#A0A0A0" : (strip.schedIsDay ? Theme.warning : Theme.accent)
                 tinted: strip.schedEnabled
-                tintColor: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.15)
+                tintColor: strip.schedIsDay ? Qt.rgba(Theme.warning.r, Theme.warning.g, Theme.warning.b, 0.16)
+                                            : Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.16)
                 onTapped: strip.scheduleRequested()
             }
             Divider {}

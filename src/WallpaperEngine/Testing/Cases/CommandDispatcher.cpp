@@ -248,6 +248,9 @@ TEST_CASE ("fit window args are validated on show and set-fit", "[dispatcher]") 
 	R"({"id":1,"cmd":"set-fit","args":{"lane":"all","pan_x":0.25,"pan_y":-0.25}})",
 	R"({"id":1,"cmd":"set-fit","args":{"layer":"wallpaper","zoom":1.5}})",
 	R"({"id":1,"cmd":"set-fit","args":{"layer":"lane","pan_y":1}})",
+	R"({"id":1,"cmd":"schedule-set","args":{"enabled":true,"entries":[{"at":"08:00","playlist":"day"},{"at":"20:00","playlist":"night"}]}})",
+	R"({"id":1,"cmd":"schedule-set","args":{"enabled":false,"entries":[]}})",
+	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all","playlist":"party","manual":true}]}})",
     };
 
     for (const auto& line : good) {
@@ -269,6 +272,13 @@ TEST_CASE ("fit window args are validated on show and set-fit", "[dispatcher]") 
 	R"({"id":1,"cmd":"set-fit","args":{"pan_x":"left"}})",
 	R"({"id":1,"cmd":"set-fit","args":{"layer":"scene","zoom":1.5}})",
 	R"({"id":1,"cmd":"set-fit","args":{"layer":2,"zoom":1.5}})",
+	R"({"id":1,"cmd":"schedule-set","args":{"entries":[]}})",
+	R"({"id":1,"cmd":"schedule-set","args":{"enabled":true,"entries":[{"at":"08:00","playlist":"day"}]}})",
+	R"({"id":1,"cmd":"schedule-set","args":{"enabled":true,"entries":[{"at":"8:00","playlist":"day"},{"at":"20:00","playlist":"night"}]}})",
+	R"({"id":1,"cmd":"schedule-set","args":{"enabled":true,"entries":[{"at":"24:00","playlist":"day"},{"at":"20:00","playlist":"night"}]}})",
+	R"({"id":1,"cmd":"schedule-set","args":{"enabled":true,"entries":[{"at":"08:00","playlist":"../day"},{"at":"20:00","playlist":"night"}]}})",
+	R"({"id":1,"cmd":"lanes-set","args":{"lanes":[{"id":"all","manual":"yes"}]}})",
+	R"({"id":1,"cmd":"schedule-set","args":{"enabled":true,"entries":[{"at":"08:00","playlist":"day"},{"at":"08:00","playlist":"night"}]}})",
     };
 
     for (const auto& line : bad) {

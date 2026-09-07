@@ -95,15 +95,11 @@ def main() -> None:
     b.setActivePlaylist(ap["slug"])
     assert b.activePlaylist()["slug"] == ap["slug"]
 
-    s = settings.load()
-    s["SCHEDULE_ENABLED"] = True
-    settings.save(s)
+    # a manual switch is the user's own: the engine holds it until the next boundary (R67);
+    # the old marker file is gone with the watcher that read it
+    assert not hasattr(paths, "manual_hold_file")
     b.setActivePlaylist(slug2)
-    assert paths.manual_hold_file().exists()
-    paths.manual_hold_file().unlink()
-    s = settings.load()
-    s["SCHEDULE_ENABLED"] = False
-    settings.save(s)
+    assert b.activePlaylist()["slug"] == slug2
 
     b.setActivePlaylist(ap["slug"])
     b.trashWallpaper("200")

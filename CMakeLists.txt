@@ -615,6 +615,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/LaneHistory.cpp
         src/WallpaperEngine/Testing/Cases/MirrorOwner.cpp
         src/WallpaperEngine/Testing/Cases/FitWindow.cpp
+        src/WallpaperEngine/Testing/Cases/Schedule.cpp
         src/WallpaperEngine/Testing/Cases/CommandDispatcher.cpp)
 endif()
 

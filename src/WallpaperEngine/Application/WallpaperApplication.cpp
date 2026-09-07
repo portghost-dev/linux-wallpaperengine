@@ -1355,7 +1355,8 @@ void WallpaperApplication::processApiRequests () {
 							      "set-app-conditions",
 							      "playlist-set",
 							      "lanes-set",
-							      "set-fit" };
+							      "set-fit",
+							      "schedule-set" };
 
 	if (MUTATING_VERBS.find (outcome.command->cmd) != MUTATING_VERBS.end ()) {
 	    this->persistRuntimeState ();
@@ -1431,6 +1432,11 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	return;
     }
 
+    if (command.cmd == "schedule-set") {
+	this->apiScheduleSet (client, command.id, command.args);
+	return;
+    }
+
     if (command.cmd == "next" || command.cmd == "prev") {
 	// transport verbs: ack-then-done like show - a heavy scene loads for seconds
 	const auto backEntry = Api::backTarget (this->lane (), this->playlistOf (this->lane ()));
@@ -1453,6 +1459,14 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 
 	if (this->m_releaseReason != ReleaseReason::Live && !this->apiAcquireOutputs (error)) {
 	    this->m_commandServer->respond (client, Api::CommandDispatcher::failure (command.id, error));
+	    return;
+	}
+
+	// a boundary crossed since the last advance: the step lands on the new playlist (R70)
+	if (this->applyPendingSchedule ()) {
+	    this->m_commandServer->respond (
+		client, Api::CommandDispatcher::done (command.id, { { "id", this->lane ().current.id } })
+	    );
 	    return;
 	}
 
@@ -1931,6 +1945,24 @@ nlohmann::json WallpaperApplication::apiStatus () const {
 	lanes.push_back (block);
     }
     result["lanes"] = lanes;
+    {
+	const int minute = localMinute ();
+	nlohmann::json entries = nlohmann::json::array ();
+
+	for (const auto& entry : this->m_schedule.entries) {
+	    char at[16];
+	    std::snprintf (at, sizeof at, "%02d:%02d", entry.minute / 60, entry.minute % 60);
+	    entries.push_back ({ { "at", at }, { "playlist", entry.slug } });
+	}
+
+	result["schedule"] = { { "enabled", this->m_schedule.enabled },
+			       { "entries", entries },
+			       { "active", Api::scheduleSlugAt (this->m_schedule, minute) },
+			       { "is_day", Api::scheduleIsDay (this->m_schedule, minute) },
+			       { "next_boundary_s", std::max (-1, Api::scheduleMinutesToBoundary (this->m_schedule, minute) * 60) },
+			       { "held", this->m_schedule.held },
+			       { "pending", this->m_schedule.pending } };
+    }
     nlohmann::json groups = nlohmann::json::array ();
     for (const auto& [key, group] : this->m_groups) {
 	groups.push_back (Api::toJson (group));
@@ -2495,25 +2527,27 @@ void WallpaperApplication::apiLanesSet (int client, int64_t requestId, const nlo
 	    }
 	}
 
-	const auto slug = item.contains ("playlist") ? item["playlist"].get<std::string> () : lane.playlistSlug;
+	auto slug = item.contains ("playlist") ? item["playlist"].get<std::string> () : lane.playlistSlug;
 	const bool enabled = item.contains ("enabled") ? item["enabled"].get<bool> () : lane.enabled;
+	const bool manual = item.value ("manual", false);
+
+	// with the schedule on, the slug is the clock's to choose: a policy push keeps the
+	// engine's binding, a manual switch holds until the next boundary (R67, R69)
+	if (this->m_schedule.enabled && slug != lane.playlistSlug) {
+	    if (manual) {
+		this->m_schedule.held = true;
+		this->m_schedule.pending.clear ();
+	    } else {
+		sLog.out ("API: lanes-set playlist ", slug, " ignored: the schedule owns the lane");
+		slug = lane.playlistSlug;
+	    }
+	}
+
 	const bool rebind = slug != lane.playlistSlug;
 
 	// a fit-only push leaves the walk and its clock alone
 	if (rebind || enabled != lane.enabled) {
-	    auto& playlist = this->playlist (slug);
-	    const Api::Playlist incoming = playlist;
-
-	    if (rebind) {
-		// another playlist is another walk: nothing of the old cycle carries over
-		lane.playlistSlug = slug;
-		lane.frozenRemainingSeconds = -1;
-		lane.walk.clear ();
-		lane.nextCycle.clear ();
-		lane.cursor = -1;
-	    }
-
-	    Api::applySet (lane, playlist, incoming, enabled, now);
+	    this->bindLane (lane, slug, enabled, now);
 	}
 
 	if (item.contains ("fit") && item["fit"].is_object ()) {
@@ -2538,6 +2572,146 @@ void WallpaperApplication::apiLanesSet (int client, int64_t requestId, const nlo
     }
 
     this->m_commandServer->respond (client, Api::CommandDispatcher::done (requestId, { { "lanes", lanes } }));
+}
+
+void WallpaperApplication::bindLane (
+    Api::Lane& lane, const std::string& slug, bool enabled, std::chrono::steady_clock::time_point now
+) {
+    auto& playlist = this->playlist (slug);
+    const Api::Playlist incoming = playlist;
+
+    if (slug != lane.playlistSlug) {
+	// another playlist is another walk: nothing of the old cycle carries over
+	lane.playlistSlug = slug;
+	lane.frozenRemainingSeconds = -1;
+	lane.walk.clear ();
+	lane.nextCycle.clear ();
+	lane.cursor = -1;
+    }
+
+    Api::applySet (lane, playlist, incoming, enabled, now);
+}
+
+int WallpaperApplication::localMinute () {
+    const std::time_t seconds = std::time (nullptr);
+    std::tm local {};
+    localtime_r (&seconds, &local);
+    return local.tm_hour * 60 + local.tm_min;
+}
+
+void WallpaperApplication::tickSchedule () {
+    if (Api::scheduleTick (this->m_schedule, this->lane ().playlistSlug, localMinute ())) {
+	sLog.out (
+	    "API: schedule boundary at minute ", this->m_schedule.lastMinute,
+	    this->m_schedule.pending.empty () ? std::string (", nothing to switch")
+					      : ", switching to " + this->m_schedule.pending + " when the countdown expires"
+	);
+	this->persistRuntimeState ();
+    }
+
+    // a static playlist has no countdown to wait for: the switch lands at the boundary
+    if (!this->m_schedule.pending.empty () && this->playlistOf (this->lane ()).order == "static"
+	&& this->m_releaseReason == ReleaseReason::Live) {
+	this->applyPendingSchedule ();
+    }
+}
+
+bool WallpaperApplication::applyPendingSchedule () {
+    const auto slug = this->m_schedule.pending;
+
+    if (slug.empty ()) {
+	return false;
+    }
+
+    this->m_schedule.pending.clear ();
+
+    if (this->m_playlists.find (slug) == this->m_playlists.end ()) {
+	sLog.error ("API: schedule names playlist ", slug, " which the engine was never sent; staying put");
+	return false;
+    }
+
+    auto& lane = this->lane ();
+    this->bindLane (lane, slug, lane.enabled, std::chrono::steady_clock::now ());
+    Api::jumpToEnd (lane);
+    std::string error;
+    const auto& playlist = this->playlistOf (lane);
+
+    // a static playlist shows its first scene: the user orders the playlist to choose it
+    if (playlist.order == "static" && !playlist.entries.empty ()) {
+	const auto entry = playlist.entries.front ();
+	const auto path = resolveLibraryBackground (entry.id);
+
+	if (!path.has_value () || !this->preflightWallpaper (path->string ())) {
+	    error = "first entry no longer resolves: " + entry.id;
+	} else if (!this->makeAnyViewportCurrent ()) {
+	    error = "no active viewport to switch on";
+	} else if (this->applyShowCore (*path, entry.args, true, error)) {
+	    Api::seatCursor (lane, Api::displayId (entry));
+	    Api::restartCountdown (lane, playlist, std::chrono::steady_clock::now ());
+	    error.clear ();
+	}
+    } else if (!this->apiRotationAdvance (error)) {
+	// error carries the reason
+    } else {
+	error.clear ();
+    }
+
+    if (error.empty ()) {
+	sLog.out ("API: schedule switched the lane to ", slug);
+    } else {
+	sLog.error ("API: schedule switch to ", slug, " bound but could not show: ", error);
+    }
+
+    this->persistRuntimeState ();
+    return true;
+}
+
+void WallpaperApplication::apiScheduleSet (int client, int64_t requestId, const nlohmann::json& args) {
+    Api::Schedule incoming;
+    incoming.enabled = args["enabled"].get<bool> ();
+
+    for (const auto& entry : args["entries"]) {
+	const auto slug = entry["playlist"].get<std::string> ();
+
+	if (this->m_playlists.find (slug) == this->m_playlists.end ()) {
+	    this->m_commandServer->respond (
+		client,
+		Api::CommandDispatcher::failure (requestId, "unknown playlist '" + slug + "': send playlist-set first")
+	    );
+	    return;
+	}
+
+	const auto at = entry["at"].get<std::string> ();
+	incoming.entries.push_back (
+	    { .minute = std::stoi (at.substr (0, 2)) * 60 + std::stoi (at.substr (3, 2)), .slug = slug }
+	);
+    }
+
+    // a re-push of the same schedule keeps the hold and the pending switch (R67); a changed
+    // one starts clean, and the clock decides on the next tick
+    if (Api::sameSchedule (incoming, this->m_schedule)) {
+	incoming.held = this->m_schedule.held;
+	incoming.pending = this->m_schedule.pending;
+	incoming.lastMinute = this->m_schedule.lastMinute;
+    }
+
+    this->m_schedule = incoming;
+    Api::scheduleTick (this->m_schedule, this->lane ().playlistSlug, localMinute ());
+    sLog.out (
+	"API: schedule ", incoming.enabled ? "enabled" : "disabled", " with ", incoming.entries.size (), " entries",
+	this->m_schedule.pending.empty () ? std::string ()
+					  : ", switching to " + this->m_schedule.pending + " when the countdown expires"
+    );
+
+    this->m_commandServer->respond (
+	client,
+	Api::CommandDispatcher::done (
+	    requestId,
+	    { { "enabled", this->m_schedule.enabled },
+	      { "active", Api::scheduleSlugAt (this->m_schedule, localMinute ()) },
+	      { "pending", this->m_schedule.pending } }
+	)
+    );
 }
 
 WallpaperEngine::Render::WallpaperState::Fit WallpaperApplication::effectiveFit () const {
@@ -2809,6 +2983,7 @@ void WallpaperApplication::persistRuntimeState () const {
     state["lanes"] = lanes;
     state["playlists"] = playlists;
     state["groups"] = groups;
+    state["schedule"] = Api::toJson (this->m_schedule);
     state["paused"] = this->m_manualPauseRequested.load ();
     state["fps"] = this->m_context.settings.render.maximumFPS;
     state["volume"] = this->m_context.settings.audio.volume;
@@ -3019,6 +3194,9 @@ void WallpaperApplication::restoreRuntimeState () {
 		    const auto group = Api::groupFromJson (item);
 		    this->m_groups[group.key] = group;
 		}
+	    }
+	    if (state.contains ("schedule")) {
+		this->m_schedule = Api::scheduleFromJson (state["schedule"]);
 	    }
 	    if (state.contains ("lanes") && state["lanes"].is_array ()) {
 		const auto nowWall = std::chrono::duration_cast<std::chrono::seconds> (
@@ -3447,6 +3625,10 @@ void WallpaperApplication::tickApiRotation () {
 	return;
     }
 
+    if (this->applyPendingSchedule ()) {
+	return;
+    }
+
     // the timer always advances the walk; a backed-up lane first moves to its newest item,
     // and keeps its books when the advance fails so status never runs ahead of the screen
     const Api::Lane saved = lane;
@@ -3477,6 +3659,7 @@ void WallpaperApplication::show () {
 	this->markBootSurvived ();
 	this->tickFullscreenGate ();
 	this->tickAppCondition ();
+	this->tickSchedule ();
 	this->tickApiRotation ();
 	this->tickDeadman ();
 

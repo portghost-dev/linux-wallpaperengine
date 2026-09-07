@@ -132,12 +132,6 @@ def draft_file(wid: str) -> Path:
     return draft_dir() / f"{wid}.conf"
 
 
-def manual_hold_file() -> Path:
-    """Marker the app drops on a manual playlist switch while a schedule is enabled; the
-    watcher honors ACTIVE_PLAYLIST until the next boundary, then deletes it."""
-    return state_dir() / "playlist-manual-hold"
-
-
 def default_engine_bin() -> Path:
     """Where install.sh puts the engine."""
     return _home() / ".local/lib/lwe-engine/linux-wallpaperengine"

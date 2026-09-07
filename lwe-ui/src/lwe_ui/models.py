@@ -14,6 +14,7 @@ is plain stdlib + the already-written storage/discovery modules.
 from __future__ import annotations
 
 import os
+import time
 import shutil
 import subprocess
 import threading
@@ -37,7 +38,7 @@ from . import api_client
 from . import constants as C
 from .discovery import project
 from .library_order import LibraryOrderModel
-from .storage import atomic, meta, paths, playlists, settings, tags, wp
+from .storage import meta, paths, playlists, settings, tags, wp
 
 # Role ids for LibraryModel. Start past Qt.UserRole so they never collide with built-ins.
 _ROLE_ID = Qt.ItemDataRole.UserRole + 1
@@ -638,6 +639,7 @@ class Backend(QObject):
         # in-memory rotation set / ui_id / history are EMPTY (leak-guard recycle,
         # crash restart, cutover idle boot) - the poll re-pushes on transition
         self._engine_pid_seen: int | None = None
+        self._schedule_held = False
         # (monotonic, frames, pid) baseline for the measured frame rate. The engine
         # reports a CUMULATIVE frame count, so a rate needs two samples; the pid is
         # part of the key because a fresh engine restarts the counter at zero.
@@ -827,12 +829,26 @@ class Backend(QObject):
                 "interval": int(d.get("INTERVAL", 900)), "unit": d.get("UNIT", "min"),
                 "count": len(str(d.get("MEMBERS", "")).split())}
 
-    def _after_playlist_change(self) -> None:
+    def _follow_engine_playlist(self, slug: str) -> None:
+        """Adopt the playlist the engine's schedule switched to, grid membership included; no
+        push back, the engine is the source."""
+        try:
+            playlists.set_active(slug)
+        except Exception:
+            return
+        try:
+            self._model.reload(self._active_members())
+        except Exception:
+            pass
+        self.countChanged.emit()
+        self.playlistsChanged.emit()
+
+    def _after_playlist_change(self, manual: bool = False) -> None:
         self._model.reload(self._active_members())
         self.countChanged.emit()
         self.playlistsChanged.emit()
         try:
-            self._sync_engine()
+            self._sync_engine(manual=manual)
         except Exception:
             pass
 
@@ -842,13 +858,8 @@ class Backend(QObject):
             playlists.set_active(slug)
         except Exception:
             return
-        # manual switch under an enabled schedule holds until the next boundary (v1.0 5.1)
-        try:
-            if bool(settings.load().get("SCHEDULE_ENABLED")):
-                atomic.atomic_write_text(paths.manual_hold_file(), "held\n")
-        except Exception:
-            pass
-        self._after_playlist_change()
+        # the user's own switch: under a schedule the engine holds it until the next boundary
+        self._after_playlist_change(manual=True)
 
     @Slot(str, result=str)
     def createPlaylist(self, name: str) -> str:
@@ -967,6 +978,81 @@ class Backend(QObject):
         except (OSError, subprocess.SubprocessError):
             return False
 
+    def _schedule_entries(self) -> list[dict[str, str]]:
+        """The stored SCHEDULE as the engine's entries, in stored order (row 1 is where day
+        begins, row 2 where it ends, R68); an entry naming a missing playlist is dropped."""
+        packed = str(self._setting("SCHEDULE", "") or "")
+        out: list[dict[str, str]] = []
+        for item in packed.split(";"):
+            head, _, slug = item.strip().partition("=")
+            head, slug = head.strip(), slug.strip()
+            if not head or not slug or not paths.is_safe_wid(slug):
+                continue
+            if not paths.playlist_file(slug).exists():
+                continue
+            out.append({"at": head, "playlist": slug})
+        return out
+
+    def _schedule_enabled(self) -> bool:
+        return bool(self._setting("SCHEDULE_ENABLED", False)) and len(self._schedule_entries()) >= 2
+
+    @staticmethod
+    def _to_minute(text: str) -> int:
+        try:
+            h, m = str(text).split(":")
+            return int(h) * 60 + int(m)
+        except (TypeError, ValueError):
+            return -1
+
+    def _day_range(self) -> tuple[int, int]:
+        """Where day begins and ends in minutes of the local day, from the stored times even
+        when the schedule is off; the modal's defaults when nothing is stored (R68)."""
+        packed = str(self._setting("SCHEDULE", "") or "")
+        times = [self._to_minute(item.partition("=")[0]) for item in packed.split(";") if item.strip()]
+        times = [t for t in times if t >= 0]
+        if len(times) >= 2:
+            return times[0], times[1]
+        return 8 * 60, 20 * 60
+
+    @staticmethod
+    def _is_day_at(minute: int, day_from: int, day_to: int) -> bool:
+        if day_from <= day_to:
+            return day_from <= minute < day_to
+        return minute >= day_from or minute < day_to
+
+    @Slot(result=bool)
+    def scheduleIsDay(self) -> bool:
+        """Is the local time inside the day range now? Drives the deck cell's sun or moon."""
+        now = time.localtime()
+        day_from, day_to = self._day_range()
+        return self._is_day_at(now.tm_hour * 60 + now.tm_min, day_from, day_to)
+
+    @Slot(result="QVariantMap")
+    def scheduleState(self) -> dict:
+        """What the cell needs: whether the schedule is on, day or night now, and whether a
+        manual switch is holding (from the last engine status)."""
+        return {"enabled": self._schedule_enabled(), "is_day": self.scheduleIsDay(),
+                "held": bool(self._schedule_held)}
+
+    def _push_schedule(self) -> bool:
+        """Send every scheduled playlist the engine does not already hold from the active push,
+        then the schedule itself. Returns False when anything was refused."""
+        try:
+            entries = self._schedule_entries()
+            active = self._active_slug() or "default"
+            for slug in sorted({e["playlist"] for e in entries} - {active}):
+                e, interval, order, enabled, label = self._playlist_payload(slug)
+                parts = split_playlist_parts(e)
+                for number, part in enumerate(parts, start=1):
+                    reply = api_client.playlist_set(slug, part, order, interval, part=number,
+                                                    of=len(parts), label=label)
+                    if reply is None or not reply.get("ok"):
+                        return False
+            reply = api_client.schedule_set(self._schedule_enabled(), entries)
+            return bool(reply is not None and reply.get("ok"))
+        except Exception:
+            return False
+
     def _playlist_payload(self, slug: str) -> tuple[list, int, str, bool, str]:
         """Resolve one stored playlist into the engine's terms: (entries in stored order,
         interval_s, order, enabled, label). Each entry is a complete resolved show-args
@@ -1012,11 +1098,13 @@ class Backend(QObject):
         except Exception:
             pass
 
-    def _sync_engine(self) -> None:
-        """Push the active playlist to the engine by slug, in parts, then bind the lane
-        to it (policy push). The engine owns the walk and the schedule; the panel owns
-        resolution. Best-effort by design: a dead socket is retried by the status poll's
-        pid-change tracker, never surfaced to the caller."""
+    def _sync_engine(self, manual: bool = False) -> None:
+        """Push the active playlist to the engine by slug, in parts, then the scheduled
+        playlists and the schedule, then bind the lane (policy push). The engine owns the
+        walk and the schedule; the panel owns resolution. `manual` marks the user's own
+        playlist switch, which the engine holds until the next boundary (R67). Best-effort by
+        design: a dead socket is retried by the status poll's pid-change tracker, never
+        surfaced to the caller."""
         try:
             if not api_client.available():
                 return
@@ -1028,7 +1116,12 @@ class Backend(QObject):
                                                 of=len(parts), label=label)
                 if reply is None or not reply.get("ok"):
                     return  # a refused part must never bind a half-sent playlist
-            api_client.lanes_set([{"id": "all", "playlist": slug, "enabled": enabled}])
+            # a refused or unknown schedule must not leave the lane unbound
+            self._push_schedule()
+            lane: dict[str, Any] = {"id": "all", "playlist": slug, "enabled": enabled}
+            if manual:
+                lane["manual"] = True
+            api_client.lanes_set([lane])
         except Exception:
             pass
 
@@ -1977,6 +2070,16 @@ class Backend(QObject):
                     result["order"] = str(lane.get("order") or "")
                     result["next_up"] = str(lane.get("next") or "")
                     result["back_enabled"] = bool(lane.get("back_enabled", True))
+                    # the schedule executes in the engine: while it is on, the engine's bound
+                    # playlist is the active one and the panel follows it (R69)
+                    sched = api.get("schedule")
+                    if isinstance(sched, dict):
+                        self._schedule_held = bool(sched.get("held"))
+                        result["schedule_pending"] = str(sched.get("pending") or "")
+                        bound = str(lane.get("playlist") or "")
+                        if sched.get("enabled") and bound and bound != self._active_slug() \
+                                and paths.playlist_file(bound).exists():
+                            self._follow_engine_playlist(bound)
 
                 outs = api.get("outputs")
                 if isinstance(outs, dict):

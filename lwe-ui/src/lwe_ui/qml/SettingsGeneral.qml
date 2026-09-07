@@ -57,8 +57,6 @@ Column {
         objectName: "scheduleSection"
         width: parent.width
         spacing: 0
-        visible: settingsBridge.scheduleUi()
-        height: visible ? implicitHeight : 0
 
         readonly property bool on: page.val("SCHEDULE_ENABLED") === true
         readonly property var packed: String(page.val("SCHEDULE") || "").split(";")
