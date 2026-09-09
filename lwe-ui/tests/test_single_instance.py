@@ -51,6 +51,22 @@ def main() -> None:
     guard.close()
     assert not sock.exists(), "close must release the socket file"
 
+    # the tray's Exit rides the same socket as a second verb; "show" still presents
+    quits = {"n": 0}
+    owner = single_instance.acquire(lambda: presented.__setitem__("n", presented["n"] + 1),
+                                    lambda: quits.__setitem__("n", quits["n"] + 1))
+    assert owner is not None
+    before = presented["n"]
+    assert single_instance.request_quit() is True
+    QTest.qWait(100)
+    assert quits["n"] == 1 and presented["n"] == before, "quit must reach on_quit and not present"
+    assert single_instance.notify_running() is True
+    QTest.qWait(100)
+    assert presented["n"] == before + 1 and quits["n"] == 1, "show still presents"
+    assert single_instance.request_quit(single_instance.tray_socket_path()) is False, "no tray, no taker"
+    owner.close()
+    assert not sock.exists()
+
     sock.parent.mkdir(parents=True, exist_ok=True)
     sock.touch()
     takeover = single_instance.acquire(lambda: None)

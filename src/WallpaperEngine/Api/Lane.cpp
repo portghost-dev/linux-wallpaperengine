@@ -16,8 +16,12 @@ std::vector<std::string> idsOf (const Playlist& playlist) {
     return ids;
 }
 
+int64_t elapsedMs (const Lane& lane, Clock::time_point now) {
+    return std::chrono::duration_cast<std::chrono::milliseconds> (now - lane.lastShow).count ();
+}
+
 int elapsedSeconds (const Lane& lane, Clock::time_point now) {
-    return static_cast<int> (std::chrono::duration_cast<std::chrono::seconds> (now - lane.lastShow).count ());
+    return static_cast<int> (elapsedMs (lane, now) / 1000);
 }
 
 nlohmann::json floatsToJson (const std::array<float, 4>& v) { return { v[0], v[1], v[2], v[3] }; }
@@ -298,7 +302,7 @@ void WallpaperEngine::Api::applySet (
     const auto previousIds = idsOf (playlist);
     const bool wasEnabled = lane.enabled;
     const int previousInterval = playlist.intervalSeconds;
-    const int frozen = lane.frozenRemainingSeconds;
+    const int64_t frozen = lane.frozenRemainingMs;
     const bool wasStatic = playlist.order == "static";
 
     // a change between ordered and shuffled starts a fresh walk: the cycle was drawn for the old kind
@@ -330,25 +334,27 @@ void WallpaperEngine::Api::applySet (
 
     if (sameSet && lane.enabled == wasEnabled && !leftStatic) {
 	// the same set in the same state is a re-push, not a new play: the clock runs on
-	if (!lane.enabled && lane.frozenRemainingSeconds < 0) {
-	    lane.frozenRemainingSeconds = playlist.intervalSeconds;
+	if (!lane.enabled && lane.frozenRemainingMs < 0) {
+	    lane.frozenRemainingMs = int64_t (playlist.intervalSeconds) * 1000;
 	}
     } else if (!lane.enabled) {
 	// a pause is a true pause: the same set freezes where its countdown stood
+	const int64_t intervalMs = int64_t (playlist.intervalSeconds) * 1000;
+
 	if (sameSet && frozen >= 0) {
-	    lane.frozenRemainingSeconds = frozen;
+	    lane.frozenRemainingMs = frozen;
 	} else if (sameSet && wasEnabled) {
-	    lane.frozenRemainingSeconds
-		= std::clamp (playlist.intervalSeconds - elapsedSeconds (lane, now), 0, playlist.intervalSeconds);
+	    // the fraction of a second is kept: pause and resume hand nothing back
+	    lane.frozenRemainingMs = std::clamp (intervalMs - elapsedMs (lane, now), int64_t (0), intervalMs);
 	} else {
-	    lane.frozenRemainingSeconds = playlist.intervalSeconds;
+	    lane.frozenRemainingMs = intervalMs;
 	}
     } else if (sameSet && !wasEnabled && frozen >= 0 && !leftStatic) {
-	lane.lastShow = now - std::chrono::seconds (playlist.intervalSeconds - frozen);
-	lane.frozenRemainingSeconds = -1;
+	lane.lastShow = now - std::chrono::milliseconds (int64_t (playlist.intervalSeconds) * 1000 - frozen);
+	lane.frozenRemainingMs = -1;
     } else {
 	lane.lastShow = now;
-	lane.frozenRemainingSeconds = -1;
+	lane.frozenRemainingMs = -1;
     }
 }
 
@@ -363,24 +369,25 @@ bool WallpaperEngine::Api::dueForAdvance (const Lane& lane, const Playlist& play
 void WallpaperEngine::Api::restartCountdown (Lane& lane, const Playlist& playlist, Clock::time_point now) {
     lane.lastShow = now;
 
-    if (lane.frozenRemainingSeconds >= 0) {
-	lane.frozenRemainingSeconds = playlist.intervalSeconds;
+    if (lane.frozenRemainingMs >= 0) {
+	lane.frozenRemainingMs = int64_t (playlist.intervalSeconds) * 1000;
     }
 }
 
 void WallpaperEngine::Api::resumeCountdown (
-    Lane& lane, const Playlist& playlist, int remaining, int downtime, Clock::time_point now
+    Lane& lane, const Playlist& playlist, int64_t remainingMs, int64_t downtimeMs, Clock::time_point now
 ) {
     lane.lastShow = now;
 
-    if (!lane.enabled || lane.frozenRemainingSeconds >= 0 || remaining < 0) {
+    if (!lane.enabled || lane.frozenRemainingMs >= 0 || remainingMs < 0) {
 	return;
     }
 
     // the saved remainder less the time the engine was away; an overdue lane advances on
     // the first tick
-    const int left = std::clamp (remaining - std::max (0, downtime), 0, playlist.intervalSeconds);
-    lane.lastShow = now - std::chrono::seconds (playlist.intervalSeconds - left);
+    const int64_t intervalMs = int64_t (playlist.intervalSeconds) * 1000;
+    const int64_t left = std::clamp (remainingMs - std::max<int64_t> (0, downtimeMs), int64_t (0), intervalMs);
+    lane.lastShow = now - std::chrono::milliseconds (intervalMs - left);
 }
 
 int WallpaperEngine::Api::nextInSeconds (const Lane& lane, const Playlist& playlist, Clock::time_point now) {
@@ -389,12 +396,21 @@ int WallpaperEngine::Api::nextInSeconds (const Lane& lane, const Playlist& playl
 	return -1;
     }
 
-    if (lane.frozenRemainingSeconds >= 0) {
-	return lane.frozenRemainingSeconds;
+    const int64_t ms = nextInMs (lane, playlist, now);
+    return ms < 0 ? -1 : static_cast<int> (ms / 1000);
+}
+
+int64_t WallpaperEngine::Api::nextInMs (const Lane& lane, const Playlist& playlist, Clock::time_point now) {
+    if (playlist.order == "static") {
+	return -1;
     }
 
-    if (lane.enabled && playlist.order != "static") {
-	return std::max (0, playlist.intervalSeconds - elapsedSeconds (lane, now));
+    if (lane.frozenRemainingMs >= 0) {
+	return lane.frozenRemainingMs;
+    }
+
+    if (lane.enabled) {
+	return std::max<int64_t> (0, int64_t (playlist.intervalSeconds) * 1000 - elapsedMs (lane, now));
     }
 
     return -1;
@@ -527,13 +543,13 @@ void WallpaperEngine::Api::jumpToEnd (Lane& lane) {
 }
 
 std::string WallpaperEngine::Api::previousUp (const Lane& lane, const Playlist& playlist) {
-    // history is reported even where back is off (static keeps its Last line); only the walk
-    // fallback needs an ordered walk of two or more
-    if (!lane.history.empty ()) {
+    // what back would show: history, except in static, where back walks the playlist order;
+    // the walk fallback needs a walk of two or more
+    if (playlist.order != "static" && !lane.history.empty ()) {
 	return displayId (lane.history.back ());
     }
 
-    if (playlist.order == "static" || lane.walk.size () < 2) {
+    if (lane.walk.size () < 2) {
 	return "";
     }
 
@@ -603,7 +619,8 @@ nlohmann::json WallpaperEngine::Api::toJson (const Lane& lane) {
 	     { "walk", lane.walk },
 	     { "next_cycle", lane.nextCycle },
 	     { "cursor", lane.cursor },
-	     { "frozen_remaining_s", lane.frozenRemainingSeconds },
+	     { "frozen_remaining_s", lane.frozenRemainingMs < 0 ? int64_t (-1) : lane.frozenRemainingMs / 1000 },
+	     { "frozen_remaining_ms", lane.frozenRemainingMs },
 	     { "current", toJson (lane.current) },
 	     { "history", history },
 	     { "forward", forward },
@@ -726,7 +743,9 @@ Lane WallpaperEngine::Api::laneFromJson (const nlohmann::json& j) {
     if (lane.cursor >= static_cast<int> (lane.walk.size ())) {
 	lane.cursor = -1;
     }
-    lane.frozenRemainingSeconds = j.value ("frozen_remaining_s", -1);
+    lane.frozenRemainingMs = j.contains ("frozen_remaining_ms") && j["frozen_remaining_ms"].is_number_integer ()
+	? j["frozen_remaining_ms"].get<int64_t> ()
+	: (j.value ("frozen_remaining_s", -1) < 0 ? int64_t (-1) : int64_t (j.value ("frozen_remaining_s", -1)) * 1000);
 
     if (j.contains ("current")) {
 	lane.current = entryFromJson (j["current"]);
@@ -801,7 +820,7 @@ void WallpaperEngine::Api::fromLegacyState (const nlohmann::json& state, Lane& l
 	}
 
 	lane.enabled = rotation.value ("enabled", false) && !playlist.entries.empty ();
-	lane.frozenRemainingSeconds = rotation.value ("frozen_remaining_s", -1);
+	lane.frozenRemainingMs = rotation.value ("frozen_remaining_s", -1) < 0 ? int64_t (-1) : int64_t (rotation.value ("frozen_remaining_s", -1)) * 1000;
     }
 
     if (state.contains ("current") && state["current"].is_object ()) {
@@ -832,6 +851,7 @@ nlohmann::json WallpaperEngine::Api::laneStatus (const Lane& lane, const Playlis
 	     { "forward_depth", lane.forward.size () },
 	     { "interval_s", playlist.intervalSeconds },
 	     { "next_in_s", nextInSeconds (lane, playlist, now) },
+	     { "next_in_ms", nextInMs (lane, playlist, now) },
 	     { "history_depth", lane.history.size () },
 	     { "web_disabled", false },
 	     { "fit", { { "zoom", lane.fit.zoom }, { "pan_x", lane.fit.panX }, { "pan_y", lane.fit.panY } } } };

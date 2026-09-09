@@ -89,7 +89,8 @@ struct Lane {
 
     std::chrono::steady_clock::time_point lastShow {};
     /** countdown freeze: disabling pauses the clock, re-enabling the same set resumes it */
-    int frozenRemainingSeconds = -1;
+    /** a paused lane's remainder in milliseconds, -1 while running; the fraction is kept */
+    int64_t frozenRemainingMs = -1;
 
     Entry current;
     /** complete show records, so stepping back restores the look and not only the id */
@@ -124,6 +125,8 @@ bool dueForAdvance (const Lane& lane, const Playlist& playlist, Clock::time_poin
 
 /** Seconds until the next timed advance: the frozen remainder while disabled, -1 when idle. */
 int nextInSeconds (const Lane& lane, const Playlist& playlist, Clock::time_point now);
+/** The countdown in milliseconds, -1 when the lane has none; the deck anchors to this. */
+int64_t nextInMs (const Lane& lane, const Playlist& playlist, Clock::time_point now);
 
 /** A new wallpaper is a new play: the clock restarts, and a paused lane's frozen remainder becomes the full interval. */
 void restartCountdown (Lane& lane, const Playlist& playlist, Clock::time_point now);
@@ -166,7 +169,7 @@ nlohmann::json toJson (const Schedule& schedule);
 Schedule scheduleFromJson (const nlohmann::json& j);
 
 /** Seat the clock after a restart: a running lane resumes its saved remainder less the downtime. */
-void resumeCountdown (Lane& lane, const Playlist& playlist, int remaining, int downtime, Clock::time_point now);
+void resumeCountdown (Lane& lane, const Playlist& playlist, int64_t remainingMs, int64_t downtimeMs, Clock::time_point now);
 
 /** Display id the walk shows next, or empty when a fresh shuffle cycle is still to be drawn. */
 std::string nextUp (const Lane& lane, const Playlist& playlist);

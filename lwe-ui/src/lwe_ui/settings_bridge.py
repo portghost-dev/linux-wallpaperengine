@@ -136,6 +136,7 @@ class SettingsBridge(QObject):
         if packed.strip() == "":
             return True, "", ""
         times: list[str] = []
+        slugs: list[str] = []
         for entry in packed.split(";"):
             if not entry.strip():
                 continue
@@ -143,8 +144,11 @@ class SettingsBridge(QObject):
             if not _TIME_RE.match(head.strip()) or not slug.strip():
                 return False, None, "Use a 24-hour time, like 07:30."
             times.append(head.strip())
+            slugs.append(slug.strip())
         if len(times) != len(set(times)):
             return False, None, "Day and night need two different times."
+        if len(slugs) != len(set(slugs)):
+            return False, None, "Day and night need two different playlists."
         return True, packed, ""
 
     @Slot(str, result=str)

@@ -13,6 +13,9 @@ Rectangle {
     property bool favorite: false
     property string wpType: ""
     property bool missing: false
+    // the folder name fails the id allowlist: the card stays, says why, and offers nothing
+    property bool refused: false
+    readonly property string refusedReason: "Rename this folder: letters, digits, dot, underscore and hyphen only"
     property bool nowPlaying: false
     // on disk but never classified good/bad (the Review scope population). The gear is
     // hidden on these: the editor's Save writes a wp override conf, which would bypass the
@@ -126,8 +129,8 @@ Rectangle {
         Label {
             anchors.centerIn: parent
             visible: card.thumb.toString() === ""
-            text: card.missing ? "files missing" : (card.wpType !== "" ? card.wpType : "no preview")
-            color: card.missing ? Theme.danger : Theme.textTertiary
+            text: card.missing ? "files missing" : card.refused ? "rename folder" : (card.wpType !== "" ? card.wpType : "no preview")
+            color: card.missing || card.refused ? Theme.danger : Theme.textTertiary
             font.pixelSize: Theme.fontMeta
         }
 
@@ -146,7 +149,7 @@ Rectangle {
             anchors.top: parent.top
             anchors.margins: Theme.spacingSm
             width: 20; height: 20
-            visible: card.inPlaylist || hover.hovered
+            visible: !card.refused && (card.inPlaylist || hover.hovered)
             Rectangle {
                 anchors.fill: parent
                 radius: Theme.radiusSm
@@ -204,7 +207,7 @@ Rectangle {
             anchors.centerIn: parent
             width: 44; height: 44; radius: 22
             color: Theme.accent
-            opacity: hover.hovered && !card.missing ? 1 : 0
+            opacity: hover.hovered && !card.missing && !card.refused ? 1 : 0
             visible: opacity > 0
             scale: hover.hovered ? 1 : 0.9
             Behavior on opacity { NumberAnimation { duration: 150 } }
@@ -233,21 +236,26 @@ Rectangle {
             anchors.left: parent.left
             anchors.bottom: parent.bottom
             anchors.margins: Theme.spacingSm
-            visible: card.wpType !== ""
+            visible: card.wpType !== "" || card.refused
             radius: Theme.radiusXs
             color: Theme.scrimPlate
             width: badge.implicitWidth + 14
             height: badge.implicitHeight + Theme.spacingXs
             Label {
                 id: badge
+                objectName: "typeBadge"
                 anchors.centerIn: parent
-                text: card.wpType
+                text: card.refused ? "rename folder" : card.wpType
                 // Design amendment: plate = legibility (immutable scrim), text =
                 // identity - #D4D4D4 tinted 18% toward the theme accent, derived in
                 // the store so contrast holds by construction
-                color: Theme.badgeText
+                color: card.refused ? Theme.danger : Theme.badgeText
                 font.pixelSize: Theme.fontMeta
             }
+            HoverHandler { id: badgeHover; enabled: card.refused }
+            ToolTip.visible: card.refused && badgeHover.hovered
+            ToolTip.text: card.refusedReason
+            ToolTip.delay: 300
         }
 
         Rectangle {
@@ -309,10 +317,10 @@ Rectangle {
 
     Rectangle {
         anchors.fill: parent
-        color: card.missing ? Theme.dangerWash : "transparent"
+        color: card.missing || card.refused ? Theme.dangerWash : "transparent"
         radius: card.radius
         border.width: 1
-        border.color: card.missing ? Theme.danger
+        border.color: card.missing || card.refused ? Theme.danger
                       : (hover.hovered ? Theme.borderStrong : Theme.border)
     }
 }

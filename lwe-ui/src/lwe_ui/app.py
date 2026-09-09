@@ -6,11 +6,14 @@ Python the import IS the cost). Autostart writes `--tray`, so a login launch is
 the tray alone.
 
 `lwe-ui` (no flag) is the WINDOW process - the full panel. It exits on close,
-returning all of its memory to the OS; the tray (if the user keeps one) watches
-that exit and applies the CLOSE_TO_TRAY rule. `main()` for the window:
+returning all of its memory to the OS; with CLOSE_TO_TRAY on a tray is up for
+the whole time the app runs (the window spawns one at startup when none is
+alive) and outlives the window; its Exit ends the window too. `main()` for the
+window:
   1. ensure config/state dirs exist + settings.conf is present,
   2. construct a QApplication, then take the single-instance guard - a second
      launch defers to the running panel (asks it to present itself) and exits 0,
+     and the tray's Exit reaches the window over the same socket,
   3. build a QQmlApplicationEngine, add the bundled `qml/` dir as an import path,
   4. resolve the theme tokens and register the ThemeTokens singleton,
   5. expose the bridges as root-context properties,
@@ -142,10 +145,17 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
 
-    guard = single_instance.acquire(_present)
+    def _quit_all() -> None:
+        global _exit_all_requested
+        _exit_all_requested = True
+        QTimer.singleShot(0, app.quit)
+
+    guard = single_instance.acquire(_present, _quit_all)
     if guard is None:
         return 0
     app.aboutToQuit.connect(guard.close)
+    # the tray is up for as long as the app runs: put one up now if none is alive
+    spawn_tray_if_needed()
 
     # sourceSize does NOT scale with DPR (measured: a 320 cap decoded 320px at scale 2),
     # so the cap multiplies by the densest screen's DPR itself; max over screens keeps
@@ -237,9 +247,9 @@ def main(argv: list[str] | None = None) -> int:
         _root.currentViewChanged.connect(lambda *_: trim_timer.start())
 
     # No tray in THIS process: the tray is its own process (`lwe-ui --tray`), the window
-    # exits on close (default quit-on-last-window), and the tray applies the repurposed
-    # CLOSE_TO_TRAY rule to that exit. If no tray is alive at close time, the exit
-    # handler spawns one, so CLOSE_TO_TRAY holds no matter how the window was launched.
+    # exits on close (default quit-on-last-window), and the tray applies the CLOSE_TO_TRAY
+    # rule to that exit. The exit handler puts a tray up if the setting was switched on
+    # during this run and none is alive, and stays quiet when the tray asked for the exit.
     # Fullscreen and app-condition policy live in the engine; the panel only pushes it.
     app.aboutToQuit.connect(spawn_tray_if_needed)
     return app.exec()

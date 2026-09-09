@@ -12,11 +12,13 @@ plugin drags the whole Quick/QML stack into an otherwise widgets-only process
 shell renders the menu anyway, so the theme buys nothing here. Spawned windows get
 the original environment back.
 
-CLOSE_TO_TRAY (the "minimize to tray when closed" setting, repurposed): ON means
-a window close ends only the window process and this tray stays; OFF means a
-window close ends EVERYTHING - when a spawned window exits and the setting is
-off, this process follows it down. Autostart launches the tray only; the two
-settings are deliberately orthogonal.
+CLOSE_TO_TRAY: ON means the tray is up whenever the app runs (a window launched
+without one spawns it at startup), a window close ends only the window process
+and this tray stays; OFF means no tray and a window close ends EVERYTHING - when
+a spawned window exits and the setting is off, this process follows it down.
+Exit on the icon ends both: a spawned window is terminated, a window this tray
+did not spawn is asked to quit over ui.sock. Autostart launches the tray only;
+the two settings are deliberately orthogonal.
 """
 from __future__ import annotations
 
@@ -213,6 +215,10 @@ class TrayProcess(QObject):
         if self._window is not None and self._window.state() != QProcess.ProcessState.NotRunning:
             self._window.terminate()
             self._window.waitForFinished(3000)
+        else:
+            # a window this tray did not spawn (it put this tray up at its own start)
+            from . import single_instance
+            single_instance.request_quit()
         tray = getattr(self, "_tray", None)
         if tray is not None:
             tray.hide()

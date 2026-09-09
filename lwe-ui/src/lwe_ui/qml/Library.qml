@@ -29,10 +29,14 @@ Item {
     property int hoverRow: -1
     property real pointerX: 0
     property real pointerY: 0
+    // the edge band scrolls only once the pointer has left it since the lift: a card picked up
+    // in the bottom row starts inside the band, and the first frames would nudge the view
+    property bool bandArmed: false
 
     function startDrag(card) {
         if (!backend.beginDrag(card.wpId))
             return;
+        bandArmed = false;
         dragSource = card;
         dragTitle = card.title;
         dragThumb = card.thumb;
@@ -101,6 +105,7 @@ Item {
             console.warn("drop failed:", e);
         }
         grid.returnToBounds();
+        grid.snapToRow();
     }
 
     // setScope lives on the FILTER MODEL, not Backend (calling backend.setScope threw
@@ -126,6 +131,15 @@ Item {
                 return -1;
             return originY + memberRows * cellHeight - gap;
         }
+        // scroll so a row top sits at the top of the view: whole rows show after a drop
+        // moved the view. A pool row's top sits poolOffset below its laid position.
+        function snapToRow() {
+            var band = bandTop();
+            var shift = band >= 0 && contentY > band ? poolOffset : 0;
+            var r = Math.round((contentY - originY - shift) / cellHeight);
+            var target = originY + Math.max(0, r) * cellHeight + shift;
+            contentY = Math.max(originY, Math.min(target, originY + contentHeight - height));
+        }
         // columns: the count whose tiles land nearest the target width, never a floor
         // target tile: 176 compact; flagship ramps 216 at a 1280 window to 260 at 2560
         readonly property int targetTile: Theme.compact ? 176
@@ -140,16 +154,21 @@ Item {
 
         // OPTICAL ROW FITTING (v1.6-a2, BIDIRECTIONAL). Only the thumb height flexes (the
         // title row and gaps never move); the flex budget is +/-10% of the 16:10 base.
-        readonly property int rowsFit: Math.max(1, Math.floor(height / nominalCellH))
+        // The hairline band between the blocks is paid for first: the rows fit the height
+        // that is left, so the rows below the band land flush too
+        readonly property real fitHeight: height - poolOffset
+        readonly property int rowsFit: Math.max(1, Math.floor(fitHeight / nominalCellH))
         // 3a-shrink: if fitting one MORE row overshoots by <= the budget, compress all
         // rows equally so N+1 land flush (the crop absorbs it) - this is the fix for the
         // "almost-fits" clip where the naive floor drops the last row to a sliver.
-        readonly property real shrinkOvershoot: (rowsFit + 1) * nominalCellH - height
+        readonly property real shrinkOvershoot: (rowsFit + 1) * nominalCellH - fitHeight
         readonly property real shrinkPerRow: shrinkOvershoot / (rowsFit + 1)
+        // the band's share rides on top of the optical budget: rows that fit without the band
+        // still fit with it, a few pixels shorter, rather than dropping to a peeking row
         readonly property bool canShrink: shrinkOvershoot > 0
-                                          && shrinkPerRow <= baseThumbH * 0.10
+                                          && shrinkPerRow <= baseThumbH * 0.10 + poolOffset / (rowsFit + 1)
         // 3a-grow: else absorb a small leftover so the rows that DO fit land flush
-        readonly property real growLeftover: height - rowsFit * nominalCellH
+        readonly property real growLeftover: fitHeight - rowsFit * nominalCellH
         readonly property real growPerRow: growLeftover / rowsFit
         readonly property bool canGrow: growLeftover > 0 && growLeftover < 24
                                         && growPerRow <= baseThumbH * 0.10
@@ -228,6 +247,7 @@ Item {
             favorite: model.favorite
             wpType: model.type
             missing: model.missing
+            refused: model.refused
             pendingReview: model.pendingReview
             nowPlaying: model.id === root.nowPlayingId
 
@@ -288,6 +308,13 @@ Item {
             // so a large move sweeps the library
             var band = 40, maxStep = 12;
             var p = grid.mapFromItem(root, root.pointerX, root.pointerY);
+            var inBand = p.y < band || p.y > grid.height - band;
+            if (!root.bandArmed) {
+                if (!inBand)
+                    root.bandArmed = true;
+                root.updateHover();
+                return;
+            }
             // the view moves its origin when rows shift above the viewport; the content lies
             // in [originY, originY + contentHeight], not from zero
             var minY = grid.originY;

@@ -249,16 +249,16 @@ TEST_CASE ("the same set keeps a frozen countdown across disable and enable", "[
 
     // a pause freezes where the countdown stood, and holds there
     applySet (lane, playlist, set, false, t0 () + std::chrono::seconds (100));
-    REQUIRE (lane.frozenRemainingSeconds == 800);
+    REQUIRE (lane.frozenRemainingMs == 800 * 1000);
     REQUIRE_FALSE (lane.enabled);
     REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (5000)) == 800);
     // a re-push while paused keeps the frozen value; a new set while paused is the full interval
     applySet (lane, playlist, set, false, t0 () + std::chrono::seconds (150));
-    REQUIRE (lane.frozenRemainingSeconds == 800);
-    lane.frozenRemainingSeconds = 300;
+    REQUIRE (lane.frozenRemainingMs == 800 * 1000);
+    lane.frozenRemainingMs = 300 * 1000;
 
     applySet (lane, playlist, set, true, t0 () + std::chrono::seconds (200));
-    REQUIRE (lane.frozenRemainingSeconds == -1);
+    REQUIRE (lane.frozenRemainingMs == -1);
     REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (200)) == 300);
 
     applySet (lane, playlist, makePlaylist (4, "sequential"), true, t0 () + std::chrono::seconds (500));
@@ -553,25 +553,25 @@ TEST_CASE ("a restart resumes a running lane's remainder less the downtime", "[l
     Playlist playlist;
     applySet (lane, playlist, makePlaylist (3, "sequential"), true, t0 ());
 
-    resumeCountdown (lane, playlist, 300, 100, t0 ());
+    resumeCountdown (lane, playlist, 300 * 1000, 100 * 1000, t0 ());
     REQUIRE (nextInSeconds (lane, playlist, t0 ()) == 200);
 
     // away longer than the remainder: due on the first tick, never negative
-    resumeCountdown (lane, playlist, 300, 5000, t0 ());
+    resumeCountdown (lane, playlist, 300 * 1000, 5000 * 1000, t0 ());
     REQUIRE (nextInSeconds (lane, playlist, t0 ()) == 0);
     REQUIRE (dueForAdvance (lane, playlist, t0 ()));
 
     // no remainder saved (an older state file): the full interval
-    resumeCountdown (lane, playlist, -1, 100, t0 ());
+    resumeCountdown (lane, playlist, -1, 100 * 1000, t0 ());
     REQUIRE (nextInSeconds (lane, playlist, t0 ()) == 900);
 
     // a frozen lane keeps its frozen remainder; a disabled one has no countdown
-    lane.frozenRemainingSeconds = 250;
-    resumeCountdown (lane, playlist, 300, 100, t0 ());
+    lane.frozenRemainingMs = 250 * 1000;
+    resumeCountdown (lane, playlist, 300 * 1000, 100 * 1000, t0 ());
     REQUIRE (nextInSeconds (lane, playlist, t0 ()) == 250);
-    lane.frozenRemainingSeconds = -1;
+    lane.frozenRemainingMs = -1;
     lane.enabled = false;
-    resumeCountdown (lane, playlist, 300, 100, t0 ());
+    resumeCountdown (lane, playlist, 300 * 1000, 100 * 1000, t0 ());
     REQUIRE (nextInSeconds (lane, playlist, t0 ()) == -1);
 }
 
@@ -597,14 +597,14 @@ TEST_CASE ("leaving static is a new play; a shuffle switch and a paused re-push 
     REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (8100)) == -1);
     applySet (lane, playlist, set, true, t0 () + std::chrono::seconds (20000));
     REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (20000)) == 900);
-    REQUIRE (lane.frozenRemainingSeconds == -1);
+    REQUIRE (lane.frozenRemainingMs == -1);
 
     // a disabled lane with no frozen value (an older state file) re-pushed the same set shows
     // the full interval, not idle
     lane.enabled = false;
-    lane.frozenRemainingSeconds = -1;
+    lane.frozenRemainingMs = -1;
     applySet (lane, playlist, set, false, t0 () + std::chrono::seconds (8100));
-    REQUIRE (lane.frozenRemainingSeconds == 900);
+    REQUIRE (lane.frozenRemainingMs == 900 * 1000);
 }
 
 TEST_CASE ("a paused lane: an overdue pause resumes due, a new wallpaper while paused is a full interval", "[lane]") {
@@ -615,7 +615,7 @@ TEST_CASE ("a paused lane: an overdue pause resumes due, a new wallpaper while p
 
     // outputs were released past the interval, then the user paused: nothing negative, due on resume
     applySet (lane, playlist, set, false, t0 () + std::chrono::seconds (5000));
-    REQUIRE (lane.frozenRemainingSeconds == 0);
+    REQUIRE (lane.frozenRemainingMs == 0 * 1000);
     applySet (lane, playlist, set, true, t0 () + std::chrono::seconds (5100));
     REQUIRE (dueForAdvance (lane, playlist, t0 () + std::chrono::seconds (5100)));
 
@@ -623,15 +623,42 @@ TEST_CASE ("a paused lane: an overdue pause resumes due, a new wallpaper while p
     // wallpaper (next, prev or a click): the new one gets the full interval when rotation resumes
     restartCountdown (lane, playlist, t0 () + std::chrono::seconds (6000));
     applySet (lane, playlist, set, false, t0 () + std::chrono::seconds (6100));
-    REQUIRE (lane.frozenRemainingSeconds == 800);
+    REQUIRE (lane.frozenRemainingMs == 800 * 1000);
     restartCountdown (lane, playlist, t0 () + std::chrono::seconds (6200));
-    REQUIRE (lane.frozenRemainingSeconds == 900);
+    REQUIRE (lane.frozenRemainingMs == 900 * 1000);
     REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (6200)) == 900);
     applySet (lane, playlist, set, true, t0 () + std::chrono::seconds (6300));
     REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (6300)) == 900);
 
     // running: a step simply restarts
     restartCountdown (lane, playlist, t0 () + std::chrono::seconds (6400));
-    REQUIRE (lane.frozenRemainingSeconds == -1);
+    REQUIRE (lane.frozenRemainingMs == -1);
     REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::seconds (6400)) == 900);
+}
+
+TEST_CASE ("a pause keeps the fraction of a second and the countdown is reported in milliseconds", "[lane]") {
+    Lane lane;
+    Playlist playlist;
+    const auto set = makePlaylist (3, "sequential");
+    applySet (lane, playlist, set, true, t0 ());
+
+    const auto at = t0 () + std::chrono::milliseconds (100 * 1000 + 700);
+    REQUIRE (nextInMs (lane, playlist, at) == 800 * 1000 - 700);
+    REQUIRE (nextInSeconds (lane, playlist, at) == 799);
+
+    applySet (lane, playlist, set, false, at);
+    REQUIRE (lane.frozenRemainingMs == 800 * 1000 - 700);
+
+    // resume: the clock continues from the same millisecond
+    applySet (lane, playlist, set, true, at + std::chrono::seconds (30));
+    REQUIRE (nextInMs (lane, playlist, at + std::chrono::seconds (30)) == 800 * 1000 - 700);
+
+    // the state file carries the milliseconds and still reads an older whole-second file
+    applySet (lane, playlist, set, false, at + std::chrono::seconds (31));
+    auto j = toJson (lane);
+    REQUIRE (j["frozen_remaining_ms"].get<int64_t> () == lane.frozenRemainingMs);
+    REQUIRE (laneFromJson (j).frozenRemainingMs == lane.frozenRemainingMs);
+    j.erase ("frozen_remaining_ms");
+    j["frozen_remaining_s"] = 42;
+    REQUIRE (laneFromJson (j).frozenRemainingMs == 42 * 1000);
 }

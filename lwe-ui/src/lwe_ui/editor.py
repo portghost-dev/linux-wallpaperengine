@@ -281,6 +281,12 @@ class EditorBridge(QObject):
         # destroyed when the property SET genuinely changed.
         self._prop_model = ScenePropertyModel(self)
         self._pending: set[str] = set()         # relaunch-class keys waiting on the debounce
+        # a slider mid-drag: its steps coalesce here and go to the engine one push per tick
+        self._preview = QTimer(self)
+        self._preview.setSingleShot(True)
+        self._preview.setInterval(33)
+        self._preview.timeout.connect(self._fire_preview)
+        self._preview_pending: dict[str, float] = {}
         self._reshow = QTimer(self)
         self._reshow.setSingleShot(True)
         self._reshow.setInterval(_RESHOW_MS)
@@ -1076,6 +1082,77 @@ class EditorBridge(QObject):
         """The stored fit value for `field` (zoom, pan_x, pan_y), or "" when the key is absent."""
         key = C.FIT_FIELDS.get(str(field or ""))
         return self._present_str(key) if key else ""
+
+    @Slot(str, str)
+    def previewFit(self, field: str, text: str) -> None:
+        """A slider mid-drag: show the value live through the wallpaper layer, store untouched.
+        Steps coalesce to one push per timer tick; the release commits through setFit, which
+        also carries the failure grammar, so a refused preview stays silent."""
+        key = C.FIT_FIELDS.get(str(field or ""))
+        if not key or not self._wid or not self._is_current():
+            return
+        try:
+            v = float(str(text or "").strip())
+        except (TypeError, ValueError):
+            return
+        self._queue_preview(key, v)
+
+    @Slot(str, float)
+    def previewLive(self, kind: str, value: float) -> None:
+        """A Speed, Volume or audio dial slider mid-drag: the verb the release will send, sent
+        now with the same resolution, nothing persisted. The global rows send as their commit
+        does; the per-wallpaper rows and the dials pass the scope gate first."""
+        kind = str(kind or "")
+        if kind in ("wp_speed", "wp_volume") or kind.startswith("dial:"):
+            if not self._is_current():
+                return
+        elif kind not in ("speed", "volume"):
+            return
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return
+        self._queue_preview(kind, v)
+
+    def _queue_preview(self, key: str, v: float) -> None:
+        if v != v:
+            return
+        self._preview_pending[key] = v
+        if not self._preview.isActive():
+            self._preview.start()
+
+    def _fire_preview(self) -> None:
+        pending, self._preview_pending = self._preview_pending, {}
+        if not pending:
+            return
+        try:
+            if not api_client.available():
+                return
+            if "speed" in pending:
+                factor = max(SPEED_MIN, min(SPEED_MAX, pending.pop("speed")))
+                api_client.set_speed(C.resolve_speed(self._wp_get("SPEED"), factor))
+            if "wp_speed" in pending:
+                conf_speed = max(SPEED_MIN, min(SPEED_MAX, pending.pop("wp_speed")))
+                api_client.set_speed(C.resolve_speed(conf_speed, self.globalSpeed()))
+            if "volume" in pending:
+                api_client.set_volume(max(0, min(100, int(round(pending.pop("volume"))))))
+            if "wp_volume" in pending:
+                api_client.set_volume(max(0, min(100, int(round(pending.pop("wp_volume"))))))
+            dials: dict[str, float] = {}
+            for key in [k for k in pending if k.startswith("dial:")]:
+                spec = AUDIO_DIALS.get(key[5:])
+                if spec is not None:
+                    dials[spec["field"]] = _quality_to_dial(spec, pending.pop(key))
+                else:
+                    pending.pop(key)
+            if dials:
+                api_client.set_tuning(**dials)
+            if pending and self._wid:
+                conf = dict(self._wp)
+                conf.update(pending)
+                api_client.set_fit(layer="wallpaper", id=self._wid, **resolve_fit(conf))
+        except Exception:
+            pass
 
     @Slot(str, str, result=bool)
     def setFit(self, field: str, text: str) -> bool:

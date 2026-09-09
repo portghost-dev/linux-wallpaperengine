@@ -144,7 +144,6 @@ def _test_ruled_strings_are_verbatim() -> None:
     for text, phrase in (
         (general, 'label: "Start on login"'),
         (general, 'label: "Close to tray"'),
-        (general, 'caption: "The app keeps running in the tray"'),
         (general, 'label: "Switch playlists by time of day"'),
         (general, '"Changes at the next rotation, never mid-wallpaper."'),
         (general, 'label: "Engine mode"'),

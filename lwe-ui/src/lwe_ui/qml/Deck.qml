@@ -41,6 +41,8 @@ Rectangle {
     // next_in to a wall-clock timestamp and interpolate between polls with a 500ms tick;
     // paused rotation freezes the interpolation (the engine's countdown is frozen too).
     property real _statNextIn: NaN
+    // the interval the last pause or resume reply named; the next poll supersedes it
+    property int _replyInterval: -1
     property double _statAnchor: 0
     property double _nowMs: 0
     function _reanchor(ni) {
@@ -49,11 +51,24 @@ Rectangle {
     onEngineStatusChanged: {
         var ni = parseInt(_field("next_in"));
         if (isNaN(ni)) { _statNextIn = NaN; return; }
+        // the engine reports milliseconds: anchor to its number every poll, running or paused,
+        // and never guess against it. The whole-second path below is the fallback for an
+        // engine that does not report them.
+        _replyInterval = -1;
+        var ms = parseInt(_field("next_in_ms"));
+        if (!isNaN(ms) && ms >= 0) { _reanchor(ms / 1000); return; }
         // ONE clock: once anchored, a poll only CORRECTS on a real jump (wallpaper change,
         // resume, drift over 1.5s). Re-anchoring on every poll re-synced the display phase
         // to the engine's second boundary while the local tick kept its own phase - the
         // two beat against each other as an uneven cadence (long gap, short gap, repeat).
-        if (isNaN(_statNextIn) || !rotationOn) { _reanchor(ni); return; }
+        if (isNaN(_statNextIn)) { _reanchor(ni); return; }
+        // paused: the held value keeps its fraction of a second; the engine's whole-second
+        // report only corrects it on a real disagreement, so pause and resume do not step
+        if (!rotationOn) {
+            if (Math.abs(_statNextIn - ni) > 1.5)
+                _reanchor(ni);
+            return;
+        }
         var predicted = _statNextIn - (Date.now() - _statAnchor) / 1000;
         if (Math.abs(predicted - ni) > 1.5)
             _reanchor(ni);
@@ -73,6 +88,28 @@ Rectangle {
     }
 
     function refreshRotation() { rotationOn = backend.getRotationEnabled() }
+    // a pause or resume reply carries the engine's countdown: anchor to it at once, so the
+    // readout is the engine's number from the first frame, never a local guess
+    Connections {
+        target: backend
+        function onRotationClock(ms, iv) {
+            if (iv > 0) deck._replyInterval = iv;
+            if (ms >= 0) deck._reanchor(ms / 1000);
+        }
+    }
+    // a pause drops the interpolated extra to zero, so the predicted value is folded into the
+    // anchor first: the readout holds where it was until the engine's frozen value arrives
+    onRotationOnChanged: {
+        if (isNaN(_statNextIn)) return;
+        if (!rotationOn) {
+            var predicted = _statNextIn - (Date.now() - _statAnchor) / 1000;
+            _reanchor(Math.max(0, predicted));
+        } else {
+            // resume: the anchor was set at the pause, so counting from it would leap ahead
+            // by the whole pause; start again from the held value now
+            _reanchor(_statNextIn);
+        }
+    }
     // sessionOverride()/overrideReach() are slots, not NOTIFYing properties, so the override
     // icons cannot bind to them directly. This rev is what re-reads them - without it the
     // icons were a one-shot Component.onCompleted read that never resynced when Settings or
@@ -625,6 +662,7 @@ Rectangle {
             id: deckStrip
             anchors.right: parent.right
             opensUp: true
+            engineStatus: deck.engineStatus
             // the schedule doorway lives on the strip, but the modal it opens must center on the
             // WINDOW, not inside the 72px deck - hence the overlay-parented instance below.
             onScheduleRequested: deckSchedModal.open()

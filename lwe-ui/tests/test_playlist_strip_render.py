@@ -145,6 +145,8 @@ def test_strip_static_dims_unit_cells(app, backend) -> None:
         every = strip.findChild(QObject, "everyRow")
         assert every is not None and abs(float(every.property("opacity")) - 0.55) < 0.01, \
             "static must put the popover's Every row to sleep at 0.55 (spec 4)"
+        field = strip.findChild(QObject, "intervalField")
+        assert field is not None and field.property("enabled") is True, "the interval stays editable in static"
         print("OK test_strip_static_dims_unit_cells (static reaches the strip; Every row asleep)")
     finally:
         backend.setPlaylistMode("shuffle")

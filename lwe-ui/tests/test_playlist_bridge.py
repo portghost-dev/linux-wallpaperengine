@@ -101,6 +101,19 @@ def main() -> None:
     b.setActivePlaylist(slug2)
     assert b.activePlaylist()["slug"] == slug2
 
+    # a step while paused resumes rotation: the user would not step unless they meant to watch
+    from lwe_ui import api_client as _api
+    _api.available = lambda: True
+    _api.next_wallpaper = lambda: {"ok": True}
+    _api.prev_wallpaper = lambda: {"ok": True}
+    b.setPaused(True)
+    assert settings.load()["ROTATION_ENABLED"] is False
+    assert b.rotateNext() is True
+    assert settings.load()["ROTATION_ENABLED"] is True, "next resumes a paused rotation"
+    b.setPaused(True)
+    assert b.rotatePrev() is True
+    assert settings.load()["ROTATION_ENABLED"] is True, "prev resumes too"
+
     b.setActivePlaylist(ap["slug"])
     b.trashWallpaper("200")
     rows = {r["id"]: r for r in tags.load()}

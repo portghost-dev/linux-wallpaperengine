@@ -171,6 +171,7 @@ def _test_schedule_packing_is_validated(sb) -> None:
     assert sb.commit("SCHEDULE", "08:00=day;20:00=night") is True
     assert settings.load()["SCHEDULE"] == "08:00=day;20:00=night"
     assert sb.commit("SCHEDULE", "08:00=day;08:00=night") is False, "two entries need two times"
+    assert sb.commit("SCHEDULE", "08:00=day;20:00=day") is False, "two entries need two playlists"
     for bad in ("25:00=day", "8:00=day", "08:60=day", "0800=day", "08:00="):
         assert sb.commit("SCHEDULE", bad) is False, f"{bad} must be rejected"
     assert settings.load()["SCHEDULE"] == "08:00=day;20:00=night", "the store is unchanged"

@@ -26,21 +26,29 @@ glm::vec2 mouseInWindow (const WallpaperState& state, const float fx, const floa
 }
 } // namespace
 
-TEST_CASE ("identity fit leaves the scaling mode's window alone", "[fit]") {
+TEST_CASE ("identity zoom with no pan leaves the window alone; a full pan slides it half a screen", "[fit]") {
     auto state = stretched ();
     const auto before = state.getTextureUVs ();
 
-    // identity has no travel: a full pan changes nothing
-    state.setFit ({ .zoom = 1.0f, .panX = 1.0f, .panY = -1.0f });
+    state.setFit ({ .zoom = 1.0f, .panX = 0.0f, .panY = 0.0f });
+    state.updateState (kViewport, false, 1920, 1080);
+    const auto same = state.getTextureUVs ();
+    CHECK_THAT (same.ustart, WithinAbs (before.ustart, kEps));
+    CHECK_THAT (same.uend, WithinAbs (before.uend, kEps));
+
+    // a full pan moves the window by half of what is visible, past the picture's edge: the
+    // sampler's clamp fills what slides in. The picture follows the pan, so the window goes
+    // the other way: +x slides the picture right, which shows its left
+    state.setFit ({ .zoom = 1.0f, .panX = -1.0f, .panY = 1.0f });
     CHECK (state.hasChanged (kViewport, false, 1920, 1080));
     state.updateState (kViewport, false, 1920, 1080);
     CHECK_FALSE (state.hasChanged (kViewport, false, 1920, 1080));
 
     const auto after = state.getTextureUVs ();
-    CHECK_THAT (after.ustart, WithinAbs (before.ustart, kEps));
-    CHECK_THAT (after.uend, WithinAbs (before.uend, kEps));
-    CHECK_THAT (after.vstart, WithinAbs (before.vstart, kEps));
-    CHECK_THAT (after.vend, WithinAbs (before.vend, kEps));
+    CHECK_THAT (after.ustart, WithinAbs (before.ustart + 0.5f, kEps));
+    CHECK_THAT (after.uend, WithinAbs (before.uend + 0.5f, kEps));
+    CHECK_THAT (after.vstart, WithinAbs (before.vstart - 0.5f, kEps));
+    CHECK_THAT (after.vend, WithinAbs (before.vend - 0.5f, kEps));
 }
 
 TEST_CASE ("zoom 2 shows the middle half; pan reaches a quarter each way", "[fit]") {
@@ -55,8 +63,8 @@ TEST_CASE ("zoom 2 shows the middle half; pan reaches a quarter each way", "[fit
     CHECK_THAT (uvs.vstart, WithinAbs (0.75f, kEps));
     CHECK_THAT (uvs.vend, WithinAbs (0.25f, kEps));
 
-    // +panX shows the right side, +panY the top
-    state.setFit ({ .zoom = 2.0f, .panX = 1.0f, .panY = 1.0f });
+    // -panX moves the picture left and shows its right side, -panY moves it down and shows the top
+    state.setFit ({ .zoom = 2.0f, .panX = -1.0f, .panY = -1.0f });
     state.updateState (kViewport, false, 1920, 1080);
     uvs = state.getTextureUVs ();
     CHECK_THAT (uvs.ustart, WithinAbs (0.5f, kEps));
@@ -64,7 +72,7 @@ TEST_CASE ("zoom 2 shows the middle half; pan reaches a quarter each way", "[fit
     CHECK_THAT (uvs.vstart, WithinAbs (1.0f, kEps));
     CHECK_THAT (uvs.vend, WithinAbs (0.5f, kEps));
 
-    state.setFit ({ .zoom = 2.0f, .panX = -1.0f, .panY = -1.0f });
+    state.setFit ({ .zoom = 2.0f, .panX = 1.0f, .panY = 1.0f });
     state.updateState (kViewport, false, 1920, 1080);
     uvs = state.getTextureUVs ();
     CHECK_THAT (uvs.ustart, WithinAbs (0.0f, kEps));
@@ -73,7 +81,7 @@ TEST_CASE ("zoom 2 shows the middle half; pan reaches a quarter each way", "[fit
     CHECK_THAT (uvs.vend, WithinAbs (0.0f, kEps));
 
     // half travel at zoom 2 is an eighth of the picture
-    state.setFit ({ .zoom = 2.0f, .panX = 0.5f });
+    state.setFit ({ .zoom = 2.0f, .panX = -0.5f });
     state.updateState (kViewport, false, 1920, 1080);
     uvs = state.getTextureUVs ();
     CHECK_THAT (uvs.ustart, WithinAbs (0.375f, kEps));
@@ -83,7 +91,7 @@ TEST_CASE ("zoom 2 shows the middle half; pan reaches a quarter each way", "[fit
 TEST_CASE ("a flipped window pans toward the viewport top too", "[fit]") {
     auto state = stretched (true);
 
-    state.setFit ({ .zoom = 2.0f, .panY = 1.0f });
+    state.setFit ({ .zoom = 2.0f, .panY = -1.0f });
     state.updateState (kViewport, true, 1920, 1080);
     const auto uvs = state.getTextureUVs ();
     // flipped: the viewport top samples v=0, so the top of the picture is the low end
@@ -99,7 +107,7 @@ TEST_CASE ("the window nests inside a fill crop", "[fit]") {
     REQUIRE (crop.ustart > 0.0f);
     REQUIRE (crop.uend < 1.0f);
 
-    state.setFit ({ .zoom = 2.0f, .panX = 1.0f });
+    state.setFit ({ .zoom = 2.0f, .panX = -1.0f });
     state.updateState (kViewport, false, 2160, 1080);
     const auto uvs = state.getTextureUVs ();
     // the pan stops at the crop's edge: nothing the fill hid comes back
@@ -143,7 +151,7 @@ TEST_CASE ("the two layers compose: zooms multiply, pans add, clamped", "[fit]")
 
 TEST_CASE ("the mouse arithmetic lands inside the window the present pass shows", "[fit]") {
     auto state = stretched ();
-    state.setFit ({ .zoom = 2.0f, .panX = 1.0f, .panY = 1.0f });
+    state.setFit ({ .zoom = 2.0f, .panX = -1.0f, .panY = -1.0f });
     state.updateState (kViewport, false, 1920, 1080);
 
     // the viewport centre is the window centre, three quarters across the picture

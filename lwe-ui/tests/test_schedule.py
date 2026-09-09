@@ -114,6 +114,55 @@ class ScheduleBridgeTests(unittest.TestCase):
         self.backend.deleteActivePlaylist()
         self.assertEqual([c for c in self.calls if c[0] == "lanes-set"][-1][1][0].get("manual"), True)
 
+    def test_deleting_a_scheduled_playlist_drops_it_and_switches_the_schedule_off(self) -> None:
+        day, night = self._slug("Day"), self._slug("Night")
+        self._set_schedule(True, f"08:00={day};20:00={night}")
+        self.playlists.set_active(night)
+        self.backend.deleteActivePlaylist()
+        s = self.settings.load()
+        self.assertEqual(s["SCHEDULE"], f"08:00={day}")
+        self.assertFalse(s["SCHEDULE_ENABLED"])
+        self.assertFalse(self.backend.scheduleState()["enabled"])
+        # deleting a playlist outside the schedule leaves it alone
+        self._set_schedule(True, f"08:00={day};20:00={self._slug('Party')}")
+        self.playlists.create("Spare")
+        self.playlists.set_active(self._slug("Spare"))
+        self.backend.deleteActivePlaylist()
+        self.assertTrue(self.settings.load()["SCHEDULE_ENABLED"])
+
+    def test_a_policy_change_made_while_the_engine_was_away_is_delivered_on_its_return(self) -> None:
+        day = self._slug("Day")
+        self.playlists.set_active(day)
+        self.api.available = lambda: False
+        self.backend.setPaused(True)   # the click lands while the engine is restarting
+        self.assertEqual([c for c in self.calls if c[0] == "lanes-set"], [], "nothing could be sent")
+        self.assertTrue(self.backend._policy_dirty)
+        self.api.available = lambda: True
+        self.backend._engine_pid_seen = 7   # not first sight: a re-arrival
+        self.api.status = lambda: {"pid": 7, "state": "up", "current": {"id": "", "ui_id": ""},
+                                   "lanes": [{"id": "all", "playlist": day, "order": "sequential"}],
+                                   "schedule": {"enabled": False}}
+        self.backend.status()
+        lanes = [c for c in self.calls if c[0] == "lanes-set"]
+        self.assertEqual(len(lanes), 1, "the poll delivers the missed change once")
+        self.assertFalse(lanes[0][1][0]["enabled"], "the pause reached the engine")
+        self.backend.status()
+        self.assertEqual(len([c for c in self.calls if c[0] == "lanes-set"]), 1, "and only once")
+
+    def test_a_row_delete_removes_a_playlist_that_is_not_active(self) -> None:
+        day, night, party = self._slug("Day"), self._slug("Night"), self._slug("Party")
+        self.playlists.set_active(day)
+        self._set_schedule(True, f"08:00={day};20:00={night}")
+        self.calls.clear()
+        self.backend.deletePlaylist(night)
+        self.assertEqual(self.playlists.active_slug(), day, "the active playlist stays")
+        self.assertNotIn(night, [p["slug"] for p in self.backend.playlistList()])
+        self.assertFalse(self.settings.load()["SCHEDULE_ENABLED"], "a scheduled playlist gone switches the schedule off")
+        lanes = [c for c in self.calls if c[0] == "lanes-set"]
+        self.assertTrue(lanes and "manual" not in lanes[-1][1][0], "no manual switch: the active did not change")
+        self.backend.deletePlaylist(day)
+        self.assertEqual(self.playlists.active_slug(), party, "deleting the active one reassigns")
+
     def test_a_refused_schedule_is_not_shown_as_on(self) -> None:
         day, night = self._slug("Day"), self._slug("Night")
         self._set_schedule(True, f"08:00={day};20:00={night}")

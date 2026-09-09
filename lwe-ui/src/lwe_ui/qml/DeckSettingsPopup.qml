@@ -99,20 +99,18 @@ Popup {
     }
 
     // two significant figures, with a decimal kept below 10x so the detent reads 1.0x
-    // --- Fit window (per wallpaper): the pan is a fraction of the travel the zoom leaves, so
-    // the chip reports the offset that produces in percent of the picture (zoom 2, pan 1 = 25)
+    // --- Fit window (per wallpaper): a full pan moves the picture half a screen at any zoom,
+    // so the chip reads percent of the screen, plus or minus fifty at the ends
     function panPercent(pan, zoom) {
-        var off = Math.round(Number(pan) * 50 * (1 - 1 / Math.max(1, Number(zoom))));
+        var off = Math.round(Number(pan) * 50);
         return (off < 0 ? "-" : "+") + Math.abs(off) + "%";
     }
-    // a typed "12%" is an offset of the picture and needs the zoom to become a fraction; a
-    // plain number is the fraction itself. NaN when the entry cannot be honoured.
+    // a typed "12%" is percent of the screen; a plain number is the fraction itself. NaN when
+    // the entry is not a number.
     function panFromEntry(t, zoom) {
         var s = String(t).trim();
-        if (s.endsWith("%")) {
-            var travel = 50 * (1 - 1 / Math.max(1, Number(zoom)));
-            return travel > 0 ? parseFloat(s) / travel : NaN;
-        }
+        if (s.endsWith("%"))
+            return parseFloat(s) / 50;
         return parseFloat(s);
     }
 
@@ -250,13 +248,38 @@ Popup {
     component PSlider: Slider {
         id: sld
         property string ckey: ""
+        // storeValue: bind this instead of value on rows that drag against a detent. The Binding
+        // re-asserts store truth whenever the knob is not held, so the detent's imperative
+        // writes during a drag cannot orphan the slider from the store.
+        property var storeValue: undefined
+        property real detentAt: NaN
+        property real detentBand: 0.05
+        Binding {
+            target: sld
+            property: "value"
+            value: sld.storeValue
+            when: sld.storeValue !== undefined && !sld.pressed
+            restoreMode: Binding.RestoreBindingOrValue
+        }
+        onMoved: {
+            if (!isNaN(detentAt) && Math.abs(value - detentAt) < detentBand) value = detentAt;
+            sld.dragValue = value;
+            sld.preview(value);
+        }
         // 0..1 position of a hash tick on the track; -1 draws none
         property real tickAt: -1
         signal commit(real v)
+        // every drag step, for a live look at the value before the release commits it
+        signal preview(real v)
         width: 132
         implicitWidth: 132
         implicitHeight: 16
-        onPressedChanged: if (!pressed) sld.commit(sld.value)
+        // the value the user dragged to, read before the store binding can restore on release
+        property real dragValue: 0
+        onPressedChanged: {
+            if (pressed) { sld.dragValue = sld.value; return; }
+            sld.commit(sld.storeValue !== undefined ? sld.dragValue : sld.value);
+        }
         background: Rectangle {
             x: sld.leftPadding
             y: sld.topPadding + sld.availableHeight / 2 - height / 2
@@ -506,6 +529,10 @@ Popup {
 
     contentItem: Column {
         spacing: 0
+        // holds the exclusive grab from the press to the release, even once the pointer has
+        // left the panel, so a drag that starts here can never lift a tile beneath; it takes
+        // nothing from the controls inside (TakeOverForbidden)
+        TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds; grabPermissions: PointerHandler.TakeOverForbidden }
 
         Item {
             id: head
@@ -625,6 +652,9 @@ Popup {
             contentHeight: bodyCol.implicitHeight
             clip: true
             boundsBehavior: Flickable.StopAtBounds
+            // a Flickable with nothing to scroll still takes the press and then lets a tile's
+            // drag handler have it; when the body fits, the panel's own handler holds it instead
+            interactive: contentHeight > height
 
             // Low-profile overlay bar: an ATTACHED ScrollBar is an overlay by construction -
             // it is parented to the Flickable rather than laid out beside it, so it reserves no
@@ -720,6 +750,7 @@ Popup {
                                             // binding; the rev bump re-binds to the detented value
                                             deckPopup.setGlobalSpeed(s);
                                         }
+                                        onPreview: function(p) { deckPopup.previewLive("speed", pop.speedDetented(pop.speedForPos(p))) }
                                     }
                                     PChip {
                                         anchors.verticalCenter: parent.verticalCenter
@@ -749,6 +780,7 @@ Popup {
                                         stepSize: 1
                                         value: (pop.rev, deckPopup.globalVolume())
                                         onCommit: function(v) { deckPopup.setGlobalVolume(Math.round(v)) }
+                                        onPreview: function(v) { deckPopup.previewLive("volume", Math.round(v)) }
                                     }
                                     PChip {
                                         anchors.verticalCenter: parent.verticalCenter
@@ -835,12 +867,14 @@ Popup {
                                 return raw === "" ? 1 : Number(raw);
                             }
                             onCommit: function(v) { deckPopup.setFit("zoom", v.toFixed(2)) }
+                            onPreview: function(v) { deckPopup.previewFit("zoom", v.toFixed(2)) }
                         }
                         PChip {
                             anchors.verticalCenter: parent.verticalCenter
                             ckey: "FIT_ZOOM"
                             text: popupFitZoom.value.toFixed(2)
                             onEntered: function(t) {
+                                if (String(t).trim() === "") { deckPopup.setFit("zoom", ""); return }
                                 var n = parseFloat(String(t).replace("x", ""));
                                 if (isNaN(n)) { deckPopup.reportFailure(["FIT_ZOOM"]); return }
                                 deckPopup.setFit("zoom", String(Math.max(1, Math.min(2, n))));
@@ -860,17 +894,20 @@ Popup {
                             from: -1
                             to: 1
                             tickAt: 0.5
-                            value: {
+                            storeValue: {
                                 var raw = (pop.rev, deckPopup.fitValue("pan_x"));
                                 return raw === "" ? 0 : Number(raw);
                             }
+                            detentAt: 0
                             onCommit: function(v) { deckPopup.setFit("pan_x", v.toFixed(3)) }
+                            onPreview: function(v) { deckPopup.previewFit("pan_x", v.toFixed(3)) }
                         }
                         PChip {
                             anchors.verticalCenter: parent.verticalCenter
                             ckey: "FIT_PAN_X"
                             text: pop.panPercent(popupPanX.value, popupFitZoom.value)
                             onEntered: function(t) {
+                                if (String(t).trim() === "") { deckPopup.setFit("pan_x", ""); return }
                                 var n = pop.panFromEntry(t, popupFitZoom.value);
                                 if (isNaN(n)) { deckPopup.reportFailure(["FIT_PAN_X"]); return }
                                 deckPopup.setFit("pan_x", Math.max(-1, Math.min(1, n)).toFixed(3));
@@ -890,17 +927,20 @@ Popup {
                             from: -1
                             to: 1
                             tickAt: 0.5
-                            value: {
+                            storeValue: {
                                 var raw = (pop.rev, deckPopup.fitValue("pan_y"));
                                 return raw === "" ? 0 : Number(raw);
                             }
+                            detentAt: 0
                             onCommit: function(v) { deckPopup.setFit("pan_y", v.toFixed(3)) }
+                            onPreview: function(v) { deckPopup.previewFit("pan_y", v.toFixed(3)) }
                         }
                         PChip {
                             anchors.verticalCenter: parent.verticalCenter
                             ckey: "FIT_PAN_Y"
                             text: pop.panPercent(popupPanY.value, popupFitZoom.value)
                             onEntered: function(t) {
+                                if (String(t).trim() === "") { deckPopup.setFit("pan_y", ""); return }
                                 var n = pop.panFromEntry(t, popupFitZoom.value);
                                 if (isNaN(n)) { deckPopup.reportFailure(["FIT_PAN_Y"]); return }
                                 deckPopup.setFit("pan_y", Math.max(-1, Math.min(1, n)).toFixed(3));

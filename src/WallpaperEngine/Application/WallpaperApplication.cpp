@@ -1928,6 +1928,7 @@ nlohmann::json WallpaperApplication::apiStatus () const {
     result["rotation"] = { { "enabled", lane.enabled },
 			   { "interval_s", playlist.intervalSeconds },
 			   { "next_in_s", Api::nextInSeconds (lane, playlist, now) },
+			   { "next_in_ms", Api::nextInMs (lane, playlist, now) },
 			   { "order", playlist.order },
 			   { "count", playlist.entries.size () },
 			   { "next_up", Api::aheadUp (lane, playlist) },
@@ -2584,7 +2585,7 @@ void WallpaperApplication::bindLane (
     if (slug != lane.playlistSlug) {
 	// another playlist is another walk: nothing of the old cycle carries over
 	lane.playlistSlug = slug;
-	lane.frozenRemainingSeconds = -1;
+	lane.frozenRemainingMs = -1;
 	lane.walk.clear ();
 	lane.nextCycle.clear ();
 	lane.cursor = -1;
@@ -2979,12 +2980,13 @@ void WallpaperApplication::persistRuntimeState () const {
 			  { "avoid_repeat", playlist.avoidRepeat },
 			  { "enabled", lane.enabled },
 			  { "label", playlist.label },
-			  { "frozen_remaining_s", lane.frozenRemainingSeconds } };
+			  { "frozen_remaining_s", lane.frozenRemainingMs < 0 ? int64_t (-1) : lane.frozenRemainingMs / 1000 } };
     const auto now = std::chrono::steady_clock::now ();
     nlohmann::json lanes = nlohmann::json::array ();
     for (const auto& [key, item] : this->m_lanes) {
 	auto entry = Api::toJson (item);
 	entry["remaining_s"] = Api::nextInSeconds (item, this->playlistOf (item), now);
+	entry["remaining_ms"] = Api::nextInMs (item, this->playlistOf (item), now);
 	lanes.push_back (entry);
     }
     state["saved_at"] = std::chrono::duration_cast<std::chrono::seconds> (
@@ -3196,8 +3198,8 @@ void WallpaperApplication::restoreRuntimeState () {
 	    Api::applySet (
 		lane, this->playlist ("default"), legacyPlaylist, legacyLane.enabled, std::chrono::steady_clock::now ()
 	    );
-	    if (legacyLane.frozenRemainingSeconds >= 0 && !lane.enabled) {
-		lane.frozenRemainingSeconds = legacyLane.frozenRemainingSeconds;
+	    if (legacyLane.frozenRemainingMs >= 0 && !lane.enabled) {
+		lane.frozenRemainingMs = legacyLane.frozenRemainingMs;
 	    }
 	    lane.current = legacyLane.current;
 	    Api::seatOnCurrent (lane, this->playlistOf (lane));
@@ -3234,7 +3236,11 @@ void WallpaperApplication::restoreRuntimeState () {
 		    const auto bound = this->m_playlists.find (lane.playlistSlug);
 		    lane.enabled = lane.enabled && bound != this->m_playlists.end () && !bound->second.entries.empty ();
 		    Api::resumeCountdown (
-			lane, this->playlistOf (lane), item.value ("remaining_s", -1), downtime,
+			lane, this->playlistOf (lane),
+			item.contains ("remaining_ms") && item["remaining_ms"].is_number_integer ()
+			    ? item["remaining_ms"].get<int64_t> ()
+			    : (item.value ("remaining_s", -1) < 0 ? int64_t (-1) : int64_t (item.value ("remaining_s", -1)) * 1000),
+			int64_t (downtime) * 1000,
 			std::chrono::steady_clock::now ()
 		    );
 		    this->m_lanes[lane.id] = lane;

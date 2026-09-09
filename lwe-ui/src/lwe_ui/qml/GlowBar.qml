@@ -44,14 +44,8 @@ Item {
         onTriggered: bloomAnim.restart()
     }
     onBreathingChanged: if (!bar.breathing) bloomAnim.stop()
-    // a pause change restarts the breath from the bottom at the new period, bloom a beat behind
-    onPausedChanged: {
-        if (!bar.breathing) return;
-        bloomAnim.stop();
-        bar.bloomPulse = 0.25;
-        fillAnim.restart();
-        lagTimer.restart();
-    }
+    // a pause change leaves the fill and the halo where they are; the slower period takes
+    // effect from the next breath, so nothing dips
     SequentialAnimation {
         id: bloomAnim; loops: Animation.Infinite
         NumberAnimation { target: bar; property: "bloomPulse"; from: 0.25; to: bar.bloomPeak

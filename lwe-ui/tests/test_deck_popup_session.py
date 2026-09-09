@@ -21,6 +21,8 @@ import sys
 import tempfile
 import types
 import unittest
+
+from PySide6.QtTest import QTest
 from pathlib import Path
 
 _SRC = str(Path(__file__).resolve().parent.parent / "src")
@@ -171,6 +173,61 @@ class DeckPopupSessionTests(unittest.TestCase):
         self.popup_mod.api_client.set_fit = lambda **kw: {"ok": False, "error": "no"}
         self.popup.setFit("pan_y", "0.5")
         self.assertIn(["FIT_PAN_Y"], self.failures)
+
+    def test_fit_preview_goes_live_without_touching_the_store(self) -> None:
+        wid = "1000005"
+        self.wp.update_set(wid, {"FIT_ZOOM": 1.5})
+        self.popup.syncCurrent(wid)
+        pushes: list[dict] = []
+        self.popup_mod.api_client.available = lambda: True
+        self.popup_mod.api_client.set_fit = lambda **kw: (pushes.append(dict(kw)) or {"ok": True})
+
+        # drag steps coalesce: three in one tick make one push carrying the last value
+        self.popup.previewFit("pan_x", "0.100")
+        self.popup.previewFit("pan_x", "0.200")
+        self.popup.previewFit("pan_y", "-0.300")
+        self.assertEqual(pushes, [])
+        QTest.qWait(80)
+        self.assertEqual(pushes, [{"layer": "wallpaper", "id": wid, "zoom": 1.5, "pan_x": 0.2, "pan_y": -0.3}])
+        self.assertNotIn("FIT_PAN_X", self.wp.load_set(wid), "a preview never writes the store")
+        self.assertFalse(self.popup.hasMarks())
+        self.assertFalse(self.popup._reshow.isActive())
+
+        # a refused preview is silent: the release's commit carries the failure grammar
+        self.popup_mod.api_client.set_fit = lambda **kw: {"ok": False, "error": "no"}
+        self.popup.previewFit("pan_x", "0.4")
+        QTest.qWait(80)
+        self.assertNotIn(["FIT_PAN_X"], self.failures)
+        # nonsense and a bridge with no wallpaper push nothing
+        self.popup_mod.api_client.set_fit = lambda **kw: (pushes.append(dict(kw)) or {"ok": True})
+        self.popup.previewFit("pan_x", "wide")
+        self.popup.syncCurrent("")
+        self.popup.previewFit("pan_x", "0.5")
+        QTest.qWait(80)
+        self.assertEqual(len(pushes), 1)
+
+    def test_speed_and_volume_preview_send_the_verb_and_persist_nothing(self) -> None:
+        wid = "1000006"
+        self.wp.update_set(wid, {"SPEED": 2.0})
+        self.popup.syncCurrent(wid)
+        from lwe_ui.storage import settings
+        before = dict(settings.load())
+        sent: list[tuple] = []
+        self.popup_mod.api_client.available = lambda: True
+        self.popup_mod.api_client.set_speed = lambda v: (sent.append(("speed", v)) or {"ok": True})
+        self.popup_mod.api_client.set_volume = lambda v: (sent.append(("volume", v)) or {"ok": True})
+        # the effective rate, conf SPEED times the dragged factor, as the commit would send
+        self.popup.previewLive("speed", 1.25)
+        self.popup.previewLive("speed", 1.5)
+        self.popup.previewLive("volume", 40.0)
+        self.assertEqual(sent, [])
+        QTest.qWait(80)
+        self.assertEqual(sent, [("speed", 3.0), ("volume", 40)])
+        self.assertEqual(dict(settings.load()), before, "a preview persists nothing")
+        self.assertEqual(self.failures, [])
+        self.popup.previewLive("fps", 60.0)
+        QTest.qWait(80)
+        self.assertEqual(len(sent), 2, "only Speed and Volume preview")
 
 
 if __name__ == "__main__":

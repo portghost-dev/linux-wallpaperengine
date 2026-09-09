@@ -45,7 +45,6 @@ Column {
 
     SettingsRow {
         label: "Close to tray"
-        caption: "The app keeps running in the tray"
         ThemedSwitch {
             checked: page.val("CLOSE_TO_TRAY") === true
             onToggled: settingsBridge.commit("CLOSE_TO_TRAY", checked)

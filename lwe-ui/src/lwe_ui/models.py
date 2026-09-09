@@ -49,6 +49,11 @@ _ROLE_FAVORITE = Qt.ItemDataRole.UserRole + 5
 _ROLE_TYPE = Qt.ItemDataRole.UserRole + 6
 _ROLE_MISSING = Qt.ItemDataRole.UserRole + 7  # good-but-absent (broken: tagged good, no files)
 _ROLE_PENDING_REVIEW = Qt.ItemDataRole.UserRole + 8  # on disk, never classified good/bad
+_ROLE_REFUSED = Qt.ItemDataRole.UserRole + 9  # folder name outside the id allowlist: card only
+
+# the one reason a folder that is on disk cannot be played or listed: its name. The id is a
+# path component, a word in the shell-sourced playlist files and an engine verb argument.
+REFUSED_REASON = "Rename this folder: letters, digits, dot, underscore and hyphen only"
 
 
 def _wallpapers_dir() -> str:
@@ -381,7 +386,7 @@ class _Row:
     """One library entry: cached id + lazily-resolved project facts + live tag/meta flags."""
 
     __slots__ = ("id", "title", "thumb", "type", "in_playlist", "favorite", "missing",
-                 "pending_review")
+                 "pending_review", "refused")
 
     def __init__(self, wid: str) -> None:
         self.id = wid
@@ -392,6 +397,7 @@ class _Row:
         self.favorite = False
         self.missing = False
         self.pending_review = False
+        self.refused = False
 
 
 class LibraryModel(QAbstractListModel):
@@ -412,6 +418,7 @@ class LibraryModel(QAbstractListModel):
             _ROLE_TYPE: QByteArray(b"type"),
             _ROLE_MISSING: QByteArray(b"missing"),
             _ROLE_PENDING_REVIEW: QByteArray(b"pendingReview"),
+            _ROLE_REFUSED: QByteArray(b"refused"),
         }
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:  # noqa: N802
@@ -440,6 +447,8 @@ class LibraryModel(QAbstractListModel):
             return row.missing
         if role == _ROLE_PENDING_REVIEW:
             return row.pending_review
+        if role == _ROLE_REFUSED:
+            return row.refused
         return None
 
     def reload(self, members: set[str] | None = None) -> None:
@@ -474,6 +483,8 @@ class LibraryModel(QAbstractListModel):
             row = _Row(wid)
             # broken = good-but-absent: render source missing (not just a same-named dir gone)
             row.missing = not _is_present(wid, wallpapers_dir, dir_ids)
+            # a folder the id allowlist refuses keeps its card, and the card says why
+            row.refused = not paths.is_safe_wid(wid)
             # pending review = on disk and never classified, OR imported under
             # review-required (the tags `review` state)
             row.pending_review = wid not in known or wid in review
@@ -613,6 +624,9 @@ class Backend(QObject):
     notice = Signal(str)
 
     playlistsChanged = Signal()
+    # the engine's own countdown in milliseconds, straight from a lanes-set reply, so the deck
+    # anchors its clock to the engine at a pause or resume instead of guessing until the next poll
+    rotationClock = Signal(int, int)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -641,6 +655,9 @@ class Backend(QObject):
         self._engine_pid_seen: int | None = None
         self._schedule_held = False
         self._schedule_refused = False
+        # a policy change the engine could not be told about (socket down, engine restarting):
+        # the next poll that finds the engine up delivers it
+        self._policy_dirty = False
         # (monotonic, frames, pid) baseline for the measured frame rate. The engine
         # reports a CUMULATIVE frame count, so a rate needs two samples; the pid is
         # part of the key because a fresh engine restarts the counter at zero.
@@ -736,6 +753,7 @@ class Backend(QObject):
         """Show this wallpaper on the desktop now (engine `show` verb, ack-only ~30ms)."""
         wid = (wid or "").strip()
         if not paths.is_safe_wid(wid):
+            self.notice.emit(REFUSED_REASON)
             return False
         # card-play re-arms a stopped engine (v1.0 acceptance 7): master off is a hold,
         # not a lockout
@@ -899,6 +917,20 @@ class Backend(QObject):
             return
         self.playlistsChanged.emit()
 
+    @Slot(str)
+    def deletePlaylist(self, slug: str) -> None:
+        """Delete one playlist from its row in the menu; the active one reassigns as before."""
+        slug = str(slug or "")
+        if not slug:
+            return
+        was_active = slug == self._active_slug()
+        try:
+            playlists.delete(slug)  # tombstones + reassigns the active pointer if it was active
+        except Exception:
+            return
+        self._drop_from_schedule(slug)
+        self._after_playlist_change(manual=was_active)
+
     @Slot()
     def deleteActivePlaylist(self) -> None:
         slug = self._active_slug()
@@ -908,7 +940,18 @@ class Backend(QObject):
             playlists.delete(slug)  # tombstones + reassigns the active pointer
         except Exception:
             return
+        self._drop_from_schedule(slug)
         self._after_playlist_change(manual=True)
+
+    def _drop_from_schedule(self, slug: str) -> None:
+        """A deleted playlist leaves the schedule and the schedule switches off, the same
+        thing the engine does on its side; the modal then opens with the switch off."""
+        packed = str(self._setting("SCHEDULE", "") or "")
+        kept = [e for e in packed.split(";") if e.strip() and e.partition("=")[2].strip() != slug]
+        if len(kept) == len([e for e in packed.split(";") if e.strip()]):
+            return
+        self._set_setting("SCHEDULE", ";".join(kept))
+        self._set_setting("SCHEDULE_ENABLED", False)
 
     @Slot(str)
     def setPlaylistMode(self, mode: str) -> None:
@@ -1108,7 +1151,9 @@ class Backend(QObject):
         surfaced to the caller."""
         try:
             if not api_client.available():
+                self._policy_dirty = True
                 return
+            self._policy_dirty = True   # cleared below, once the lane binding was answered
             slug = self._active_slug() or "default"
             entries, interval, order, enabled, label = self._playlist_payload(slug)
             parts = split_playlist_parts(entries)
@@ -1123,12 +1168,28 @@ class Backend(QObject):
             lane: dict[str, Any] = {"id": "all", "playlist": slug, "enabled": enabled}
             if manual:
                 lane["manual"] = True
-            api_client.lanes_set([lane])
+            reply = api_client.lanes_set([lane])
+            try:
+                # the reply is the envelope: {ok, result: {lanes: [...]}}; an unanswered push
+                # (socket gone mid-way) leaves the policy marked for the next poll
+                if isinstance(reply, dict) and reply.get("ok"):
+                    self._policy_dirty = False
+                result = reply.get("result") if isinstance(reply, dict) and reply.get("ok") else None
+                lanes = result.get("lanes") if isinstance(result, dict) else None
+                if isinstance(lanes, list) and lanes:
+                    ms, iv = lanes[0].get("next_in_ms"), lanes[0].get("interval_s")
+                    if isinstance(ms, (int, float)) and int(ms) >= 0:
+                        self.rotationClock.emit(int(ms), int(iv) if isinstance(iv, (int, float)) else -1)
+            except Exception:
+                pass
         except Exception:
             pass
 
     @Slot(result=bool)
     def rotateNext(self) -> bool:
+        # a step is an intent to watch: it resumes a paused rotation first
+        if not bool(self._setting("ROTATION_ENABLED", True)):
+            self.setPaused(False)
         try:
             reply = api_client.next_wallpaper()
             if reply is not None and reply.get("ok"):
@@ -1146,6 +1207,9 @@ class Backend(QObject):
 
     @Slot(result=bool)
     def rotatePrev(self) -> bool:
+        # a step is an intent to watch: it resumes a paused rotation first
+        if not bool(self._setting("ROTATION_ENABLED", True)):
+            self.setPaused(False)
         try:
             reply = api_client.prev_wallpaper()
             if reply is not None and reply.get("ok"):
@@ -1559,6 +1623,9 @@ class Backend(QObject):
     def setPlaylist(self, wid: str, on: bool) -> None:
         """Toggle membership of `wid` in the ACTIVE playlist (the card checkbox)."""
         if not wid:
+            return
+        if not paths.is_safe_wid(wid):
+            self.notice.emit(REFUSED_REASON)
             return
         slug = self._active_slug()
         if not slug:
@@ -2030,6 +2097,10 @@ class Backend(QObject):
                         self._sync_engine()
                         self._push_fullscreen_behavior()
                         self._push_live_globals()
+                if self._policy_dirty:
+                    # a change made while the engine was away (a pause clicked during a
+                    # restart) is delivered now, once
+                    self._sync_engine()
 
                 # the fullscreen ignore-list is a FILE the user edits in their own
                 # editor, so there is no save hook to hang a push on. Watch its
@@ -2063,6 +2134,8 @@ class Backend(QObject):
                 if isinstance(rot, dict):
                     if rot.get("next_in_s", -1) >= 0:
                         result["next_in"] = int(rot["next_in_s"])
+                    if isinstance(rot.get("next_in_ms"), int) and rot["next_in_ms"] >= 0:
+                        result["next_in_ms"] = int(rot["next_in_ms"])
                     result["interval"] = int(rot.get("interval_s") or 0)
                     result["playlist"] = str(rot.get("label") or "")
                     result["next_up"] = str(rot.get("next_up") or "")

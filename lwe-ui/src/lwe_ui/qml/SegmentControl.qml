@@ -32,8 +32,6 @@ Item {
         anchors.fill: parent
         radius: Theme.radiusSm
         color: "transparent"
-        border.width: 1
-        border.color: Theme.border
         clip: true
 
         Row {
@@ -63,6 +61,11 @@ Item {
                     Rectangle {
                         anchors.fill: parent
                         color: cell.current ? Theme.segmentWash : "transparent"
+                        // the end cells round their outer corners so a wash never squares the pill off
+                        topLeftRadius: index === 0 ? Theme.radiusSm - 1 : 0
+                        bottomLeftRadius: index === 0 ? Theme.radiusSm - 1 : 0
+                        topRightRadius: cell.index === seg.model.length - 1 ? Theme.radiusSm - 1 : 0
+                        bottomRightRadius: cell.index === seg.model.length - 1 ? Theme.radiusSm - 1 : 0
                     }
 
                     Label {
@@ -81,5 +84,14 @@ Item {
                 }
             }
         }
+    }
+    // the border sits above the cell washes, so a filled end cell cannot cover its corners
+    Rectangle {
+        anchors.fill: parent
+        radius: Theme.radiusSm
+        color: "transparent"
+        border.width: 1
+        border.color: Theme.border
+        z: 1
     }
 }

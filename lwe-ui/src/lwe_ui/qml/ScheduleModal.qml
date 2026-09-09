@@ -27,15 +27,21 @@ Popup {
     property string slugA: ""
     property string slugB: ""
 
-    function nameIndex(slug) {
+    function nameIndex(slug, avoid) {
         for (var i = 0; i < plModel.length; i++)
             if (plModel[i].slug === slug) return i;
+        // a playlist that is gone: the first one that is not the other row's
+        for (var j = 0; j < plModel.length; j++)
+            if (plModel[j].slug !== avoid) return j;
         return 0;
     }
+    // "05:15", "0515" and "515" all read as 315; the hour and minute must be in range
     function toMin(t) {
-        var m = /^(\d{2}):(\d{2})$/.exec(t);
+        var m = /^(\d{1,2}):?(\d{2})$/.exec(String(t).trim());
         if (!m) return -1;
-        return parseInt(m[1]) * 60 + parseInt(m[2]);
+        var h = parseInt(m[1]), mm = parseInt(m[2]);
+        if (h > 23 || mm > 59) return -1;
+        return h * 60 + mm;
     }
     function fmtMin(v) {
         var h = Math.floor(v / 60), m = v % 60;
@@ -53,8 +59,8 @@ Popup {
         slugA = e1.length === 2 ? e1[1] : (plModel[0] ? plModel[0].slug : "");
         entryB.time.text = e2.length === 2 ? e2[0] : "20:00";
         slugB = e2.length === 2 ? e2[1] : (plModel[0] ? plModel[0].slug : "");
-        entryA.combo.currentIndex = nameIndex(slugA);
-        entryB.combo.currentIndex = nameIndex(slugB);
+        entryA.combo.currentIndex = nameIndex(slugA, "");
+        entryB.combo.currentIndex = nameIndex(slugB, plModel[entryA.combo.currentIndex] ? plModel[entryA.combo.currentIndex].slug : "");
     }
 
     contentItem: Column {
@@ -150,6 +156,7 @@ Popup {
                 }
                 ThemedCombo {
                     id: comboAlias
+                    objectName: "playlistCombo"   // stable test hook, scoped per EntryRow parent
                     width: er.width - 14 - fromLbl.implicitWidth - timeAlias.width - er.spacing * 3
                     height: 28
                     model: modal.plModel.map(function(p) { return p.name; })
@@ -177,7 +184,13 @@ Popup {
                     font.family: Theme.monoFamily
                     horizontalAlignment: Text.AlignHCenter
                     selectByMouse: true
-                    validator: RegularExpressionValidator { regularExpression: /^\d{2}:\d{2}$/ }
+                    // digits with an optional colon, so an edit in the middle, a replaced
+                    // selection or a colon-less entry can stand while it is typed
+                    validator: RegularExpressionValidator { regularExpression: /^\d{0,2}:?\d{0,2}$/ }
+                    onEditingFinished: {
+                        var m = modal.toMin(text);
+                        if (m >= 0) text = modal.fmtMin(m);
+                    }
                     background: Rectangle {
                         color: Theme.inputWell
                         radius: Theme.radiusSm
@@ -197,11 +210,12 @@ Popup {
                 id: dayStripRow
                 objectName: "dayStripRow"   // stable test hook (findChild reaches objectName, not id)
                 width: parent.width - parent.leftPadding - parent.rightPadding
-                height: 26
+                height: 24 + stripLabels.height
 
                 property int a: modal.toMin(entryA.time.text)
                 property int b: modal.toMin(entryB.time.text)
-                property bool ok: a >= 0 && b >= 0 && a !== b
+                property bool ok: a >= 0 && b >= 0
+                property bool distinct: ok && a !== b
                 property bool aIsEarlier: a < b
                 property int loMin: aIsEarlier ? a : b
                 property int hiMin: aIsEarlier ? b : a
@@ -216,6 +230,13 @@ Popup {
                     var m = Math.round(px / width * 1440 / snap) * snap;
                     return Math.max(0, Math.min(1440 - snap, m));
                 }
+                // the two handles may cross (a day that wraps midnight is legal) but never come
+                // within a quarter hour of each other: a drag that would is walled where it stands
+                function gapMinutes(m, other) {
+                    var d = Math.abs(m - other);
+                    return Math.min(d, 1440 - d);
+                }
+                function walled(m, other) { return gapMinutes(m, other) < snap; }
 
                 Rectangle {
                     anchors.left: parent.left
@@ -265,7 +286,7 @@ Popup {
                     objectName: "timeHandle"
                     visible: dayStripRow.ok
                     width: 18
-                    height: dayStripRow.height
+                    height: 26
                     x: dayStripRow.width * (minute / 1440) - width / 2
                     y: 0
                     z: 2
@@ -283,55 +304,61 @@ Popup {
                         preventStealing: true
                         onPositionChanged: function(mouse) {
                             if (!pressed) return;
-                            var px = handle.x + handle.width / 2 + (mouse.x - handle.width / 2);
-                            handle.entry.time.text = modal.fmtMin(dayStripRow.minuteAt(px));
+                            var px = handle.x + mouse.x;
+                            var m = dayStripRow.minuteAt(px);
+                            var other = handle.entry === entryA ? dayStripRow.b : dayStripRow.a;
+                            if (dayStripRow.walled(m, other)) return;
+                            handle.entry.time.text = modal.fmtMin(m);
                         }
                     }
                 }
                 TimeHandle { objectName: "handleA"; entry: entryA; minute: dayStripRow.a }
                 TimeHandle { objectName: "handleB"; entry: entryB; minute: dayStripRow.b }
+                Item {
+                    // three static lines directly under the handles: midnight at both ends on
+                    // top, the day time under its handle beneath, the night time beneath that
+                    id: stripLabels
+                    objectName: "stripLabels"
+                    width: parent.width
+                    y: 24
+                    height: 42
+                    Label {
+                        x: 0
+                        y: 0
+                        text: "00:00"
+                        color: Theme.textTertiary
+                        font.pixelSize: Theme.fontMicro
+                    }
+                    Label {
+                        x: parent.width - width
+                        y: 0
+                        text: "00:00"
+                        color: Theme.textTertiary
+                        font.pixelSize: Theme.fontMicro
+                    }
+                    Label {
+                        id: labelA
+                        objectName: "labelA"
+                        visible: dayStripRow.ok
+                        x: Math.max(0, Math.min(parent.width - width, parent.width * (dayStripRow.a / 1440) - width / 2))
+                        y: 14
+                        text: modal.fmtMin(dayStripRow.a)
+                        color: entryA.dotColor
+                        font.pixelSize: Theme.fontMicro
+                    }
+                    Label {
+                        id: labelB
+                        objectName: "labelB"
+                        visible: dayStripRow.ok
+                        x: Math.max(0, Math.min(parent.width - width, parent.width * (dayStripRow.b / 1440) - width / 2))
+                        y: 28
+                        text: modal.fmtMin(dayStripRow.b)
+                        color: entryB.dotColor
+                        font.pixelSize: Theme.fontMicro
+                    }
+                }
             }
-            Item {
-                // the times sit under their own positions on the strip; midnight at both ends.
-                // Two times close together stack their labels instead of colliding.
-                id: stripLabels
-                width: parent.width - parent.leftPadding - parent.rightPadding
-                readonly property real xA: Math.max(0, Math.min(width - labelA.width, width * (dayStripRow.a / 1440) - labelA.width / 2))
-                readonly property real xB: Math.max(0, Math.min(width - labelB.width, width * (dayStripRow.b / 1440) - labelB.width / 2))
-                readonly property bool collide: dayStripRow.ok && Math.abs(xA - xB) < Math.max(labelA.width, labelB.width) + 4
-                height: collide ? 28 : 14
-                Label {
-                    x: 0
-                    text: "00:00"
-                    color: Theme.textTertiary
-                    font.pixelSize: Theme.fontMicro
-                }
-                Label {
-                    id: labelA
-                    objectName: "labelA"
-                    visible: dayStripRow.ok
-                    x: stripLabels.xA
-                    text: modal.fmtMin(dayStripRow.a)
-                    color: entryA.dotColor
-                    font.pixelSize: Theme.fontMicro
-                }
-                Label {
-                    id: labelB
-                    objectName: "labelB"
-                    visible: dayStripRow.ok
-                    x: stripLabels.xB
-                    y: stripLabels.collide ? 14 : 0
-                    text: modal.fmtMin(dayStripRow.b)
-                    color: entryB.dotColor
-                    font.pixelSize: Theme.fontMicro
-                }
-                Label {
-                    x: parent.width - width
-                    text: "00:00"
-                    color: Theme.textTertiary
-                    font.pixelSize: Theme.fontMicro
-                }
-            }
+
 
             Label {
                 width: parent.width - parent.leftPadding - parent.rightPadding
@@ -372,28 +399,37 @@ Popup {
                 }
                 Button {
                     id: saveBtn
+                    objectName: "saveBtn"
                     text: "Save"
+                    // two different times and two different playlists, or nothing to save
+                    enabled: dayStripRow.distinct
+                             && modal.plModel[entryA.combo.currentIndex] && modal.plModel[entryB.combo.currentIndex]
+                             && modal.plModel[entryA.combo.currentIndex].slug !== modal.plModel[entryB.combo.currentIndex].slug
                     onClicked: {
                         var ta = entryA.time.text, tb = entryB.time.text;
                         if (modal.toMin(ta) < 0 || modal.toMin(tb) < 0)
                             return;
                         var sa = modal.plModel[entryA.combo.currentIndex];
                         var sb = modal.plModel[entryB.combo.currentIndex];
-                        if (!sa || !sb)
+                        if (!sa || !sb || sa.slug === sb.slug)
                             return;
-                        backend.setSetting("SCHEDULE", ta + "=" + sa.slug + ";" + tb + "=" + sb.slug);
+                        backend.setSetting("SCHEDULE", modal.fmtMin(modal.toMin(ta)) + "=" + sa.slug + ";"
+                                                       + modal.fmtMin(modal.toMin(tb)) + "=" + sb.slug);
                         backend.setSetting("SCHEDULE_ENABLED", modal.schedEnabled);
                         modal.close();
                     }
                     contentItem: Label {
                         text: saveBtn.text
-                        color: Theme.onAccent
+                        color: saveBtn.enabled ? Theme.onAccent : Theme.textTertiary
                         font.pixelSize: Theme.fontControl
                         horizontalAlignment: Text.AlignHCenter
                     }
+                    // disabled reads as disabled: a flat well with a border, no accent
                     background: Rectangle {
                         radius: Theme.radiusSm
-                        color: Theme.accent
+                        color: saveBtn.enabled ? Theme.accent : Theme.inputWell
+                        border.width: saveBtn.enabled ? 0 : 1
+                        border.color: Theme.border
                     }
                 }
             }

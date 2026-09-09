@@ -111,6 +111,12 @@ class DeckPopupBridge(QObject):
         self._type: str = ""
         self._props: list[dict] = []
         self._pending: set[str] = set()
+        # a slider mid-drag: its steps coalesce here and go to the engine one push per tick
+        self._preview = QTimer(self)
+        self._preview.setSingleShot(True)
+        self._preview.setInterval(33)
+        self._preview.timeout.connect(self._fire_preview)
+        self._preview_pending: dict[str, float] = {}
         self._reshow = QTimer(self)
         self._reshow.setSingleShot(True)
         self._reshow.setInterval(_RESHOW_MS)
@@ -345,6 +351,63 @@ class DeckPopupBridge(QObject):
         except Exception:
             return ""
         return str(present.get(key)) if key in present else ""
+
+    @Slot(str, str)
+    def previewFit(self, field: str, text: str) -> None:
+        """A slider mid-drag: show the value live through the wallpaper layer, store untouched.
+        Steps coalesce to one push per timer tick; the release commits through setFit, which
+        also carries the failure grammar, so a refused preview stays silent."""
+        key = C.FIT_FIELDS.get(str(field or ""))
+        if not key or not self._wid:
+            return
+        try:
+            v = float(str(text or "").strip())
+        except (TypeError, ValueError):
+            return
+        self._queue_preview(key, v)
+
+    @Slot(str, float)
+    def previewLive(self, kind: str, value: float) -> None:
+        """The global Speed or Volume slider mid-drag: the verb the release will send, sent now
+        with the same resolution, nothing persisted."""
+        if str(kind) not in ("speed", "volume"):
+            return
+        try:
+            v = float(value)
+        except (TypeError, ValueError):
+            return
+        self._queue_preview(str(kind), v)
+
+    def _queue_preview(self, key: str, v: float) -> None:
+        if v != v:
+            return
+        self._preview_pending[key] = v
+        if not self._preview.isActive():
+            self._preview.start()
+
+    def _fire_preview(self) -> None:
+        pending, self._preview_pending = self._preview_pending, {}
+        if not pending:
+            return
+        try:
+            if not api_client.available():
+                return
+            conf: dict[str, Any] = {}
+            if self._wid:
+                try:
+                    conf = dict(wp.load(self._wid))
+                except Exception:
+                    conf = {}
+            if "speed" in pending:
+                factor = max(SPEED_MIN, min(SPEED_MAX, pending.pop("speed")))
+                api_client.set_speed(C.resolve_speed(conf.get("SPEED") or 1.0, factor))
+            if "volume" in pending:
+                api_client.set_volume(max(0, min(100, int(round(pending.pop("volume"))))))
+            if pending and self._wid:
+                conf.update(pending)
+                api_client.set_fit(layer="wallpaper", id=self._wid, **resolve_fit(conf))
+        except Exception:
+            pass
 
     @Slot(str, str, result=bool)
     def setFit(self, field: str, text: str) -> bool:

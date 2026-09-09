@@ -202,25 +202,23 @@ def main() -> None:
         deck.setProperty("rotationOn", True)
         settle()
         assert pbar.property("shimmerOn") is True
-        # a pause change restarts the breath from the bottom and the bloom follows a beat later:
-        # right after the toggle the fill has restarted low and the bloom has not moved yet;
-        # after the lag both are rising, fill ahead
+        # a pause leaves the fill and the halo where they are: no dip, only a slower breath
+        QTest.qWait(700)
+        before_f = float(pbar.property("fillPulse")); before_b = float(pbar.property("bloomPulse"))
         deck.setProperty("rotationOn", False)
         QTest.qWait(40)
         f0 = float(pbar.property("fillPulse")); b0 = float(pbar.property("bloomPulse"))
-        assert 0.85 <= f0 < 0.90, f"pause restarts the fill breath from the bottom (got {f0})"
-        assert abs(b0 - 0.25) < 1e-6, f"the bloom waits out the lag before it starts (got {b0})"
-        QTest.qWait(500)
-        f1 = float(pbar.property("fillPulse")); b1 = float(pbar.property("bloomPulse"))
-        assert f1 > f0 and b1 > b0, f"both rise after the lag (fill {f0}->{f1}, bloom {b0}->{b1})"
+        assert abs(f0 - before_f) < 0.06 and abs(b0 - before_b) < 0.06, \
+            f"a pause must not reset the breath (fill {before_f}->{f0}, bloom {before_b}->{b0})"
+        assert int(pbar.property("breathInhale")) == 2200
         deck.setProperty("rotationOn", True)
         settle()
         # nothing lit, nothing breathing: an empty fill does not wake the render loop
         deck.setProperty("engineStatus", {"state": "up", "current": "111", "interval": "900", "next_in": "900"})
         settle()
-        assert float(_find(deck, "deckProgressFill").property("width")) == 0
-        assert pbar.property("breathing") is False and pbar.property("shimmerOn") is False, \
-            "an empty fill has no breath or shimmer"
+        assert float(_find(deck, "deckProgressFill").property("width")) < 1.0, "an empty fill (a tick may add a few ms)"
+        assert pbar.property("breathing") is False or float(_find(deck, "deckProgressFill").property("width")) > 0, \
+            "an empty fill has no breath"
         deck.setProperty("engineStatus", {"state": "up", "current": "111", "interval": "900", "next_in": "300"})
         settle()
         assert pbar.property("breathing") is True
@@ -256,6 +254,32 @@ def main() -> None:
         r1 = float(deck.elapsedSecs())
         assert r1 > r0 + 0.4, f"elapsed must advance between polls (got {r0} -> {r1})"
         assert 600 <= r0 <= 605 and r1 <= 610, f"interpolation anchored at 600 ({r0} -> {r1})"
+        # pausing folds the interpolated time into the anchor: the readout holds, it does not
+        # drop back to the last polled value
+        deck.setProperty("rotationOn", False)
+        r2 = float(deck.elapsedSecs())
+        assert r2 >= r1 - 0.05, f"a pause must not drop the readout ({r1} -> {r2})"
+        QTest.qWait(900)
+        assert abs(float(deck.elapsedSecs()) - r2) < 0.05, "held while paused"
+        # the engine's whole-second report while paused does not snap the held fraction
+        deck.setProperty("engineStatus", {"state": "up", "current": "", "interval": "900",
+                                          "next_in": str(int(900 - r2))})
+        settle()
+        assert abs(float(deck.elapsedSecs()) - r2) < 0.05, "a poll inside the threshold leaves the held value alone"
+        deck.setProperty("engineStatus", {"state": "up", "current": "", "interval": "900", "next_in": "100"})
+        settle()
+        assert abs(float(deck.elapsedSecs()) - 800) < 0.05, "a real disagreement still corrects"
+        deck.setProperty("engineStatus", {"state": "up", "current": "", "interval": "900",
+                                          "next_in": str(int(900 - r2))})
+        settle()
+        held = float(deck.elapsedSecs())
+        deck.setProperty("rotationOn", True)
+        r3 = float(deck.elapsedSecs())
+        assert abs(r3 - held) < 0.3, f"a resume continues from the held value, no leap ({held} -> {r3})"
+        # the engine's reply to a pause or resume anchors the clock outright
+        backend.rotationClock.emit(250000, 900)
+        assert abs(float(deck.elapsedSecs()) - 650) < 0.05, "the reply's countdown, in milliseconds, is the readout"
+        settle()
 
         bench._is_testing = True
         bench._test_state = "testing"

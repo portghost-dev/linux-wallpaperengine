@@ -199,16 +199,15 @@ def main() -> None:
         popup_root = next(c for c in win.findChildren(QObject)
                           if c.metaObject().className().startswith("DeckSettingsPopup"))
         for surface in (ev, popup_root):
-            assert call(surface, "panPercent", 1.0, 2.0) == "+25%"
-            assert call(surface, "panPercent", -1.0, 2.0) == "-25%"
-            assert call(surface, "panPercent", 0.5, 1.6) == "+9%"
-            assert call(surface, "panPercent", 0.7, 1.0) == "+0%"
+            # the chip reads percent of the screen at any zoom: fifty at the ends
+            assert call(surface, "panPercent", 1.0, 2.0) == "+50%"
+            assert call(surface, "panPercent", -1.0, 2.0) == "-50%"
+            assert call(surface, "panPercent", 0.5, 1.6) == "+25%"
+            assert call(surface, "panPercent", 0.7, 1.0) == "+35%"
             assert call(surface, "panPercent", -0.01, 1.6) == "+0%", "a rounded zero is never -0%"
-            assert abs(float(call(surface, "panFromEntry", "12%", 1.6)) - 0.64) < 1e-9
+            assert abs(float(call(surface, "panFromEntry", "12%", 1.6)) - 0.24) < 1e-9
             assert abs(float(call(surface, "panFromEntry", "-0.25", 1.6)) + 0.25) < 1e-9
-            import math
-            assert math.isnan(float(call(surface, "panFromEntry", "12%", 1.0))), \
-                "a % entry at zoom 1.00 has no travel to spend and is refused"
+            assert abs(float(call(surface, "panFromEntry", "12%", 1.0)) - 0.24) < 1e-9, "a % entry needs no zoom"
         assert not editor.setFit("zoom", "wide"), "a non-number is refused"
         assert editor.setFit("zoom", "1.25")
         QTest.qWait(120)
@@ -216,6 +215,10 @@ def main() -> None:
             "a bridge write must re-seat the Zoom slider through the store"
         assert _wp.load_set("synthwp_fit").get("FIT_ZOOM") == 1.25
         assert editor.isMarked("FIT_ZOOM"), "a changed fit row wears the mark"
+        # a blank entry returns the row to what it inherits: the key goes
+        assert editor.setFit("zoom", "")
+        assert "FIT_ZOOM" not in _wp.load_set("synthwp_fit")
+        assert editor.setFit("zoom", "1.25")
         # live class: when the edited wallpaper is the one on screen, a fit write pushes the
         # wallpaper layer through set-fit instead of queueing a re-show; otherwise nothing is sent
         from lwe_ui import editor as _editor_mod
@@ -229,6 +232,43 @@ def main() -> None:
         editor.syncCurrent("")
         assert editor.setFit("pan_x", "0.5")
         assert len(pushes) == 1, "an editor open on a wallpaper not on screen sends nothing"
+        # a slider mid-drag previews live through the same gate and never writes the store
+        editor.previewFit("pan_y", "-0.25")
+        QTest.qWait(80)
+        assert len(pushes) == 1, "a preview off screen sends nothing"
+        editor.syncCurrent("synthwp_fit")
+        editor.previewFit("pan_y", "-0.100")
+        editor.previewFit("pan_y", "-0.250")
+        QTest.qWait(80)
+        assert pushes[-1] == {"layer": "wallpaper", "id": "synthwp_fit", "zoom": 1.25, "pan_x": 0.5, "pan_y": -0.25}, pushes[-1]
+        assert len(pushes) == 2, "drag steps in one tick coalesce to one push"
+        assert "FIT_PAN_Y" not in _wp.load_set("synthwp_fit"), "a preview never writes the store"
+        assert not editor.isMarked("FIT_PAN_Y")
+        editor.syncCurrent("")
+        # Speed, Volume and the dials preview the verb their release would send: the global
+        # rows regardless of the scope gate, the per-wallpaper rows and the dials behind it
+        sent = []
+        _editor_mod.api_client.set_speed = lambda v: (sent.append(("speed", v)) or {"ok": True})
+        _editor_mod.api_client.set_volume = lambda v: (sent.append(("volume", v)) or {"ok": True})
+        _editor_mod.api_client.set_tuning = lambda **kw: (sent.append(("tuning", dict(kw))) or {"ok": True})
+        editor.previewLive("wp_speed", 2.0)
+        editor.previewLive("wp_volume", 30.0)
+        editor.previewLive("dial:RESPONSE_THRESHOLD", 0.5)
+        QTest.qWait(80)
+        assert sent == [], "off screen, per-wallpaper rows and dials send nothing"
+        editor.previewLive("speed", 1.5)
+        editor.previewLive("volume", 20.0)
+        QTest.qWait(80)
+        assert ("volume", 20) in sent and any(k == "speed" for k, _ in sent), sent
+        sent.clear()
+        editor.syncCurrent("synthwp_fit")
+        editor.previewLive("wp_speed", 2.0)
+        editor.previewLive("wp_volume", 30.0)
+        editor.previewLive("dial:RESPONSE_THRESHOLD", 0.5)
+        QTest.qWait(80)
+        assert ("volume", 30) in sent and any(k == "speed" for k, _ in sent) and any(k == "tuning" and "audio_gain" in v for k, v in sent), sent
+        assert "SPEED" not in _wp.load_set("synthwp_fit") and "VOLUME" not in _wp.load_set("synthwp_fit"), "a preview never writes the store"
+        editor.syncCurrent("")
         assert editor.revertChanges()
         QTest.qWait(120)
         assert _wp.load_set("synthwp_fit").get("FIT_ZOOM") == 1.5, "revert restores the seated value"

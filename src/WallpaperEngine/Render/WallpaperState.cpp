@@ -30,18 +30,21 @@ void WallpaperState::setFit (const Fit& fit) {
 
 const WallpaperState::Fit& WallpaperState::getFit () const { return this->m_fit; }
 
-// v runs backwards unless flipped; the half-span shrinks by the zoom and the centre
-// moves by the pan, always toward the viewport's right (+x) and top (+y)
+// v runs backwards unless flipped; the half-span shrinks by the zoom and the picture
+// follows the pan: +x carries it toward the viewport's right, +y toward its top, so the
+// window itself moves the other way
 void WallpaperState::applyFit () {
     const float zoom = this->m_fit.zoom;
 
+    // a full pan moves the window by half of what is visible, at any zoom: at 1.0 that slides
+    // the picture half a screen and the sampler's clamp fills the rest
     const float uHalf = (this->m_UVs.uend - this->m_UVs.ustart) / 2.0f;
-    const float uCenter = (this->m_UVs.ustart + this->m_UVs.uend) / 2.0f + this->m_fit.panX * (uHalf - uHalf / zoom);
+    const float uCenter = (this->m_UVs.ustart + this->m_UVs.uend) / 2.0f - this->m_fit.panX * (uHalf / zoom);
     this->m_UVs.ustart = uCenter - uHalf / zoom;
     this->m_UVs.uend = uCenter + uHalf / zoom;
 
     const float vHalf = (this->m_UVs.vstart - this->m_UVs.vend) / 2.0f;
-    const float vCenter = (this->m_UVs.vstart + this->m_UVs.vend) / 2.0f + this->m_fit.panY * (vHalf - vHalf / zoom);
+    const float vCenter = (this->m_UVs.vstart + this->m_UVs.vend) / 2.0f - this->m_fit.panY * (vHalf / zoom);
     this->m_UVs.vstart = vCenter + vHalf / zoom;
     this->m_UVs.vend = vCenter - vHalf / zoom;
 

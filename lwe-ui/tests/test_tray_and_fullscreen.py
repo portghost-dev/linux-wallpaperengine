@@ -83,6 +83,36 @@ class TrayProcessTest(unittest.TestCase):
         self.tray._on_window_exited()
         self.assertEqual(self.quits, [], "the exit path owns the quit; the rule stands down")
 
+    def test_exit_reaches_a_window_the_tray_did_not_spawn(self) -> None:
+        from lwe_ui import single_instance, tray as _tray_mod
+        asked: list = []
+        single_instance.request_quit = lambda path=None: (asked.append(path) or True)
+        self.tray._window = None
+        self.tray.quit()
+        self.assertEqual(asked, [None], "with no child of its own, Exit asks the window over ui.sock")
+        self.assertTrue(self.tray._exiting)
+        self.assertEqual(self.quits, [True])
+
+    def test_window_spawns_a_tray_at_startup_and_not_after_the_tray_asked_it_to_exit(self) -> None:
+        from lwe_ui import app as _app_mod, single_instance
+        from PySide6.QtCore import QProcess
+        spawned: list = []
+        QProcess.startDetached = staticmethod(lambda prog, args: spawned.append(list(args)) or True)
+        single_instance.notify_running = lambda path=None: False
+        settings.save({**settings.load(), "CLOSE_TO_TRAY": True})
+        _app_mod._exit_all_requested = False
+        self.assertTrue(_app_mod.spawn_tray_if_needed(), "no tray alive and the setting on: one is spawned")
+        self.assertEqual(spawned[-1][-1], "--tray")
+        single_instance.notify_running = lambda path=None: True
+        self.assertFalse(_app_mod.spawn_tray_if_needed(), "a live tray is left alone")
+        single_instance.notify_running = lambda path=None: False
+        _app_mod._exit_all_requested = True
+        self.assertFalse(_app_mod.spawn_tray_if_needed(), "an exit the tray asked for spawns nothing")
+        _app_mod._exit_all_requested = False
+        settings.save({**settings.load(), "CLOSE_TO_TRAY": False})
+        self.assertFalse(_app_mod.spawn_tray_if_needed(), "off means no tray at all")
+        settings.save({**settings.load(), "CLOSE_TO_TRAY": True})
+
     def test_window_command_is_the_entry_minus_tray_flag(self) -> None:
         from lwe_ui import tray as tray_mod
         command = tray_mod._window_command()

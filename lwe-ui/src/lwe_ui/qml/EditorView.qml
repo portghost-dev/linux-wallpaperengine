@@ -129,20 +129,18 @@ Rectangle {
     }
 
     // two significant figures, with a decimal kept below 10x so the detent reads 1.0x
-    // --- Fit window (per wallpaper): the pan is a fraction of the travel the zoom leaves, so
-    // the chip reports the offset that produces in percent of the picture (zoom 2, pan 1 = 25)
+    // --- Fit window (per wallpaper): a full pan moves the picture half a screen at any zoom,
+    // so the chip reads percent of the screen, plus or minus fifty at the ends
     function panPercent(pan, zoom) {
-        var off = Math.round(Number(pan) * 50 * (1 - 1 / Math.max(1, Number(zoom))));
+        var off = Math.round(Number(pan) * 50);
         return (off < 0 ? "-" : "+") + Math.abs(off) + "%";
     }
-    // a typed "12%" is an offset of the picture and needs the zoom to become a fraction; a
-    // plain number is the fraction itself. NaN when the entry cannot be honoured.
+    // a typed "12%" is percent of the screen; a plain number is the fraction itself. NaN when
+    // the entry is not a number.
     function panFromEntry(t, zoom) {
         var s = String(t).trim();
-        if (s.endsWith("%")) {
-            var travel = 50 * (1 - 1 / Math.max(1, Number(zoom)));
-            return travel > 0 ? parseFloat(s) / travel : NaN;
-        }
+        if (s.endsWith("%"))
+            return parseFloat(s) / 50;
         return parseFloat(s);
     }
 
@@ -291,12 +289,37 @@ Rectangle {
     component PSlider: Slider {
         id: sld
         property string ckey: ""
+        // storeValue: bind this instead of value on rows that drag against a detent. The Binding
+        // re-asserts store truth whenever the knob is not held, so the detent's imperative
+        // writes during a drag cannot orphan the slider from the store.
+        property var storeValue: undefined
+        property real detentAt: NaN
+        property real detentBand: 0.05
+        Binding {
+            target: sld
+            property: "value"
+            value: sld.storeValue
+            when: sld.storeValue !== undefined && !sld.pressed
+            restoreMode: Binding.RestoreBindingOrValue
+        }
+        onMoved: {
+            if (!isNaN(detentAt) && Math.abs(value - detentAt) < detentBand) value = detentAt;
+            sld.dragValue = value;
+            sld.preview(value);
+        }
         property real tickAt: -1        // 0..1 position of a hash tick; -1 draws none
         signal commit(real v)
+        // every drag step, for a live look at the value before the release commits it
+        signal preview(real v)
         width: 132
         implicitWidth: 132
         implicitHeight: 16
-        onPressedChanged: if (!pressed) sld.commit(sld.value)
+        // the value the user dragged to, read before the store binding can restore on release
+        property real dragValue: 0
+        onPressedChanged: {
+            if (pressed) { sld.dragValue = sld.value; return; }
+            sld.commit(sld.storeValue !== undefined ? sld.dragValue : sld.value);
+        }
         background: Rectangle {
             x: sld.leftPadding
             y: sld.topPadding + sld.availableHeight / 2 - height / 2
@@ -372,15 +395,10 @@ Rectangle {
                 chip.entered(chipEdit.text);
             }
         }
-        HoverHandler { cursorShape: chip.entries.length > 0 ? Qt.PointingHandCursor : Qt.IBeamCursor }
+        HoverHandler { cursorShape: Qt.IBeamCursor }
         TapHandler {
             onTapped: {
-                if (chip.entries.length > 0) {
-                    if (chipMenu.visible) chipMenu.close();
-                    else if (!chipMenu.justClosed) chipMenu.open();
-                    return;
-                }
-                chipEdit.text = chip.text;
+                // click the box and type; a blank entry returns the row to what it inherits
                 chip.editing = true;
                 chipEdit.forceActiveFocus();
                 chipEdit.selectAll();
@@ -1296,6 +1314,7 @@ Rectangle {
                                                 // binding; the refresh re-binds to the detented value
                                                 editor.setGlobalSpeed(view.speedDetented(view.speedForPos(p)));
                                             }
+                                            onPreview: function(p) { editor.previewLive("speed", view.speedDetented(view.speedForPos(p))) }
                                         }
                                         PChip {
                                             anchors.verticalCenter: parent.verticalCenter
@@ -1324,6 +1343,7 @@ Rectangle {
                                             stepSize: 1
                                             value: (view.rev, editor.globalVolume())
                                             onCommit: function(v) { editor.setGlobalVolume(Math.round(v)) }
+                                            onPreview: function(v) { editor.previewLive("volume", Math.round(v)) }
                                         }
                                         PChip {
                                             anchors.verticalCenter: parent.verticalCenter
@@ -1414,17 +1434,14 @@ Rectangle {
                                     return raw === "" ? 1 : Number(raw);
                                 }
                                 onCommit: function(v) { editor.setFit("zoom", v.toFixed(2)) }
+                                onPreview: function(v) { editor.previewFit("zoom", v.toFixed(2)) }
                             }
                             PChip {
                                 anchors.verticalCenter: parent.verticalCenter
                                 ckey: "FIT_ZOOM"
                                 text: editorFitZoom.value.toFixed(2)
-                                entries: [
-                                    { label: "Default (1.00)", value: "" },
-                                    { label: "Enter a value", value: "@entry" }
-                                ]
-                                onPicked: function(v) { if (v === "") editor.setFit("zoom", "") }
                                 onEntered: function(t) {
+                                    if (String(t).trim() === "") { editor.setFit("zoom", ""); return }
                                     var n = parseFloat(String(t).replace("x", ""));
                                     if (isNaN(n)) { editor.reportFailure(["FIT_ZOOM"]); return }
                                     editor.setFit("zoom", String(Math.max(1, Math.min(2, n))));
@@ -1444,22 +1461,20 @@ Rectangle {
                                 from: -1
                                 to: 1
                                 tickAt: 0.5
-                                value: {
+                                storeValue: {
                                     var raw = (view.rev, editor.fitValue("pan_x"));
                                     return raw === "" ? 0 : Number(raw);
                                 }
+                                detentAt: 0
                                 onCommit: function(v) { editor.setFit("pan_x", v.toFixed(3)) }
+                                onPreview: function(v) { editor.previewFit("pan_x", v.toFixed(3)) }
                             }
                             PChip {
                                 anchors.verticalCenter: parent.verticalCenter
                                 ckey: "FIT_PAN_X"
                                 text: view.panPercent(editorPanX.value, editorFitZoom.value)
-                                entries: [
-                                    { label: "Default (+0%)", value: "" },
-                                    { label: "Enter a value", value: "@entry" }
-                                ]
-                                onPicked: function(v) { if (v === "") editor.setFit("pan_x", "") }
                                 onEntered: function(t) {
+                                    if (String(t).trim() === "") { editor.setFit("pan_x", ""); return }
                                     var n = view.panFromEntry(t, editorFitZoom.value);
                                     if (isNaN(n)) { editor.reportFailure(["FIT_PAN_X"]); return }
                                     editor.setFit("pan_x", Math.max(-1, Math.min(1, n)).toFixed(3));
@@ -1479,22 +1494,20 @@ Rectangle {
                                 from: -1
                                 to: 1
                                 tickAt: 0.5
-                                value: {
+                                storeValue: {
                                     var raw = (view.rev, editor.fitValue("pan_y"));
                                     return raw === "" ? 0 : Number(raw);
                                 }
+                                detentAt: 0
                                 onCommit: function(v) { editor.setFit("pan_y", v.toFixed(3)) }
+                                onPreview: function(v) { editor.previewFit("pan_y", v.toFixed(3)) }
                             }
                             PChip {
                                 anchors.verticalCenter: parent.verticalCenter
                                 ckey: "FIT_PAN_Y"
                                 text: view.panPercent(editorPanY.value, editorFitZoom.value)
-                                entries: [
-                                    { label: "Default (+0%)", value: "" },
-                                    { label: "Enter a value", value: "@entry" }
-                                ]
-                                onPicked: function(v) { if (v === "") editor.setFit("pan_y", "") }
                                 onEntered: function(t) {
+                                    if (String(t).trim() === "") { editor.setFit("pan_y", ""); return }
                                     var n = view.panFromEntry(t, editorFitZoom.value);
                                     if (isNaN(n)) { editor.reportFailure(["FIT_PAN_Y"]); return }
                                     editor.setFit("pan_y", Math.max(-1, Math.min(1, n)).toFixed(3));
@@ -1524,6 +1537,7 @@ Rectangle {
                                     // the declarative binding and orphan the slider from Global
                                     editor.setSpeedValue(view.speedDetented(view.speedForPos(p)));
                                 }
+                                onPreview: function(p) { editor.previewLive("wp_speed", view.speedDetented(view.speedForPos(p))) }
                             }
                             PChip {
                                 anchors.verticalCenter: parent.verticalCenter
@@ -1532,13 +1546,8 @@ Rectangle {
                                 // it custom, and the menu is the way back
                                 text: (view.rev, editor.speedValue()) === ""
                                       ? "Global" : view.speedText(wpSpeedSlider.speed)
-                                entries: [
-                                    { label: "Global (" + (view.rev, editor.globalDefaultFor("SPEED")) + ")",
-                                      value: "" },
-                                    { label: "Enter a value", value: "@entry" }
-                                ]
-                                onPicked: function(v) { if (v === "") editor.clearOverride("speed") }
                                 onEntered: function(t) {
+                                    if (String(t).trim() === "") { editor.clearOverride("speed"); return }
                                     var n = parseFloat(String(t).replace("x", ""));
                                     if (isNaN(n)) { editor.reportFailure(["SPEED"]); return }
                                     editor.setSpeedValue(Math.max(0.1, Math.min(10, n)));
@@ -1562,19 +1571,15 @@ Rectangle {
                                     return raw === "" ? editor.globalVolume() : Number(raw);
                                 }
                                 onCommit: function(v) { editor.setVolumeValue(Math.round(v)) }
+                                onPreview: function(v) { editor.previewLive("wp_volume", Math.round(v)) }
                             }
                             PChip {
                                 anchors.verticalCenter: parent.verticalCenter
                                 ckey: "VOLUME"
                                 text: (view.rev, editor.volumeValue()) === ""
                                       ? "Global" : String(Math.round(wpVolSlider.value))
-                                entries: [
-                                    { label: "Global (" + (view.rev, editor.globalDefaultFor("VOLUME")) + ")",
-                                      value: "" },
-                                    { label: "Enter a value", value: "@entry" }
-                                ]
-                                onPicked: function(v) { if (v === "") editor.clearOverride("volume") }
                                 onEntered: function(t) {
+                                    if (String(t).trim() === "") { editor.clearOverride("volume"); return }
                                     var n = parseInt(t);
                                     if (isNaN(n)) { editor.reportFailure(["VOLUME"]); return }
                                     editor.setVolumeValue(n);
@@ -1657,6 +1662,7 @@ Rectangle {
                                     onCommit: function(q) {
                                         editor.setAudioDial(dialRow.modelData.key, q);
                                     }
+                                    onPreview: function(q) { editor.previewLive("dial:" + dialRow.modelData.key, q) }
                                 }
                                 PChip {
                                     anchors.verticalCenter: parent.verticalCenter
