@@ -91,16 +91,72 @@ def test_strip_anatomy(app, backend, tokens) -> None:
         if _near(img.pixelColor(x, y), surface_variant)
     )
     assert name_hits > 0, "name head-segment should be filled surfaceVariant (F11)"
-    # four cells, schedule | name | reserved | clock, and no Mode or
-    # Every anywhere on the strip itself
-    cells = [strip.findChild(QObject, n) for n in ("cellSchedule", "cellName", "cellReserved", "cellClock")]
-    assert all(c is not None and c.property("visible") for c in cells), "the pill must show its four cells"
-    assert int(cells[0].property("width")) == 28 and int(cells[2].property("width")) == 28 and int(cells[3].property("width")) == 28
+    # three cells, schedule | name | stopwatch: the reserved cell is gone, and no Mode or
+    # unit control anywhere, the mode lives on the transport and the unit is minutes
+    cells = [strip.findChild(QObject, n) for n in ("cellSchedule", "cellName", "cellClock")]
+    assert all(c is not None and c.property("visible") for c in cells), "the pill must show its three cells"
+    assert strip.findChild(QObject, "cellReserved") is None, "the reserved cell is removed"
+    assert int(cells[0].property("width")) == 28 and int(cells[2].property("width")) == 28
+    assert strip.findChild(QObject, "cellStopwatch") is not None, "the third cell carries the stopwatch"
     pop = strip.findChild(QObject, "clockPopover")
-    assert pop is not None and pop.findChild(QObject, "modeSegment") is not None, "Mode lives in the clock popover"
+    assert pop is not None and pop.findChild(QObject, "modeSegment") is None and pop.findChild(QObject, "unitSegment") is None, \
+        "the popover is the interval row alone"
+    assert int(pop.property("height")) == 40
+    # the stopwatch cell reads pressed while its popover is open: a wash on the cell, the
+    # glyph in full white; dark and grey once it closes
+    strip.openClock()
+    QTest.qWait(200)
+    clock_cell = strip.findChild(QObject, "cellClock")
+    glyph = strip.findChild(QObject, "cellStopwatch")
+    assert clock_cell.property("tinted") is True and glyph.property("color").name().lower() == str(tokens.color("textPrimary")).lower()
+    QMetaObject.invokeMethod(pop, "close")
+    QTest.qWait(200)
+    assert clock_cell.property("tinted") is False and glyph.property("color").name().lower() == str(tokens.color("textSecondary")).lower()
     menu = strip.findChild(QObject, "nameMenu")
     assert menu is not None and menu.findChild(QObject, "intervalField") is None \
         and menu.findChild(QObject, "modeSegment") is None, "no Mode or Every in the playlist menu"
+
+    # every row carries its own trash; arming unfolds a confirm line beneath THAT row, another
+    # trash moves it, the same trash disarms, Yes is inert for a quarter second, No disarms; the
+    # bottom Delete entry is gone
+    from lwe_ui.storage import playlists as _pl
+    while len(backend.playlistList()) < 2:
+        _pl.create(f"Second {len(backend.playlistList())}")
+    QMetaObject.invokeMethod(menu, "open")
+    QTest.qWait(250)   # the popup's rows are built on opened, after its enter transition
+    # the popup's rows are Repeater delegates: reachable through the visual tree, not findChildren
+    def _walk(item):
+        out = []
+        for c in item.childItems():
+            out.append(c)
+            out.extend(_walk(c))
+        return out
+    content = menu.property("contentItem")
+    visual = _walk(content)
+    rows = [r for r in visual if r.objectName() == "plRow"]
+    assert len(rows) >= 2, "the test config holds at least two playlists"
+    assert all(any(c.objectName() == "rowTrash" for c in _walk(r)) for r in rows), "a trash on every row"
+    assert not any(o.property("label") == "Delete" for o in visual), "the bottom Delete entry is gone"
+    slug0, slug1 = rows[0].property("modelData")["slug"], rows[1].property("modelData")["slug"]
+    QMetaObject.invokeMethod(menu, "arm", Q_ARG("QVariant", slug0))
+    for _ in range(2):
+        QCoreApplication.processEvents()
+    assert rows[0].property("armed") is True and rows[1].property("armed") is False
+    assert int(rows[0].property("height")) == 52 and int(rows[1].property("height")) == 26, "the armed row unfolds"
+    assert bool(QMetaObject.invokeMethod(menu, "yesReady", Q_RETURN_ARG("QVariant"))) is False, "Yes is inert at first"
+    QMetaObject.invokeMethod(menu, "arm", Q_ARG("QVariant", slug1))
+    for _ in range(2):
+        QCoreApplication.processEvents()
+    assert rows[0].property("armed") is False and rows[1].property("armed") is True, "another trash moves the line"
+    QMetaObject.invokeMethod(menu, "arm", Q_ARG("QVariant", slug1))
+    for _ in range(2):
+        QCoreApplication.processEvents()
+    assert rows[1].property("armed") is False, "the same trash disarms"
+    QMetaObject.invokeMethod(menu, "arm", Q_ARG("QVariant", slug1))
+    QTest.qWait(300)
+    assert bool(QMetaObject.invokeMethod(menu, "yesReady", Q_RETURN_ARG("QVariant"))) is True, "Yes is live after a quarter second"
+    menu.setProperty("armedSlug", "")
+    QMetaObject.invokeMethod(menu, "close")
     print(f"OK test_strip_anatomy (name segment {name_hits} surfaceVariant px hits)")
 
 

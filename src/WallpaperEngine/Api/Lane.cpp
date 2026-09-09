@@ -465,11 +465,13 @@ std::size_t walkBehind (const Lane& lane) {
 } // namespace
 
 std::optional<Entry> WallpaperEngine::Api::backTarget (const Lane& lane, const Playlist& playlist) {
-    if (playlist.order == "static" || lane.walk.size () < 2) {
+    if (lane.walk.size () < 2) {
 	return std::nullopt;
     }
 
-    if (!lane.history.empty ()) {
+    // static steps the walk itself, back as forward: the previous item in playlist order,
+    // held there, never a trip through history
+    if (playlist.order != "static" && !lane.history.empty ()) {
 	return lane.history.back ();
     }
 
@@ -491,12 +493,9 @@ void WallpaperEngine::Api::commitBack (Lane& lane, const Playlist&, const Entry&
 	return;
     }
 
-    // the walk stepped back: a fresh show, recorded like any other
-    const auto at = walkBehind (lane);
-
-    if (at != SIZE_MAX) {
-	lane.cursor = static_cast<int> (at);
-    }
+    // the walk stepped back: a fresh show, recorded like any other. The cursor seats on the
+    // target by identity: the show that came first may have moved it already
+    seatCursor (lane, displayId (target));
 
     if (!previous.id.empty () && displayId (previous) != displayId (target)) {
 	lane.history.push_back (previous);
@@ -565,8 +564,8 @@ std::string WallpaperEngine::Api::aheadUp (const Lane& lane, const Playlist& pla
     return nextUp (lane, playlist);
 }
 
-bool WallpaperEngine::Api::backEnabled (const Lane& lane, const Playlist& playlist) {
-    return playlist.order != "static" && lane.walk.size () > 1;
+bool WallpaperEngine::Api::backEnabled (const Lane& lane, const Playlist&) {
+    return lane.walk.size () > 1;
 }
 
 nlohmann::json WallpaperEngine::Api::toJson (const Entry& entry) {

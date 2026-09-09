@@ -1443,12 +1443,8 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	const auto backEntry = Api::backTarget (this->lane (), this->playlistOf (this->lane ()));
 
 	if (command.cmd == "prev" && !backEntry.has_value ()) {
-	    const bool isStatic = this->playlistOf (this->lane ()).order == "static";
 	    this->m_commandServer->respond (
-		client,
-		Api::CommandDispatcher::failure (
-		    command.id, isStatic ? "back is off in static" : "nothing to go back to"
-		)
+		client, Api::CommandDispatcher::failure (command.id, "nothing to go back to")
 	    );
 	    return;
 	}
@@ -1485,7 +1481,8 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 		// a wallpaper that left the library leaves the books too, so the next press moves on
 		if (command.cmd == "next") {
 		    this->lane ().forward.pop_front ();
-		} else if (!this->lane ().history.empty ()) {
+		} else if (this->playlistOf (this->lane ()).order != "static" && !this->lane ().history.empty ()) {
+		    // in static the target was a walk item, not history: nothing to drop
 		    this->lane ().history.pop_back ();
 		}
 

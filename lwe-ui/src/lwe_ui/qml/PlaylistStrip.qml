@@ -36,7 +36,11 @@ Item {
     }
     signal scheduleRequested()
 
-    function menuY(menu) { return strip.opensUp ? -menu.height - 4 : strip.height + 4 }
+    // the interval popover stands 8 px off the pill as drawn; the playlist menu keeps its 4
+    function menuY(menu) {
+        var gap = menu === clockMenu ? 8 : 4;
+        return strip.opensUp ? -menu.height - gap : strip.height + gap;
+    }
     function titleCase(s) { return s.length ? s.charAt(0).toUpperCase() + s.slice(1) : s }
 
     Rectangle {
@@ -125,7 +129,8 @@ Item {
                         size: 14
                         color: seg.iconColor
                     }
-                    IconClock {
+                    IconStopwatch {
+                        objectName: "cellStopwatch"
                         anchors.verticalCenter: parent.verticalCenter
                         visible: seg.clock
                         size: 14
@@ -180,19 +185,14 @@ Item {
                 }
             }
             Divider {}
-            // an empty cell the width of the clock cell, dividers and nothing inside, until the
-            // display target lands or the cell is removed before any release
-            StripSegment {
-                objectName: "cellReserved"
-                fixedWidth: 28
-                inert: true
-            }
-            Divider {}
             StripSegment {
                 objectName: "cellClock"
                 fixedWidth: 28
                 roundRight: true
                 clock: true
+                // pressed while the popover is open: a light wash and the glyph in full white
+                tinted: clockMenu.visible
+                tintColor: Qt.rgba(1, 1, 1, 0.08)
                 onTapped: {
                     if (clockMenu.visible) clockMenu.close();
                     else if (!clockMenu.justClosed) clockMenu.open();
@@ -201,7 +201,7 @@ Item {
         }
     }
 
-    // Mode and Every live here and nowhere else
+    // the interval lives here and nowhere else; the mode is on the transport
     ClockPopover {
         id: clockMenu
         objectName: "clockPopover"

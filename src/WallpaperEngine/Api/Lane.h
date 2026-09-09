@@ -177,7 +177,7 @@ std::string nextUp (const Lane& lane, const Playlist& playlist);
 /** Record an applied show: the old current goes behind, forward is discarded; a re-show only refreshes. */
 void recordShow (Lane& lane, const Entry& shown, bool recordHistory);
 
-/** What back would show: history, else the previous walk item; nothing in static or under two items. */
+/** What back would show: history, else the previous walk item; static walks only; nothing under two items. */
 std::optional<Entry> backTarget (const Lane& lane, const Playlist& playlist);
 
 /** Books after back showed `target`; `previous` was on screen before. */
@@ -192,13 +192,13 @@ void commitForward (Lane& lane, const Entry& previous, const Entry& target);
 /** Timer rule: a backed-up lane moves to its newest item before the walk advances. */
 void jumpToEnd (Lane& lane);
 
-/** Display id behind the current show (history even in static), or empty. */
+/** Display id behind the current show: history, or in static the walk's previous; or empty. */
 std::string previousUp (const Lane& lane, const Playlist& playlist);
 
 /** Display id ahead: forward history, else the walk's next. */
 std::string aheadUp (const Lane& lane, const Playlist& playlist);
 
-/** Never in static, never under two walk items. */
+/** On whenever the walk has two or more items. */
 bool backEnabled (const Lane& lane, const Playlist& playlist);
 
 nlohmann::json toJson (const Entry& entry);

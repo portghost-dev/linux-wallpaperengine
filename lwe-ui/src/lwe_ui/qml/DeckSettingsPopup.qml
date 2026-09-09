@@ -340,6 +340,10 @@ Popup {
             anchors.fill: parent
             anchors.leftMargin: 8
             anchors.rightMargin: 8
+            // a drag that starts in the open chip is taken from it here and held to the
+            // release, so it can never reach a tile beneath. The price is drag-selection by
+            // mouse; clicks, caret placement, double-click and keyboard selection stay
+            DragHandler { target: null; grabPermissions: PointerHandler.CanTakeOverFromItems }
             verticalAlignment: Text.AlignVCenter
             horizontalAlignment: Text.AlignHCenter
             color: Theme.textPrimary

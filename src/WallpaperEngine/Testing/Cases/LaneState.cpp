@@ -126,6 +126,45 @@ TEST_CASE ("static never advances on the timer, next still walks, and a click se
     REQUIRE (lane.cursor == 0);
 }
 
+TEST_CASE ("static steps back through the playlist order and holds, never through history", "[lane]") {
+    std::mt19937 rng (4);
+    Lane lane;
+    Playlist playlist;
+    applySet (lane, playlist, makePlaylist (3, "static"), true, t0 ());
+
+    // on wp1 with wp0 behind it in the walk: back is on, and the target is the walk's previous.
+    // The show lands first, seating the cursor, then the books move, as the application does
+    lane.current = playlist.entries[1];
+    seatCursor (lane, "wp1");
+    REQUIRE (backEnabled (lane, playlist));
+    auto target = backTarget (lane, playlist);
+    REQUIRE (target.has_value ());
+    REQUIRE (target->id == "wp0");
+    recordShow (lane, *target, false);
+    seatCursor (lane, "wp0");
+    commitBack (lane, playlist, playlist.entries[1], *target);
+    REQUIRE (lane.cursor == 0);
+    REQUIRE (nextInSeconds (lane, playlist, t0 () + std::chrono::hours (1)) == -1);
+
+    // from the first item back wraps to the last
+    target = backTarget (lane, playlist);
+    REQUIRE (target.has_value ());
+    REQUIRE (target->id == "wp2");
+
+    // history is not the path in static: a recorded detour does not change where back goes
+    lane.history.push_back (playlist.entries[1]);
+    target = backTarget (lane, playlist);
+    REQUIRE (target.has_value ());
+    REQUIRE (target->id == "wp2");
+
+    // one item: nothing to step to, in static as elsewhere
+    Lane one;
+    Playlist single;
+    applySet (one, single, makePlaylist (1, "static"), true, t0 ());
+    REQUIRE_FALSE (backEnabled (one, single));
+    REQUIRE_FALSE (backTarget (one, single).has_value ());
+}
+
 TEST_CASE ("a push keeps the cursor's item in place and the old successor next (A6)", "[lane]") {
     std::mt19937 rng (5);
     Lane lane;

@@ -44,10 +44,14 @@ std::string advance (Lane& lane, const Playlist& playlist, std::mt19937& rng) {
     return lane.current.uiId;
 }
 
+/** Prev as the application runs it: the show lands first (no history record, the cursor
+ *  seated on what is on screen), then the books move. */
 std::string back (Lane& lane, const Playlist& playlist) {
     const auto target = backTarget (lane, playlist);
     REQUIRE (target.has_value ());
     const Entry before = lane.current;
+    recordShow (lane, *target, false);
+    seatCursor (lane, target->uiId.empty () ? target->id : target->uiId);
     commitBack (lane, playlist, before, *target);
     return lane.current.uiId;
 }
@@ -120,7 +124,7 @@ TEST_CASE ("a re-show of the item on screen adds no history entry (A5, R13)", "[
     REQUIRE (lane.forward.empty ()); // a new show discards forward history
 }
 
-TEST_CASE ("back with nothing behind steps the walk back, wrapping; off in static (A9)", "[history]") {
+TEST_CASE ("back with nothing behind steps the walk back, wrapping; static walks too (A9)", "[history]") {
     std::mt19937 rng (4);
     Lane lane;
     Playlist playlist;
@@ -147,9 +151,21 @@ TEST_CASE ("back with nothing behind steps the walk back, wrapping; off in stati
     applySet (still, fixed, makePlaylist (3, "static"), true, t0 ());
     advance (still, fixed, rng);
     advance (still, fixed, rng);
-    REQUIRE_FALSE (backTarget (still, fixed).has_value ());
-    REQUIRE_FALSE (backEnabled (still, fixed));
-    REQUIRE (previousUp (still, fixed) == "wp0"); // static keeps its Last line
+    // static steps back through the walk, never through history: on wp1, back is wp0, and the
+    // Last line reads the same
+    REQUIRE (backTarget (still, fixed).has_value ());
+    REQUIRE (backTarget (still, fixed)->id == "wp0");
+    REQUIRE (backEnabled (still, fixed));
+    REQUIRE (previousUp (still, fixed) == "wp0");
+    // three steps back visit the walk in reverse, wrapping, and the cursor follows the screen
+    REQUIRE (back (still, fixed) == "wp0");
+    REQUIRE (still.cursor == 0);
+    REQUIRE (back (still, fixed) == "wp2");
+    REQUIRE (still.cursor == 2);
+    REQUIRE (back (still, fixed) == "wp1");
+    REQUIRE (still.cursor == 1);
+    REQUIRE (previousUp (still, fixed) == "wp0");
+    REQUIRE (aheadUp (still, fixed) == "wp2");
     REQUIRE (backEnabled (lane, playlist));
 }
 
