@@ -791,9 +791,9 @@ void WallpaperApplication::takeScreenshot (const std::filesystem::path& filename
 	// ensure rendering is complete before reading
 	glFinish ();
 
-	// make room for storing the pixel of this viewport
-	const int readWidth = wallpaper->getWidth ();
-	const int readHeight = wallpaper->getHeight ();
+	// the scene target may be clamped below the canvas, so the read is sized by the target
+	const int readWidth = static_cast<int> (wallpaper->getFBO ()->getRealWidth ());
+	const int readHeight = static_cast<int> (wallpaper->getFBO ()->getRealHeight ());
 	const auto bufferSize = readWidth * readHeight * 3;
 	auto* buffer = new uint8_t[bufferSize];
 

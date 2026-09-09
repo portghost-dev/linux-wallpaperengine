@@ -36,6 +36,17 @@ using namespace WallpaperEngine::Data::Utils;
 extern float g_Time;
 
 namespace {
+// LWE_CLAMPCOMPOSITES=0 keeps composites and effect targets at their authored size: every
+// effect pass resamples the layer through them, and a chain shrunk to the output blurs by
+// its texel size. The default clamps them with the rest, the cheaper trade.
+bool clampComposites () {
+    static const bool clamp = [] () {
+	const char* e = getenv ("LWE_CLAMPCOMPOSITES");
+	return e == nullptr || std::string (e) != "0";
+    }();
+    return clamp;
+}
+
 glm::vec2 rotateVec2 (const glm::vec2& value, float angle) {
     const float cosAngle = std::cos (angle);
     const float sinAngle = std::sin (angle);
@@ -283,7 +294,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	    );
 	}
     }
-    const glm::vec2 fboSize = scene.clampToCap (fboBase);
+    const glm::vec2 fboSize = clampComposites () ? scene.clampToCap (fboBase) : fboBase;
     const uint32_t fboFlags = this->m_texture->getFlags ();
     const TextureFormat compositeFormat = scene.isHdrBloom () ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
     auto [poolA, poolB] = scene.leaseCompositePair (this->getImage ().id, fboSize, fboFlags, compositeFormat);
@@ -700,7 +711,8 @@ void CImage::setup () {
 		// create all the fbos for this effect
 		for (const auto& fbo : cur->effect->fbos) {
 		    fboProvider->create (
-			*fbo, this->m_texture->getFlags (), this->getScene ().clampToCap (this->getSize ())
+			*fbo, this->m_texture->getFlags (),
+			clampComposites () ? this->getScene ().clampToCap (this->getSize ()) : this->getSize ()
 		    );
 		}
 
