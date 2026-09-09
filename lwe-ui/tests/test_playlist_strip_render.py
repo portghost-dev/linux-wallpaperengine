@@ -46,7 +46,8 @@ os.environ.setdefault("QT_QUICK_BACKEND", "software")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from PySide6.QtCore import QUrl, QCoreApplication, QObject  # noqa: E402
+from PySide6.QtCore import QUrl, QCoreApplication, QObject, QMetaObject, Q_ARG, Q_RETURN_ARG  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtGui import QColor, QGuiApplication  # noqa: E402
 from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterSingletonInstance  # noqa: E402
 from PySide6.QtQuick import QQuickView  # noqa: E402
@@ -251,6 +252,67 @@ def test_schedule_modal_span_colors_follow_entry_not_position(app, backend) -> N
     assert int(QMetaObject.invokeMethod(day_strip, "minuteAt", Q_RETURN_ARG("QVariant"),
                                         Q_ARG("QVariant", strip_w * 2))) == 1425, "clamped at 23:45"
     assert time_a.property("selectByMouse") is True, "a click-and-drag selects from the first press"
+    # the handles may cross but never come within a quarter hour: walled(m, other)
+    walled = lambda m, o: bool(QMetaObject.invokeMethod(day_strip, "walled", Q_RETURN_ARG("QVariant"),
+                                                        Q_ARG("QVariant", m), Q_ARG("QVariant", o)))
+    assert walled(480, 485) and walled(1435, 5) and not walled(480, 495) and not walled(1425, 0)
+    # three static label lines: midnight on top, day under it, night under that, the block
+    # sitting directly under the handles inside the strip row, not a column slot below it
+    assert int(label_a.property("y")) == 14 and int(label_b.property("y")) == 28
+    strip_labels = day_strip.findChild(QObject, "stripLabels")
+    assert strip_labels is not None and int(strip_labels.property("y")) == 24, "the times sit right under the bar"
+    assert int(day_strip.property("height")) == 24 + int(strip_labels.property("height"))
+    # a time reads with or without its colon, one or two hour digits, and only in range
+    to_min = lambda t: int(QMetaObject.invokeMethod(modal_obj, "toMin", Q_RETURN_ARG("QVariant"), Q_ARG("QVariant", t)))
+    modal_obj = win.findChild(QObject, "modal")
+    assert to_min("05:15") == 315 and to_min("0515") == 315 and to_min("515") == 315 and to_min("5:15") == 315
+    assert to_min("24:00") == -1 and to_min("05:60") == -1 and to_min("05:5") == -1 and to_min("5") == -1
+    # the field lets a partial edit stand (a replaced selection, a deleted digit) and
+    # normalises the finished entry
+    time_a.setProperty("text", "05:15")
+    QMetaObject.invokeMethod(time_a, "forceActiveFocus")
+    QMetaObject.invokeMethod(time_a, "selectAll")
+    type_in = lambda text: [QTest.keyClick(win, ch) for ch in text]
+    type_in("6")
+    assert time_a.property("text") == "6", f"a replaced selection stands while typing, got {time_a.property('text')!r}"
+    type_in("30")
+    assert time_a.property("text") == "630"
+    QMetaObject.invokeMethod(time_a, "editingFinished")
+    assert time_a.property("text") == "06:30", "a finished entry is normalised to HH:MM"
+    QMetaObject.invokeMethod(time_a, "selectAll")
+    type_in("0515")
+    QMetaObject.invokeMethod(time_a, "editingFinished")
+    assert time_a.property("text") == "05:15"
+    QTest.keyClick(win, Qt.Key_Backspace)
+    assert time_a.property("text") == "05:1", "a single backspace stands"
+    time_a.setProperty("text", "05:15")
+    # Save reads as disabled when it is: same time twice greys it out
+    save = win.findChild(QObject, "saveBtn")
+    assert len(modal_obj.property("plModel")) >= 2, "the test config holds at least two playlists"
+    entry_b.findChild(QObject, "playlistCombo").setProperty("currentIndex", 1)
+    entry_a.findChild(QObject, "playlistCombo").setProperty("currentIndex", 0)
+    time_b.setProperty("text", "21:30")
+    for _ in range(3):
+        QCoreApplication.processEvents()
+    assert save.property("enabled") is True
+    # the disabled look is a flat well with a 1 px border where the live button has none;
+    # read in the button's own QML context (theme colours evaluate black in this host, so
+    # the border is the observable)
+    from PySide6.QtQml import QQmlEngine, QQmlExpression
+    def save_border():
+        for _ in range(3):
+            QCoreApplication.processEvents()
+        value, undefined = QQmlExpression(QQmlEngine.contextForObject(save), save, "background.border.width").evaluate()
+        assert not undefined, "background.border.width must resolve"
+        return int(value)
+    assert save_border() == 0, "a live Save has no border"
+    time_b.setProperty("text", "0515")
+    for _ in range(3):
+        QCoreApplication.processEvents()
+    assert save.property("enabled") is False, "the same time twice cannot be saved"
+    assert save_border() == 1, "a disabled Save must not look like a live one"
+    time_b.setProperty("text", "21:30")
+    print("OK schedule modal gap rule and three label lines")
     print("OK schedule modal range bar: handles and labels at their times, minuteAt exact, drag-select on")
 
 

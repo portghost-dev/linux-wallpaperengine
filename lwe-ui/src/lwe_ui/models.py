@@ -969,6 +969,8 @@ class Backend(QObject):
             self._sync_engine()
         except Exception:
             pass
+        # the deck shows the engine's word for the mode: fetch it now, not at the next poll
+        self.statusChanged.emit()
 
     @Slot(int, str)
     def setPlaylistInterval(self, value: int, unit: str) -> None:

@@ -64,7 +64,7 @@ def main() -> None:
         os.environ["XDG_DATA_HOME"] = os.path.join(home, "d")
         os.environ["XDG_RUNTIME_DIR"] = tempfile.mkdtemp(prefix="lwe-rt-")
 
-        from PySide6.QtCore import QUrl
+        from PySide6.QtCore import QUrl, QMetaObject
         from PySide6.QtGui import QGuiApplication
         from PySide6.QtQuick import QQuickView, QQuickWindow
         from PySide6.QtTest import QTest

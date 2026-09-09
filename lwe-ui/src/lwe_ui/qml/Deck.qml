@@ -27,8 +27,12 @@ Rectangle {
     readonly property bool engineDown: !engineOff && deck._field("state") === ""
     // back is off in static and on a one-item playlist (engine-reported; absent = on)
     readonly property bool backEnabled: deck._field("back_enabled") !== "false"
+    // the rotation mode as the engine reports it, else as the strip holds it; a word that is
+    // not one of the three (a retired order echoed by an old engine) reads from the strip
+    readonly property string modeNow: ["shuffle", "sequential", "static"].indexOf(deck._field("order")) >= 0
+                                      ? deck._field("order") : deckStrip.activePl.mode
     // static: the timer is stopped, so the bar renders flat with its times hidden
-    readonly property bool isStatic: (deck._field("order") !== "" ? deck._field("order") : deckStrip.activePl.mode) === "static"
+    readonly property bool isStatic: deck.modeNow === "static"
     function nameOf(id) {
         if (id === "")
             return "";
@@ -496,6 +500,7 @@ Rectangle {
                 font.pixelSize: Theme.fontMeta
             }
             Label {
+                id: totalLabel
                 objectName: "deckTotal"
                 anchors.left: parent.right
                 anchors.leftMargin: 10
@@ -508,8 +513,11 @@ Rectangle {
             }
         }
         Row {
+            objectName: "deckTransportRow"
             anchors.horizontalCenter: parent.horizontalCenter
-            spacing: 16
+            // compact takes a third off the transport gap so five targets fit: the glyph edge
+            // to pause edge gap goes from 22 px to 14 px, with 6 px of glyph inset each side
+            spacing: Theme.compact ? 8 : 16
 
             component TransportGlyph: Item {
                 id: tg
@@ -552,6 +560,33 @@ Rectangle {
                 TapHandler { onTapped: tg.tapped() }
             }
 
+            // the two mode toggles flank the transport: shuffle left of prev, static right of
+            // next; both off is sequential, and one turning on turns the other off (one MODE)
+            component ModeToggle: Item {
+                id: mt
+                property bool on: false
+                property bool isShuffle: true
+                signal tapped()
+                width: 24; height: 24
+                enabled: !deck.holding
+                opacity: (deck.engineUp ? 1 : 0.4) * deck.transportDim
+                Rectangle {
+                    anchors.fill: parent
+                    radius: Theme.radiusXs
+                    color: mtHover.hovered ? Theme.hoverWash : "transparent"
+                }
+                IconShuffle { visible: mt.isShuffle; anchors.centerIn: parent; size: 14; color: mt.on ? Theme.accent : Theme.textSecondary }
+                IconRepeat { visible: !mt.isShuffle; anchors.centerIn: parent; size: 14; color: mt.on ? Theme.accent : Theme.textSecondary }
+                HoverHandler { id: mtHover }
+                TapHandler { onTapped: mt.tapped() }
+            }
+
+            ModeToggle {
+                objectName: "deckShuffle"
+                isShuffle: true
+                on: deck.modeNow === "shuffle"
+                onTapped: backend.setPlaylistMode(on ? "sequential" : "shuffle")
+            }
             TransportGlyph { objectName: "deckBack"; forward: false; allowed: deck.backEnabled; onTapped: backend.rotatePrev() }
 
             Item {
@@ -634,7 +669,13 @@ Rectangle {
                 }
             }
 
-            TransportGlyph { forward: true; onTapped: backend.rotateNext() }
+            TransportGlyph { objectName: "deckNextGlyph"; forward: true; onTapped: backend.rotateNext() }
+            ModeToggle {
+                objectName: "deckStatic"
+                isShuffle: false
+                on: deck.modeNow === "static"
+                onTapped: backend.setPlaylistMode(on ? "sequential" : "static")
+            }
         }
     }
 
@@ -651,6 +692,8 @@ Rectangle {
 
 
     Column {
+        id: rightCol
+        objectName: "deckRightCol"
         anchors.verticalCenter: parent.verticalCenter
         anchors.right: parent.right
         anchors.rightMargin: Theme.spacingLg

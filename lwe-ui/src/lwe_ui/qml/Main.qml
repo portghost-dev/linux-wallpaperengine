@@ -50,7 +50,12 @@ ApplicationWindow {
     }
     Connections {
         target: backend
-        function onStatusChanged() { statusPoke.remaining = 4; statusPoke.restart() }
+        function onStatusChanged() {
+            // the first read at once: a control that changed engine state shows it this frame
+            window.engineStatus = backend.status();
+            statusPoke.remaining = 4;
+            statusPoke.restart();
+        }
     }
 
     property string masterState: "absent"
