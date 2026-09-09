@@ -1,4 +1,4 @@
-"""Header search field interactions: the clear-x, and drag-to-select.
+"""Header search field interactions: the collapsing search, and drag-to-select.
 
 Contract:
   * hidden while the field is empty - it only exists once there is something to clear
@@ -119,58 +119,137 @@ def main() -> None:
         assert QTest.qWaitForWindowExposed(view, 5000), "the header window never exposed"
         QTest.qWait(60)
 
-        clear = next((o for o in header.findChildren(QObject)
-                      if o.objectName() == "searchClear"), None)
-        assert clear is not None, "the search clear-x did not mount"
-        field = clear.parent()
-        assert field is not None and field.property("text") is not None, \
-            "the clear-x must live inside the search field"
+        def type_in(text):
+            for ch in text:
+                QTest.keyClick(view, ch)
 
-        assert field.property("text") == "", "the field starts empty"
-        assert clear.property("visible") is False, \
-            "the clear-x must be invisible while there is nothing to clear"
+        def find(name):
+            return next((o for o in header.findChildren(QObject) if o.objectName() == name), None)
+        slot, btn, field = find("headerSearchSlot"), find("headerSearchBtn"), find("headerSearch")
+        assert slot is not None and btn is not None and field is not None, "the search cluster did not mount"
+        clear = find("searchClear")
+        assert clear is not None, "the clear-x lives in the field, left of the glyph"
+        centre = lambda o: o.mapToScene(QPointF(o.property("width") / 2, o.property("height") / 2)).toPoint()
 
-        field.setProperty("text", "meteor")
-        QTest.qWait(20)
-        assert clear.property("visible") is True, "the clear-x must appear once the field has text"
-        assert header.property("query") == "meteor", "the header query mirrors the field"
+        # at rest: a 28 px glyph button, the field folded away
+        assert int(slot.property("width")) == 28 and slot.property("open") is False
+        assert int(btn.property("width")) == 28 and int(find("headerFilter").property("width")) == 28 \
+            and int(find("headerClose").property("width")) == 28
+        assert int(btn.parent().parent().property("spacing")) == 8, "the three buttons sit 8 px apart"
 
-        backend.pushed.clear()
-        centre = clear.mapToScene(QPointF(clear.property("width") / 2,
-                                          clear.property("height") / 2)).toPoint()
-        QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, centre)
+        # a click grows the field out of the glyph's place and puts the cursor in it
+        QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, centre(btn))
+        QTest.qWait(260)
+        assert slot.property("open") is True and int(slot.property("width")) == int(slot.property("fieldWidth"))
+        assert field.property("activeFocus") is True, "the cursor lands in the field"
+        assert int(slot.property("fieldWidth")) in (94, 124), "the shipped search width"
+        glyph_right = btn.mapToScene(QPointF(btn.property("width"), 0)).toPoint().x()
+        field_right = field.mapToScene(QPointF(field.property("width"), 0)).toPoint().x()
+        assert abs(glyph_right - field_right) <= 1, "the glyph ends up inside the field at its right end"
+
+        # the field's floor is the theme's background moved 6 % toward its text colour
+        well = field.property("background")
+        v, und = QQmlExpression(QQmlEngine.contextForObject(well), well, "Qt.colorEqual(color, Qt.rgba(Theme.base.r + (Theme.textPrimary.r - Theme.base.r) * 0.06, Theme.base.g + (Theme.textPrimary.g - Theme.base.g) * 0.06, Theme.base.b + (Theme.textPrimary.b - Theme.base.b) * 0.06, 1))").evaluate() if False else (None, None)
+        # the inset shadow is always dark: black at 0.9 on dark themes, the text colour at 0.18 on light
+        from PySide6.QtQml import QQmlEngine, QQmlExpression
+        v, und = QQmlExpression(QQmlEngine.contextForObject(well), well, "Qt.colorEqual(color, Qt.rgba(Theme.base.r + (Theme.textPrimary.r - Theme.base.r) * 0.06, Theme.base.g + (Theme.textPrimary.g - Theme.base.g) * 0.06, Theme.base.b + (Theme.textPrimary.b - Theme.base.b) * 0.06, 1))").evaluate()
+        assert not und and bool(v), "the search floor is the theme background moved 6 % toward the text"
+        # the lit edges: bottom white at 0.14 on dark (0.70 on light), a right edge at 0.10 on dark only
+        eb, er = find("searchEdgeBottom"), find("searchEdgeRight")
+        v, und = QQmlExpression(QQmlEngine.contextForObject(eb), eb, "Theme.isLight ? Math.abs(color.a - 0.70) < 0.01 : Math.abs(color.a - 0.14) < 0.01").evaluate()
+        assert not und and bool(v), "the bottom inner edge alpha per theme"
+        v, und = QQmlExpression(QQmlEngine.contextForObject(er), er, "Theme.isLight ? !visible : (visible && Math.abs(color.a - 0.10) < 0.01)").evaluate()
+        assert not und and bool(v), "the right inner edge only on dark, at 0.10"
+        shadow = find("searchShadowTop")
+        ev = lambda expr: QQmlExpression(QQmlEngine.contextForObject(shadow), shadow, expr).evaluate()
+        value, undefined = ev("Theme.isLight ? Qt.colorEqual(Qt.rgba(gradient.stops[0].color.r, gradient.stops[0].color.g, gradient.stops[0].color.b, 1), Qt.rgba(Theme.textPrimary.r, Theme.textPrimary.g, Theme.textPrimary.b, 1)) : (gradient.stops[0].color.r + gradient.stops[0].color.g + gradient.stops[0].color.b < 0.01)")
+        assert not undefined and bool(value), "the inset shadow ink is black on dark, the text colour on light"
+        value, undefined = ev("gradient.stops[0].color.a")
+        assert not undefined and (abs(float(value) - 0.9) < 0.01 or abs(float(value) - 0.18) < 0.01)
+        # the growth is animated leftward: mid-way the width is between folded and full, and the
+        # right edge has not moved
+        header.clearSearch()
+        QTest.qWait(260)
+        right_before = slot.mapToScene(QPointF(slot.property("width"), 0)).toPoint().x()
+        QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, centre(btn))
         QTest.qWait(60)
-        assert field.property("text") == "", f"the tap must empty the field: {field.property('text')!r}"
-        assert header.property("query") == "", "the mirrored query must clear too"
-        assert backend.pushed == [""], \
-            f"a programmatic clear must push the empty query to the backend, got {backend.pushed}"
-        assert clear.property("visible") is False, "the x hides again once the field is empty"
+        mid = int(slot.property("width"))
+        assert 28 < mid < int(slot.property("fieldWidth")), f"the field grows over time, mid-way width {mid}"
+        QTest.qWait(260)
+        assert slot.mapToScene(QPointF(slot.property("width"), 0)).toPoint().x() == right_before, "the right edge stays; the field grows leftward"
+
+        # typing mirrors the query; a click elsewhere drops the cursor but a live term keeps the field
+        assert clear.property("visible") is False, "no x while the field is empty"
+        type_in("meteor")
+        QTest.qWait(20)
+        assert header.property("query") == "meteor" and backend.pushed[-1] == "meteor"
+        assert clear.property("visible") is True, "the x shows once there is text"
+        glyph_left = btn.mapToScene(QPointF(0, 0)).toPoint().x()
+        x_right = clear.mapToScene(QPointF(clear.property("width"), 0)).toPoint().x()
+        assert x_right <= glyph_left, "the x sits left of the glyph, in a fixed spot"
+        # a tap on the x empties the field, pushes the empty query, and keeps the cursor
+        backend.pushed.clear()
+        QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, centre(clear))
+        QTest.qWait(60)
+        assert field.property("text") == "" and backend.pushed == [""] and field.property("activeFocus") is True
+        assert clear.property("visible") is False and slot.property("open") is True
+        type_in("meteor")
+        QTest.qWait(20)
+        ex = int(header.property("width")) // 2
+        QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, QPoint(ex, 10))
+        QTest.qWait(260)
+        assert field.property("activeFocus") is False and slot.property("open") is True, \
+            "a live term keeps the field open with no cursor"
+
+        # Escape clears the term and folds the field, pushing the empty query
+        backend.pushed.clear()
+        header.clearSearch()
+        QTest.qWait(260)
+        assert field.property("text") == "" and header.property("query") == "" and backend.pushed == [""]
+        assert slot.property("open") is False and int(slot.property("width")) == 28, "empty and folded"
+
+        # open, type nothing, click elsewhere: it folds
+        QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, centre(btn))
+        QTest.qWait(260)
+        assert slot.property("open") is True
+        QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, QPoint(ex, 10))
+        QTest.qWait(260)
+        assert slot.property("open") is False, "an empty field folds when the cursor leaves"
+
+        # Escape from inside the field, by key
+        QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, centre(btn))
+        QTest.qWait(260)
+        type_in("sky")
+        QTest.keyClick(view, Qt.Key_Escape)
+        QTest.qWait(260)
+        assert header.property("query") == "" and slot.property("open") is False
 
         dh = [o for o in header.findChildren(QObject)
               if o.metaObject().className().startswith("QQuickDragHandler")]
         assert len(dh) == 1, f"expected the one titlebar DragHandler, found {len(dh)}"
         drag = dh[0]
 
-        field.setProperty("text", "meteor shower")
+        QTest.mouseClick(view, Qt.LeftButton, Qt.NoModifier, centre(btn))
+        QTest.qWait(260)
+        type_in("meteor shower")
         QTest.qWait(20)
         y = field.mapToScene(QPointF(0, field.property("height") / 2)).toPoint().y()
-        x0 = field.mapToScene(QPointF(40, 0)).toPoint().x()
+        x0 = field.mapToScene(QPointF(12, 0)).toPoint().x()
         QTest.mousePress(view, Qt.LeftButton, Qt.NoModifier, QPoint(x0, y))
         QTest.qWait(20)
         stole = False
-        for dx in range(8, 120, 12):
+        for dx in range(8, 60, 12):
             QTest.mouseMove(view, QPoint(x0 + dx, y))
             QTest.qWait(12)
             stole = stole or bool(drag.property("active"))
-        QTest.mouseRelease(view, Qt.LeftButton, Qt.NoModifier, QPoint(x0 + 120, y))
+        QTest.mouseRelease(view, Qt.LeftButton, Qt.NoModifier, QPoint(x0 + 60, y))
         QTest.qWait(30)
         assert not stole, "the window drag stole the grab from the search field mid-drag"
         assert field.property("selectedText") != "", \
             "dragging inside the search field must select text"
 
-        field.setProperty("text", "")
-        QTest.qWait(20)
-        ex = int(header.property("width")) // 2
+        header.clearSearch()
+        QTest.qWait(260)
         QTest.mousePress(view, Qt.LeftButton, Qt.NoModifier, QPoint(ex, 10))
         QTest.qWait(20)
         activated = False
@@ -182,21 +261,17 @@ def main() -> None:
         QTest.qWait(30)
         assert activated, "dragging empty header space must still move the window"
 
+        # the glyphs roll between two Theme tokens and carry no literal colour
         src = (_ROOT / "src/lwe_ui/qml/HeaderBar.qml").read_text(encoding="utf-8")
-        block = src.split("id: clearX", 1)[1]
-        block = block[:block.index("\n            }")]
-        code = "\n".join(ln.split("//", 1)[0] for ln in block.splitlines())
-        assert "Rectangle" not in code, \
-            "the clear-x is a bare glyph - no plate/button rectangle behind it"
-        assert "Theme." in code, "the glyph color must come from Theme tokens (token law)"
-        assert not re.search(r'color:\s*["#]', code), \
-            'no literal color: a hard white vanishes on the light palettes'
-        assert re.search(r"color:\s*\w*[Hh]ov\w*\.hovered\s*\?\s*Theme\.\w+\s*:\s*Theme\.\w+", code), \
-            "the clear-x must roll over between two Theme tokens on hover"
+        cluster = src[src.index("component HeaderIconButton"):]
+        code = "\n".join(ln.split("//", 1)[0] for ln in cluster.splitlines())
+        assert not re.search(r'color:\s*"(?!transparent)|color:\s*#', code), 'no literal color in the cluster (a transparent stop is not a colour)'
+        assert len(re.findall(r"hovered[^\n]*\?\s*Theme\.textPrimary\s*:\s*Theme\.textSecondary", code)) == 4, \
+            "each of the three glyphs and the clear-x rolls from the muted to the primary text token on hover"
 
-        print("OK test_search_clear - clear-x hidden when empty / shown with text / tap clears "
-              "field + pushes empty query; bare glyph, themed token; drag-in-field selects "
-              "text while empty-space drag still moves the window")
+        print("OK test_search_clear - collapsing search: grows from the glyph, cursor in, live term "
+              "keeps it open, Escape clears and folds, empty folds on focus loss; drag-in-field "
+              "selects while empty-space drag moves the window; glyphs on tokens")
     finally:
         for k, v in orig.items():
             if v is None:

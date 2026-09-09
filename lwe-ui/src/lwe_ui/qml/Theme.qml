@@ -76,6 +76,13 @@ QtObject {
     readonly property color badgeText:      (rev, ThemeTokens.color("badgeText", "#D4D4D4"))
 
     readonly property bool isLight: (base.r * 0.299 + base.g * 0.587 + base.b * 0.114) > 0.5
+    // a sunken field's floor: the theme's background moved 6 % toward the theme's text colour,
+    // so every theme gets its own (OLED ~#0E0E0E, Cozy Pink ~#F3E4F0)
+    readonly property color sunkenWell: Qt.rgba(base.r + (textPrimary.r - base.r) * 0.06,
+                                                base.g + (textPrimary.g - base.g) * 0.06,
+                                                base.b + (textPrimary.b - base.b) * 0.06, 1)
+    // the hover fill of a borderless icon button
+    readonly property color iconHoverWash: isLight ? Qt.rgba(0, 0, 0, 0.06) : Qt.rgba(1, 1, 1, 0.08)
 
     readonly property int spacingXs: 4
     readonly property int spacingSm: 8

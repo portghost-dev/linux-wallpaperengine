@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls.Basic
+import QtQuick.Effects
 import "."
 
 Rectangle {
@@ -268,97 +269,203 @@ Rectangle {
     }
 
 
+    // the right cluster: three 28 px icon buttons, search, filter, close, 8 px apart, glyphs
+    // muted at rest and primary on hover over a light wash; the search one expands into its
+    // field leftward out of the glyph's own position
+    readonly property bool searchOpen: searchSlot.open
+    // a press anywhere but in the field takes the cursor away (the field then folds if it is
+    // empty); the window calls this for presses outside the header
+    function pressAt(sceneX, sceneY) {
+        if (!search.activeFocus)
+            return;
+        var p = search.mapFromItem(null, sceneX, sceneY);
+        if (p.x < 0 || p.y < 0 || p.x > search.width || p.y > search.height)
+            search.focus = false;
+    }
+    // the header's own presses: a passive handler that sees every press and takes nothing
+    TapHandler {
+        gesturePolicy: TapHandler.DragThreshold
+        grabPermissions: PointerHandler.TakeOverForbidden
+        onPressedChanged: if (pressed) header.pressAt(point.scenePosition.x, point.scenePosition.y)
+    }
+    function clearSearch() {
+        search.clear();
+        // onTextEdited fires for typing only: a programmatic clear pushes the empty query itself
+        backend.setSearch("");
+        search.focus = false;
+        searchSlot.open = false;
+    }
+
+    component HeaderIconButton: Item {
+        id: hib
+        property bool hovered: hibHover.hovered
+        property bool lit: false
+        signal tapped()
+        width: 28; height: 28
+        Rectangle {
+            anchors.fill: parent
+            radius: 4
+            color: Theme.iconHoverWash
+            visible: (hib.hovered && hib.enabled) || hib.lit
+        }
+        HoverHandler { id: hibHover; cursorShape: hib.enabled ? Qt.PointingHandCursor : Qt.IBeamCursor }
+        TapHandler { onTapped: hib.tapped() }
+    }
+
     Row {
         anchors.verticalCenter: parent.verticalCenter
         anchors.right: parent.right
         anchors.rightMargin: Theme.spacingLg
-        spacing: Theme.spacingMd
+        spacing: 8
 
-
-        TextField {
-            id: search
-            width: Theme.usableWidth <= 560 ? 94 : 124
+        Item {
+            id: searchSlot
+            objectName: "headerSearchSlot"
+            property bool open: false
+            readonly property int fieldWidth: Theme.usableWidth <= 560 ? 94 : 124
+            width: open ? fieldWidth : 28
             height: 28
             anchors.verticalCenter: parent.verticalCenter
-            placeholderText: "Search"
-            color: Theme.textPrimary
-            placeholderTextColor: Theme.textTertiary
-            font.pixelSize: Theme.fontBody13
-            leftPadding: searchMag.x + searchMag.width + Theme.spacingSm
-            // the clear-x's lane is reserved whether or not it shows, so the first typed
-            // character does not shove the whole string left when the x appears
-            rightPadding: Theme.spacingMd + clearX.width
-            verticalAlignment: TextInput.AlignVCenter
-            background: Rectangle {
-                color: Theme.surface
-                radius: Theme.radiusSm
-                border.width: 1
-                border.color: search.activeFocus ? Theme.borderStrong : Theme.border
-            }
-            onTextEdited: backend.setSearch(text)
+            Behavior on width { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
 
-            IconSearch {
-                id: searchMag
-                size: 13
-                color: Theme.textTertiary
-                x: Theme.spacingMd - 2   // canvas padding-left 10 (spacingMd is 12; -2 = 10)
+            // the sunken field, growing leftward out of the glyph's place (right-anchored)
+            TextField {
+                id: search
+                objectName: "headerSearch"
+                anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
+                width: parent.width
+                height: 28
+                visible: searchSlot.open || searchSlot.width > 28
+                opacity: searchSlot.open ? 1 : 0
+                Behavior on opacity { NumberAnimation { duration: 120 } }
+                placeholderText: "Search"
+                color: Theme.textPrimary
+                placeholderTextColor: Theme.textTertiary
+                font.pixelSize: Theme.fontBody13
+                leftPadding: Theme.spacingSm + 2
+                // the glyph's lane and the clear-x's lane, reserved whether or not the x shows,
+                // so the first typed character does not shove the string
+                rightPadding: 28 + 20
+                verticalAlignment: TextInput.AlignVCenter
+                background: Rectangle {
+                    // the search field inset: the theme's floor (background 6 % toward the text),
+                    // a 5 % border, two inset shadows, a white bottom edge; no literal colours
+                    id: searchWell
+                    readonly property color ink: Theme.isLight ? Theme.textPrimary : "#000000"
+                    color: Theme.sunkenWell
+                    radius: Theme.radiusSm
+                    border.width: 1
+                    border.color: Theme.isLight ? Qt.rgba(0, 0, 0, 0.05) : Qt.rgba(1, 1, 1, 0.05)
+                    // the inset layers follow the rounded shape: masked to the well's radius less
+                    // the border, inset one pixel so the mask's seam falls under the border
+                    Item {
+                        id: searchInset
+                        anchors.fill: parent
+                        anchors.margins: 1
+                        layer.enabled: true
+                        layer.effect: MultiEffect {
+                            maskEnabled: true
+                            maskSource: searchInsetMask
+                            maskThresholdMin: 0.5
+                            maskSpreadAtMin: 1.0
+                        }
+                        Rectangle {
+                            objectName: "searchShadowTop"
+                            x: 0; y: 0; width: parent.width; height: 4
+                            gradient: Gradient {
+                                GradientStop { position: 0; color: Qt.rgba(searchWell.ink.r, searchWell.ink.g, searchWell.ink.b, Theme.isLight ? 0.18 : 0.90) }
+                                GradientStop { position: 1; color: "transparent" }
+                            }
+                        }
+                        Rectangle {
+                            x: 0; y: 0; width: 2; height: parent.height
+                            gradient: Gradient {
+                                orientation: Gradient.Horizontal
+                                GradientStop { position: 0; color: Qt.rgba(searchWell.ink.r, searchWell.ink.g, searchWell.ink.b, Theme.isLight ? 0.12 : 0.70) }
+                                GradientStop { position: 1; color: "transparent" }
+                            }
+                        }
+                        // the lit edges: on dark themes the recess cannot get darker, so the lip is
+                        // the bottom and right inner edges in white; light keeps its bottom edge
+                        Rectangle {
+                            objectName: "searchEdgeBottom"
+                            x: 0; y: parent.height - 1; width: parent.width; height: 1
+                            color: Qt.rgba(1, 1, 1, Theme.isLight ? 0.70 : 0.14)
+                        }
+                        Rectangle {
+                            objectName: "searchEdgeRight"
+                            x: parent.width - 1; y: 0; width: 1; height: parent.height
+                            visible: !Theme.isLight
+                            color: Qt.rgba(1, 1, 1, 0.10)
+                        }
+                    }
+                    Item {
+                        id: searchInsetMask
+                        anchors.fill: searchInset
+                        visible: false
+                        layer.enabled: true
+                        // only the mask's alpha matters; any opaque token will do
+                        Rectangle { anchors.fill: parent; radius: Theme.radiusSm - 1; color: Theme.textPrimary }
+                    }
+                }
+                onTextEdited: backend.setSearch(text)
+                // a click elsewhere takes the cursor; the field folds back only when empty. A
+                // live term keeps it open so the filtered grid explains itself
+                onActiveFocusChanged: if (!activeFocus && text === "") searchSlot.open = false
+                Keys.onEscapePressed: header.clearSearch()
             }
-
-            // clear-x: bare glyph, no plate - the gray 28x28 button grammar belongs to the
-            // modal/palette closes, not to an in-field affordance. Present only once there is
-            // something to clear. The 20x20 Item is an invisible hit target: a 12px glyph is
-            // a miserable click, and padding the target costs nothing visually.
+            // the clear-x: a fixed spot just left of the glyph, there only while there is text;
+            // a tap empties the field and keeps the cursor in it
             Item {
                 id: clearX
                 objectName: "searchClear"
                 width: 20; height: 20
-                visible: search.text !== ""
                 anchors.right: parent.right
-                anchors.rightMargin: Theme.spacingMd - 6
+                anchors.rightMargin: 28
                 anchors.verticalCenter: parent.verticalCenter
-                IconX {
+                visible: searchSlot.open && search.text !== ""
+                IconCloseLine {
                     anchors.centerIn: parent
-                    size: 12
+                    size: 11
                     color: clearHov.hovered ? Theme.textPrimary : Theme.textSecondary
                 }
                 HoverHandler { id: clearHov; cursorShape: Qt.PointingHandCursor }
                 TapHandler {
                     onTapped: {
                         search.clear();
-                        // onTextEdited fires for typing only - a programmatic clear has to
-                        // push the empty query itself or the grid keeps the old filter
                         backend.setSearch("");
                         search.forceActiveFocus();
                     }
                 }
             }
+            // the glyph: a button at rest, the field's own mark at its right end once open
+            HeaderIconButton {
+                id: searchBtn
+                objectName: "headerSearchBtn"
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                enabled: !searchSlot.open
+                IconSearchLine {
+                    anchors.centerIn: parent
+                    color: (searchBtn.hovered && !searchSlot.open) ? Theme.textPrimary : Theme.textSecondary
+                }
+                onTapped: {
+                    searchSlot.open = true;
+                    search.forceActiveFocus();
+                }
+            }
         }
 
-        Item {
+        HeaderIconButton {
             id: funnelBtn
-            width: 28; height: 28
+            objectName: "headerFilter"
             anchors.verticalCenter: parent.verticalCenter
+            lit: funnelPop.visible
             property bool filtersActive: typeGroup.value !== "all" || plGroup.value !== "any"
-            Rectangle {
-                anchors.fill: parent
-                radius: Theme.radiusSm
-                color: Theme.surface
-                border.width: 1
-                border.color: Theme.border
-            }
-            Rectangle {
-                anchors.fill: parent
-                radius: Theme.radiusSm
-                color: Theme.hoverWash
-                opacity: (funnelPop.visible || funnelHover.hovered) ? 1 : 0
-            }
-            Column {
+            IconFilterLine {
                 anchors.centerIn: parent
-                spacing: 3
-                Rectangle { width: 12; height: 2; radius: 1; color: Theme.textSecondary; anchors.horizontalCenter: parent.horizontalCenter }
-                Rectangle { width: 8;  height: 2; radius: 1; color: Theme.textSecondary; anchors.horizontalCenter: parent.horizontalCenter }
-                Rectangle { width: 4;  height: 2; radius: 1; color: Theme.textSecondary; anchors.horizontalCenter: parent.horizontalCenter }
+                color: (funnelBtn.hovered || funnelPop.visible) ? Theme.textPrimary : Theme.textSecondary
             }
             Rectangle {
                 width: 6; height: 6; radius: 3
@@ -367,14 +474,11 @@ Rectangle {
                 color: Theme.accent
                 visible: funnelBtn.filtersActive
             }
-            HoverHandler { id: funnelHover }
-            TapHandler {
-                // same press-outside-then-reopen race as the strip menus: by tap time the
-                // popup already closed itself, so gate the reopen on the justClosed window.
-                onTapped: {
-                    if (funnelPop.visible) funnelPop.close();
-                    else if (!funnelPop.justClosed) funnelPop.open();
-                }
+            // same press-outside-then-reopen race as the strip menus: by tap time the
+            // popup already closed itself, so gate the reopen on the justClosed window.
+            onTapped: {
+                if (funnelPop.visible) funnelPop.close();
+                else if (!funnelPop.justClosed) funnelPop.open();
             }
 
             Popup {
@@ -455,28 +559,17 @@ Rectangle {
             }
         }
 
-        // Window close: always present, same F9 face as the funnel beside it. On every
-        // compositor the X routes through the normal window close, so close-to-tray
-        // decides whether it hides to the tray or ends the app - one behavior everywhere.
-        Item {
+        // Window close: on every compositor the X routes through the normal window close, so
+        // close-to-tray decides whether it hides to the tray or ends the app
+        HeaderIconButton {
             id: closeBtn
             objectName: "headerClose"
-            width: 28; height: 28
             anchors.verticalCenter: parent.verticalCenter
-            Rectangle {
-                anchors.fill: parent
-                radius: Theme.radiusXs
-                color: Theme.surface
-                border.width: 1
-                border.color: closeHover.hovered ? Theme.borderStrong : Theme.border
-            }
-            IconX {
+            IconCloseLine {
                 anchors.centerIn: parent
-                size: 12
-                color: closeHover.hovered ? Theme.textPrimary : Theme.textSecondary
+                color: closeBtn.hovered ? Theme.textPrimary : Theme.textSecondary
             }
-            HoverHandler { id: closeHover; cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: closeBtn.Window.window.close() }
+            onTapped: closeBtn.Window.window.close()
         }
     }
 }

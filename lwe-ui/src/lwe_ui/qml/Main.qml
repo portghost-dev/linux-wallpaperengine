@@ -125,7 +125,8 @@ ApplicationWindow {
 
     HeaderBar {
         id: header
-        anchors.left: rail.right
+        objectName: "headerBar"
+        anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
         engineStatus: window.engineStatus

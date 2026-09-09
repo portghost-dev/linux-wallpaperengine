@@ -29,6 +29,8 @@ import os
 import sys
 from pathlib import Path
 
+from PySide6.QtCore import QEvent, QMetaObject, QObject, Q_ARG
+
 from . import constants as C
 from .proctitle import set_process_name
 from .storage import paths, settings, theme_cfg, themes
@@ -51,16 +53,53 @@ def _resolve_theme_tokens() -> dict[str, str]:
             return dict(C.THEME_PRESETS[C.DEFAULT_THEME_PRESET])
 
 
-def spawn_tray_if_needed() -> bool:
-    """Called as the WINDOW exits: hand off to a resident tray when the user expects one.
+# set when the tray's Exit reached this window: the exit that follows must not put a
+# fresh tray up behind it
+_exit_all_requested = False
 
-    CLOSE_TO_TRAY promises "closing the window minimizes to the tray", but the rule is
-    enforced by the tray watching the window - with no tray alive (the user exited the
-    icon, then opened the window directly) the setting was silently inert and a close
-    ended everything. So the closing window respawns a detached tray. Exit on the icon
-    still means exit; the tray only returns once the user opens and closes the panel.
+
+class _SearchFocusFilter(QObject):
+    """A press anywhere in the window takes the cursor out of the header's search field.
+
+    Done at the application level: a press a Flickable or a MouseArea accepts never reaches a
+    passive handler below it, so a QML-side listener misses the library grid's gaps and every
+    MouseArea surface. The header decides what to do with the point (nothing, inside its own
+    field)."""
+
+    def __init__(self, window: QObject, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._window = window
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # noqa: N802 (Qt override)
+        if event.type() == QEvent.Type.MouseButtonPress and obj is self._window:
+            header = self._window.findChild(QObject, "headerBar")
+            if header is not None:
+                pos = event.scenePosition()
+                # a QML function takes its arguments as variants
+                QMetaObject.invokeMethod(header, "pressAt", Q_ARG("QVariant", float(pos.x())), Q_ARG("QVariant", float(pos.y())))
+        return False
+
+
+def install_search_focus_filter(app: QObject, window: QObject) -> QObject:
+    """Attach the press listener to the app for one window; the filter is returned so the caller
+    keeps it alive."""
+    flt = _SearchFocusFilter(window, app)
+    app.installEventFilter(flt)
+    return flt
+
+
+def spawn_tray_if_needed() -> bool:
+    """Called as the WINDOW starts and again as it exits: make sure a resident tray is
+    up when the user expects one.
+
+    CLOSE_TO_TRAY on means the tray icon is there whenever the app runs and outlives
+    the window; the rule is enforced by the tray, so a window launched directly (from
+    the menu, with no tray alive) spawns one detached. Off means no tray at all. An
+    exit the tray itself asked for spawns nothing: that Exit ends both.
 
     True = a tray was spawned (probe said none was alive)."""
+    if _exit_all_requested:
+        return False
     try:
         close_to_tray = bool(settings.load().get("CLOSE_TO_TRAY"))
     except Exception:
@@ -221,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
     if not engine.rootObjects():
         return 1
     _win_holder.append(engine.rootObjects()[0])
+    _search_focus = install_search_focus_filter(app, _win_holder[0])  # noqa: F841 (kept alive)
 
     from .engine import daemon_unit
     try:
