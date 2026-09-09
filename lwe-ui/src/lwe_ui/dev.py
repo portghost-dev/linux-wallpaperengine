@@ -24,6 +24,7 @@ Everything below the Qt layer is stdlib.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import shutil
@@ -32,7 +33,8 @@ import threading
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal, Slot
+from PySide6.QtCore import Property, QObject, QProcess, QProcessEnvironment, QTimer, Signal, Slot
+from PySide6.QtGui import QGuiApplication
 
 from . import constants as C
 from . import api_client
@@ -44,6 +46,12 @@ from .discovery import project as project_disc
 from .storage import atomic, paths, settings
 
 SIDES = ("A", "B")
+
+# The console holds this many lines for the session; the journal backlog fills it at the first
+# open. A slot keeps RESIDUE_LINES of its last run as crash residue.
+CONSOLE_MAX = 5000
+JOURNAL_BACKLOG = 5000
+RESIDUE_LINES = 2000
 
 FEATURE_TOGGLES = [
     {"key": "realsync", "label": "Real-time video sync", "env": "LWE_MPV_REALSYNC",
@@ -375,6 +383,50 @@ def _now_hhmm() -> str:
     return time.strftime("%H:%M")
 
 
+def _now_hhmmss() -> str:
+    return time.strftime("%H:%M:%S")
+
+
+def _journal_text(v) -> str:
+    """A journal MESSAGE is a string, or a byte list when it was not valid UTF-8."""
+    if isinstance(v, list):
+        try:
+            return bytes(int(b) & 0xFF for b in v).decode("utf-8", "replace")
+        except (TypeError, ValueError):
+            return ""
+    return "" if v is None else str(v)
+
+
+def _journal_fields(line: str) -> tuple[str, str, bool, str, str]:
+    """One journalctl JSON record to (src, text, err, time, raw). raw is the short-iso line
+    the journal would have printed, so a copy loses nothing. A line that is not a record
+    (journalctl's own notices) passes through as text."""
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        rec = None
+    if not isinstance(rec, dict):
+        return "D", line, False, _now_hhmmss(), line
+    text = _journal_text(rec.get("MESSAGE"))
+    try:
+        prio = int(rec.get("PRIORITY", 6))
+    except (TypeError, ValueError):
+        prio = 6
+    try:
+        when = datetime.datetime.fromtimestamp(int(rec.get("__REALTIME_TIMESTAMP")) / 1e6).astimezone()
+        ts = when.strftime("%H:%M:%S")
+        stamp = when.strftime("%Y-%m-%dT%H:%M:%S%z")
+    except (TypeError, ValueError, OverflowError, OSError):
+        ts = _now_hhmmss()
+        stamp = ""
+    ident = _journal_text(rec.get("SYSLOG_IDENTIFIER") or rec.get("_COMM"))
+    pid = _journal_text(rec.get("_PID"))
+    host = _journal_text(rec.get("_HOSTNAME"))
+    head = " ".join(x for x in (stamp, host, f"{ident}[{pid}]:" if pid else f"{ident}:") if x)
+    raw = f"{head} {text}" if head else text
+    return "D", text, prio <= 4, ts, raw
+
+
 def _safe_scene(wid: str) -> str:
     """A library wid or probe:<name>, each a single safe path segment; anything else is
     dropped so a slot can never point the engine at an arbitrary directory."""
@@ -426,7 +478,7 @@ class _Slot:
         self.props: list[tuple[str, str]] = []
         self.last_code: int | None = None
         self.last_ts = ""
-        self.last_tail: list[tuple[str, bool]] = []
+        self.last_tail: list[tuple[str, bool, str]] = []
         self.last_stopped = False
         self.proc: QProcess | None = None
         self.mode = ""
@@ -435,7 +487,7 @@ class _Slot:
         self.stopping = False
         self.gen = 0
         self.skip: set[str] = set()
-        self.buf: list[tuple[str, bool]] = []
+        self.buf: list[tuple[str, bool, str]] = []
         self.partial: dict[str, str] = {}
         self.placed = False
         self.place_tries = 0
@@ -454,7 +506,7 @@ class _Slot:
             "renderDebug": sorted(self.render_debug), "instruments": sorted(self.instruments),
             "env": [[k, v] for k, v in self.env_lines], "props": [[k, v] for k, v in self.props],
             "lastCode": self.last_code, "lastTs": self.last_ts,
-            "lastTail": [[t, bool(e)] for t, e in self.last_tail],
+            "lastTail": [[t, bool(e), ts] for t, e, ts in self.last_tail],
             "lastStopped": self.last_stopped, "api": self.api,
         }
 
@@ -490,8 +542,9 @@ class _Slot:
         self.last_ts = str(d.get("lastTs") or "")
         tail = d.get("lastTail")
         if isinstance(tail, list):
-            self.last_tail = [(str(x[0]), bool(x[1])) if isinstance(x, list) and len(x) == 2
-                              else (str(x), False) for x in tail][-400:]
+            self.last_tail = [(str(x[0]), bool(x[1]), str(x[2]) if len(x) > 2 else "")
+                              if isinstance(x, list) and len(x) >= 2
+                              else (str(x), False, "") for x in tail][-RESIDUE_LINES:]
         self.last_stopped = bool(d.get("lastStopped"))
         self.api = d.get("api") is not False
         self.overlay_stats = bool(d.get("overlayStats"))
@@ -522,17 +575,21 @@ class _Slot:
 class DevBridge(QObject):
     """Backend for the Developer view: two exhibit slots, three launch verbs, one console.
 
-    consoleLine carries (source, line, is_stderr) with source A, B or D for the daemon
-    journal. _EMIT_MAX caps the lines emitted per drain, since an uncapped per-frame
-    instrument freezes the GUI; the full text still lands in the slot buffer for the tail.
+    The console buffer lives here for the session (CONSOLE_MAX lines, oldest dropped first).
+    Every entry carries src (A, B or D for the daemon journal), time (HH:MM:SS at receipt, or
+    the journal stamp), text (the message), raw (the unstripped line, what a copy yields) and
+    err (stderr, or journal priority warning and above). consoleLines emits the entries
+    appended by one read plus how many oldest entries the cap dropped; consoleReset says the
+    buffer changed in the middle and the view must rebuild from consoleEntries.
     """
 
     stateChanged = Signal()
-    consoleLine = Signal(str, str, bool)
+    consoleLines = Signal(list, int)
+    consoleReset = Signal()
+    consoleCountChanged = Signal()
+    tailShown = Signal(str)
     runStarted = Signal(str)
     journalChanged = Signal()
-
-    _EMIT_MAX = 40
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -543,6 +600,9 @@ class DevBridge(QObject):
         self._objects_cache: dict[str, tuple[float, list]] = {}
         self._journal_proc: QProcess | None = None
         self._journal_seen = False
+        self._journal_partial = ""
+        self._console: list[dict] = []
+        self._console_id = 0
         self._engine_peers: list = []
         self._binary_cache: dict[str, tuple[float, bool]] = {}
         self._scene_cache: tuple[float, list] | None = None
@@ -562,6 +622,8 @@ class DevBridge(QObject):
         self._b_due = 0.0
         self._restore()
         self._seed_scenes()
+        for side in SIDES:
+            self._replay_tail(side, announce=False)
 
     def _restore(self) -> None:
         d = atomic.read_json(_slots_file(), default=None)
@@ -607,6 +669,74 @@ class DevBridge(QObject):
                                      {"version": 1, **{s: self.slots[s].to_json() for s in SIDES}})
         except (OSError, ValueError, TypeError):
             pass
+
+    # -- console buffer ------------------------------------------------------------------
+
+    def _entry(self, src: str, text: str, err: bool, ts: str = "", raw: str | None = None,
+               residue: bool = False) -> dict:
+        self._console_id += 1
+        return {"id": self._console_id, "src": src, "time": ts or _now_hhmmss(), "text": text,
+                "raw": text if raw is None else raw, "err": bool(err), "residue": residue}
+
+    def _push(self, entries: list[dict]) -> None:
+        """Append to the session buffer, dropping the oldest past the cap, and tell the view."""
+        if not entries:
+            return
+        self._console.extend(entries)
+        dropped = len(self._console) - CONSOLE_MAX
+        if dropped > 0:
+            del self._console[:dropped]
+        else:
+            dropped = 0
+        self.consoleLines.emit(entries, dropped)
+        self.consoleCountChanged.emit()
+
+    def _say(self, src: str, text: str, err: bool) -> None:
+        self._push([self._entry(src, text, err)])
+
+    def _clear_side(self, side: str) -> None:
+        self._console = [e for e in self._console if e["src"] != side]
+        self.consoleReset.emit()
+        self.consoleCountChanged.emit()
+
+    @Slot(result="QVariantList")
+    def consoleEntries(self) -> list:
+        return list(self._console)
+
+    def _get_console_count(self) -> int:
+        return len(self._console)
+
+    consoleCount = Property(int, _get_console_count, notify=consoleCountChanged)
+
+    @Slot(str)
+    def setClipboard(self, text: str) -> None:
+        cb = QGuiApplication.clipboard()
+        if cb is not None:
+            cb.setText(text)
+
+    def _replay_tail(self, side: str, announce: bool = True) -> None:
+        """Put the slot's crash residue into the console under its header, replacing the copy
+        a previous replay left, so the residue shows once however often Tail is pressed."""
+        s = self._slot(side)
+        if s is None:
+            return
+        if not s.last_tail and s.last_code is None:
+            return
+        self._console = [e for e in self._console if not (e["src"] == side and e["residue"])]
+        code = -1 if s.last_code is None else int(s.last_code)
+        head = f"Last run \u00b7 exit {code} \u00b7 {s.last_ts}"
+        block = [self._entry(side, head, False, ts=" " * 8, residue=True)]
+        block.extend(self._entry(side, t, e, ts=ts, residue=True) for t, e, ts in s.last_tail)
+        self._console.extend(block)
+        del self._console[:-CONSOLE_MAX]
+        self.consoleReset.emit()
+        self.consoleCountChanged.emit()
+        if announce:
+            self.tailShown.emit(side)
+
+    @Slot(str)
+    def showTail(self, side: str) -> None:
+        self._replay_tail(side)
 
     def _changed(self) -> None:
         self._persist()
@@ -1104,7 +1234,7 @@ class DevBridge(QObject):
         s.api = self._binary_is_api(s.binary)
         geo = self._window_geometry(s.side)
         if not geo or not self.compose_argv(s.side, geo):
-            self.consoleLine.emit(s.side, "no scene chosen or no display output to place the window on", True)
+            self._say(s.side, "no scene chosen or no display output to place the window on", True)
             return
         if self._orphan_answers(s):
             return
@@ -1135,11 +1265,11 @@ class DevBridge(QObject):
             self.slots[side].api = self._binary_is_api(self.slots[side].binary)
         geo = self._window_geometry("A")
         if not geo:
-            self.consoleLine.emit("A", "no display output to place the windows on", True)
+            self._say("A", "no display output to place the windows on", True)
             return
         missing = [side for side in SIDES if not self.compose_argv(side, geo)]
         if missing:
-            self.consoleLine.emit(missing[0], "no scene chosen", True)
+            self._say(missing[0], "no scene chosen", True)
             return
         if any(self._orphan_answers(self.slots[side]) for side in SIDES):
             return
@@ -1190,7 +1320,7 @@ class DevBridge(QObject):
             return False
         try:
             if api_client.available(s.sock_path()):
-                self.consoleLine.emit(s.side, "an exhibit this panel does not own still answers on the socket", True)
+                self._say(s.side, "an exhibit this panel does not own still answers on the socket", True)
                 return True
         except Exception:
             pass
@@ -1236,11 +1366,12 @@ class DevBridge(QObject):
         s.proc = proc
         s.mode = "window"
         s.stopping = False
+        self._clear_side(s.side)
         self.runStarted.emit(s.side)
         bar = "=" * 33
-        self.consoleLine.emit(s.side, bar, False)
-        self.consoleLine.emit(s.side, "Beginning new bench run " + time.strftime("%Y.%m.%d %H:%M:%S"), False)
-        self.consoleLine.emit(s.side, bar, False)
+        self._say(s.side, bar, False)
+        self._say(s.side, "Beginning new bench run " + time.strftime("%Y.%m.%d %H:%M:%S"), False)
+        self._say(s.side, bar, False)
         proc.start(argv[0], argv[1:])
         s.relaunching = False
         if s.api and s.skip:
@@ -1292,7 +1423,7 @@ class DevBridge(QObject):
     def _tell_overlay_refused(self, s: _Slot) -> None:
         if not s.overlay_told:
             s.overlay_told = True
-            self.consoleLine.emit(
+            self._say(
                 s.side, "this build has no set-overlay command; the stats overlay needs an engine "
                 "built from the current tree", True)
 
@@ -1431,14 +1562,14 @@ class DevBridge(QObject):
         s = self.slots[side]
         if proc is not s.proc or err != QProcess.ProcessError.FailedToStart:
             return
-        self.consoleLine.emit(side, "the binary did not start", True)
+        self._say(side, "the binary did not start", True)
         self._retire(s, 126)
 
     def _retire(self, s: _Slot, exit_code: int) -> None:
         s.last_code = exit_code
         s.last_stopped = s.stopping
         s.last_ts = _now_hhmm()
-        s.last_tail = list(s.buf[-400:])
+        s.last_tail = list(s.buf[-RESIDUE_LINES:])
         p = s.proc
         s.proc = None
         s.mode = ""
@@ -1481,21 +1612,16 @@ class DevBridge(QObject):
         lines = [ln[:2000] for ln in data.splitlines() if ln.strip()]
         if not lines:
             return
-        s.buf.extend((ln, stderr) for ln in lines)
+        now = _now_hhmmss()
+        s.buf.extend((ln, stderr, now) for ln in lines)
         del s.buf[:-4000]
-        dropped = len(lines) - self._EMIT_MAX
-        if dropped > 0:
-            self.consoleLine.emit(side, f"{len(lines)} lines this read, showing the last {self._EMIT_MAX}",
-                                  stderr)
-            lines = lines[-self._EMIT_MAX:]
-        for line in lines:
-            self.consoleLine.emit(side, line, stderr)
+        self._push([self._entry(side, ln, stderr, ts=now) for ln in lines])
 
     @Slot(str, result="QVariantList")
     def tailLines(self, side: str) -> list:
-        """The retained tail of the slot's last run, replayed into the console at startup."""
+        """The retained tail of the slot's last run."""
         s = self._slot(side)
-        return [{"text": t, "err": e} for t, e in s.last_tail] if s else []
+        return [{"text": t, "err": e, "time": ts} for t, e, ts in s.last_tail] if s else []
 
     def _journal_unit(self) -> str:
         return C.ENGINE_SERVICE
@@ -1507,8 +1633,9 @@ class DevBridge(QObject):
     @Slot(bool)
     def setFollowingDaemon(self, on: bool) -> None:
         """Follow the engine service's journal into the console while the view shows. The
-        backlog is bounded to 200 lines so the first read does not replay the whole boot. A
-        SIGKILLed panel orphans the follower inside the user slice; logout reaps it."""
+        first open pulls a backlog that fills the console; later opens pull none, the buffer
+        already holds what was read. A SIGKILLed panel orphans the follower inside the user
+        slice; logout reaps it."""
         if not on:
             self._stop_journal()
             return
@@ -1518,7 +1645,7 @@ class DevBridge(QObject):
             return
         exe = shutil.which("journalctl")
         if not exe:
-            self.consoleLine.emit("D", "journalctl not on PATH", True)
+            self._say("D", "journalctl not on PATH", True)
             return
         proc = QProcess(self)
         proc.setProcessEnvironment(QProcessEnvironment.systemEnvironment())
@@ -1526,10 +1653,11 @@ class DevBridge(QObject):
         proc.readyReadStandardOutput.connect(self._drain_journal)
         proc.finished.connect(self._on_journal_finished)
         self._journal_proc = proc
-        backlog = "200" if not self._journal_seen else "0"
+        backlog = str(JOURNAL_BACKLOG) if not self._journal_seen else "0"
         self._journal_seen = True
+        self._journal_partial = ""
         proc.start(exe, ["--user", "-u", self._journal_unit(), "-f", "-n", backlog,
-                         "--no-pager", "-o", "short-iso"])
+                         "--no-pager", "-o", "json"])
         self.journalChanged.emit()
 
     def _stop_journal(self) -> None:
@@ -1556,15 +1684,18 @@ class DevBridge(QObject):
         proc = self._journal_proc
         if proc is None:
             return
-        data = bytes(proc.readAllStandardOutput()).decode("utf-8", "replace")
-        lines = [ln for ln in data.splitlines() if ln.strip()]
-        dropped = len(lines) - self._EMIT_MAX
-        if dropped > 0:
-            self.consoleLine.emit("D", f"{len(lines)} lines this read, showing the last {self._EMIT_MAX}",
-                                  False)
-            lines = lines[-self._EMIT_MAX:]
-        for line in lines:
-            self.consoleLine.emit("D", line, False)
+        data = self._journal_partial + bytes(proc.readAllStandardOutput()).decode("utf-8", "replace")
+        if data and not data.endswith("\n"):
+            data, _, self._journal_partial = data.rpartition("\n")
+        else:
+            self._journal_partial = ""
+        entries = []
+        for ln in data.splitlines():
+            if not ln.strip():
+                continue
+            src, text, err, ts, raw = _journal_fields(ln)
+            entries.append(self._entry("D", text, err, ts=ts, raw=raw))
+        self._push(entries)
 
     def _on_journal_finished(self, code: int, _status: object) -> None:
         proc, self._journal_proc = self._journal_proc, None

@@ -401,7 +401,8 @@ Rectangle {
             Label {
                 objectName: "devSlotResidue"
                 anchors.left: parent.left
-                anchors.right: parent.right
+                anchors.right: tailButton.visible ? tailButton.left : parent.right
+                anchors.rightMargin: tailButton.visible ? 8 : 0
                 anchors.verticalCenter: parent.verticalCenter
                 elide: Text.ElideRight
                 font.pixelSize: 10
@@ -416,6 +417,29 @@ Rectangle {
                     return "Last run · exit " + n;
                 }
                 color: card.st.legacy === true ? Theme.warning : Theme.textTertiary
+            }
+            // Tail opens the retained run in the console, pinned to this side
+            Rectangle {
+                id: tailButton
+                objectName: "devSlotTail"
+                visible: card.st.hasResidue === true && (card.st.lastCode || 0) > 0
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                height: 20
+                width: tailLabel.implicitWidth + 16
+                radius: 5
+                color: "transparent"
+                border.width: 1
+                border.color: Theme.hairlineStrong
+                Label {
+                    id: tailLabel
+                    anchors.centerIn: parent
+                    text: "Tail"
+                    font.pixelSize: 10
+                    color: Theme.textPrimary
+                }
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: dev.showTail(card.side) }
             }
         }
     }

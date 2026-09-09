@@ -123,7 +123,7 @@ def _unset_env_partition_body(dev) -> None:
 def test_stderr_is_never_filtered(dev) -> None:
     """Engine diagnostics reach the console regardless of wording, marked as stderr."""
     seen: list[tuple] = []
-    dev.consoleLine.connect(lambda src, line, err: seen.append((src, line, err)))
+    dev.consoleLines.connect(lambda ents, _n: seen.extend((e["src"], e["text"], e["err"]) for e in ents))
 
     real = [
         "Could not parse puppet models/tree.mdl: not an MDLV container",
@@ -145,25 +145,49 @@ def test_stderr_is_never_filtered(dev) -> None:
     for line in real:
         assert ("A", line, True) in seen, f"stderr must pass through unfiltered and marked: {line}"
     tail = dev.slots["A"].buf[-4:]
-    assert [t for t, _e in tail] == real and all(e for _t, e in tail), \
+    assert [t for t, _e, _ts in tail] == real and all(e for _t, e, _ts in tail), \
         "the slot buffer keeps stderr for the tail, marked as stderr"
+    assert all(len(ts) == 8 for _t, _e, ts in tail), "exhibit lines are stamped HH:MM:SS at receipt"
 
 
 def test_journal_lines_are_tagged(dev) -> None:
-    """Daemon journal lines share the console but carry their own source tag."""
-    seen: list[tuple] = []
-    dev.consoleLine.connect(lambda src, line, err: seen.append((src, line, err)))
+    """Daemon journal records share the console tagged D: the message alone shows with the
+    journal's own time, the raw line keeps the stamp, host and unit, and priority warning
+    and above carries the mark. A split record waits for its other half."""
+    import json as _json
+    import time as _time
+    seen: list[dict] = []
+    dev.consoleLines.connect(lambda ents, _n: seen.extend(ents))
+    us = 1788973302802117
+    rec = {"MESSAGE": "LWE-MODELPASS x", "PRIORITY": "6", "__REALTIME_TIMESTAMP": str(us),
+           "_HOSTNAME": "host", "SYSLOG_IDENTIFIER": "linux-wallpaperengine", "_PID": "1"}
+    warn = dict(rec, MESSAGE="shader warning", PRIORITY="4")
+    raw_bytes = dict(rec, MESSAGE=[76, 87, 69, 255])
+    blob = _json.dumps(rec) + "\n" + _json.dumps(warn) + "\n" + _json.dumps(raw_bytes) + "\n"
+    head, tail = blob[:len(blob) // 2], blob[len(blob) // 2:]
+    chunks = [head.encode(), tail.encode(), b"-- No entries --\n"]
 
     class _FakeProc:
         def readAllStandardOutput(self):
-            return b"Aug 14 08:26:10 host linux-wallpaperengine[1]: LWE-MODELPASS x"
+            return chunks.pop(0)
 
     dev._journal_proc = _FakeProc()
     try:
         dev._drain_journal()
+        n_first = len(seen)
+        dev._drain_journal()
+        dev._drain_journal()
     finally:
         dev._journal_proc = None
-    assert seen == [("D", "Aug 14 08:26:10 host linux-wallpaperengine[1]: LWE-MODELPASS x", False)]
+    assert n_first < 3 and len(seen) == 4, (n_first, [e["text"] for e in seen])
+    assert dev._journal_partial == "", "no half record lingers once its other half arrives"
+    local = _time.strftime("%H:%M:%S", _time.localtime(us / 1e6))
+    e0 = seen[0]
+    assert (e0["src"], e0["text"], e0["err"], e0["time"]) == ("D", "LWE-MODELPASS x", False, local), e0
+    assert e0["raw"].endswith(" host linux-wallpaperengine[1]: LWE-MODELPASS x") and "T" in e0["raw"], e0["raw"]
+    assert seen[1]["err"] is True and seen[1]["text"] == "shader warning", "priority 4 carries the mark"
+    assert seen[2]["text"].startswith("LWE") and seen[2]["err"] is False, "a byte-list message decodes"
+    assert seen[3]["text"] == "-- No entries --" and seen[3]["src"] == "D", "a non-record line passes through"
 
 
 def test_journal_follower_lifecycle(dev, qwait) -> None:
@@ -191,25 +215,35 @@ def test_journal_follower_lifecycle(dev, qwait) -> None:
     dev.setFollowingDaemon(False)
 
 
-def test_journal_flood_cap(dev) -> None:
-    """A heavy read is truncated and says so, the same guard the exhibit console has."""
-    lines: list[str] = []
-    dev.consoleLine.connect(lambda src, line, err: lines.append(line))
+def test_journal_flood_keeps_every_line(dev) -> None:
+    """A heavy read reaches the buffer whole: the read size is a batch, never a discard. Only
+    the session cap drops lines, oldest first, and it says how many."""
+    import json as _json
+    from lwe_ui.dev import CONSOLE_MAX
+    batches: list[tuple[list, int]] = []
+    dev.consoleLines.connect(lambda ents, n: batches.append((list(ents), n)))
+
+    def blob(lo, hi):
+        return ("\n".join(_json.dumps({"MESSAGE": f"line {i}", "PRIORITY": "6"}) for i in range(lo, hi)) + "\n").encode()
+
+    chunks = [blob(0, 500), blob(500, CONSOLE_MAX + 100)]
 
     class _FakeProc:
         def readAllStandardOutput(self):
-            return ("\n".join(f"line {i}" for i in range(500))).encode()
+            return chunks.pop(0)
 
     dev._journal_proc = _FakeProc()
     try:
         dev._drain_journal()
+        assert [e["text"] for e in batches[-1][0]] == [f"line {i}" for i in range(500)], \
+            "all 500 lines of one read arrive, in order"
+        assert batches[-1][1] == 0 and dev.consoleCount == 500
+        dev._drain_journal()
     finally:
         dev._journal_proc = None
-
-    assert len(lines) == dev._EMIT_MAX + 1, \
-        f"expected {dev._EMIT_MAX} lines plus one notice, got {len(lines)}"
-    assert "lines this read" in lines[0], "the truncation must be stated, not silent"
-    assert lines[-1] == "line 499", "the TAIL is what a live monitor must keep"
+    assert batches[-1][1] == 100, f"the cap reports the oldest lines it dropped: {batches[-1][1]}"
+    held = dev.consoleEntries()
+    assert len(held) == CONSOLE_MAX and held[0]["text"] == "line 100" and held[-1]["text"] == f"line {CONSOLE_MAX + 99}"
 
 
 def test_shutdown_reaps_the_follower(dev) -> None:
@@ -296,7 +330,7 @@ def main() -> None:
         test_stderr_is_never_filtered(DevBridge())
         test_journal_lines_are_tagged(DevBridge())
         test_journal_follower_lifecycle(DevBridge(), qwait)
-        test_journal_flood_cap(DevBridge())
+        test_journal_flood_keeps_every_line(DevBridge())
         test_shutdown_reaps_the_follower(DevBridge())
 
         from lwe_ui.models import Backend

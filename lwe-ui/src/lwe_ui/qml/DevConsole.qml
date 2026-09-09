@@ -2,8 +2,9 @@ import QtQuick
 import QtQuick.Controls.Basic
 import "."
 
-// Console + Instruments column. The console keeps every line tagged by source; the picker
-// and filter only decide what is shown. stderr lines carry the danger mark.
+// Console + Instruments column. The console is one read-only text surface over the session
+// buffer the backend holds; the picker and filter only decide what is shown. Lines never
+// wrap: the surface scrolls both ways. A copy yields the raw lines, not the stripped ones.
 Item {
     id: col
 
@@ -14,37 +15,17 @@ Item {
     property int source: 2
     property string filter: ""
 
-    function replayTail(side) {
-        var lines = dev.tailLines(side);
-        var st = dev.slotState(side);
-        if (lines.length === 0 && st.lastCode < 0)
-            return;
-        logModel.append({src: side, text: "Last run · exit " + st.lastCode + " · " + (st.lastTs || ""), err: false});
-        for (var i = 0; i < lines.length; i++)
-            logModel.append({src: side, text: lines[i].text, err: lines[i].err === true});
-        col.trim();
-        Qt.callLater(logView.positionViewAtEnd);
-    }
+    // the buffer mirror and the lines on the surface, in surface order
+    property var entries: []
+    property var shown: []
+    readonly property real rowH: shown.length > 0 ? logText.contentHeight / shown.length : 0
 
     function lineCount(side) {
         var n = 0;
-        for (var i = 0; i < logModel.count; i++)
-            if (side === undefined || logModel.get(i).src === side)
+        for (var i = 0; i < entries.length; i++)
+            if (side === undefined || entries[i].src === side)
                 n++;
         return n;
-    }
-
-    function clearSide(side) {
-        for (var i = logModel.count - 1; i >= 0; i--)
-            if (logModel.get(i).src === side)
-                logModel.remove(i);
-    }
-
-    Component.onCompleted: { replayTail("A"); replayTail("B"); }
-
-    function trim() {
-        if (logModel.count > 2000)
-            logModel.remove(0, logModel.count - 1800);
     }
 
     function shows(src) {
@@ -53,18 +34,130 @@ Item {
         return src === (col.source === 0 ? "A" : "B");
     }
 
-    ListModel { id: logModel }
+    function passes(e) {
+        return shows(e.src) && (col.filter === "" || e.text.toLowerCase().indexOf(col.filter) >= 0);
+    }
+
+    function thousands(n) {
+        var s = String(n);
+        var out = "";
+        while (s.length > 3) {
+            out = "," + s.slice(-3) + out;
+            s = s.slice(0, -3);
+        }
+        return s + out;
+    }
+
+    function escapeHtml(t) {
+        return t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function tagColor(src) {
+        return src === "A" ? Theme.accent : src === "B" ? Theme.textSecondary : Theme.textTertiary;
+    }
+
+    function html(e) {
+        var body = e.err ? Qt.lighter(Theme.danger, 1.35) : Theme.textTertiary;
+        return "<p style=\"line-height:180%; margin:0; white-space:pre" + (e.err ? "; margin-left:6px" : "") + "\">"
+             + "<span style=\"color:" + tagColor(e.src) + "\">" + e.src + "</span> "
+             + "<span style=\"color:" + Theme.textTertiary + "\">" + e.time + "</span> "
+             + "<span style=\"color:" + body + "\">" + escapeHtml(e.text) + "</span></p>";
+    }
+
+    function rebuild() {
+        entries = dev.consoleEntries();
+        var keep = [];
+        var parts = [];
+        for (var i = 0; i < entries.length; i++)
+            if (passes(entries[i])) {
+                keep.push(entries[i]);
+                parts.push(html(entries[i]));
+            }
+        shown = keep;
+        logText.text = parts.join("");
+        marks.refresh();
+        Qt.callLater(col.toEnd);
+    }
+
+    function toEnd() {
+        logFlick.contentY = Math.max(0, logFlick.contentHeight - logFlick.height);
+    }
+
+    function dropShown(n) {
+        var all = logText.getText(0, 100000000);
+        var pos = -1;
+        for (var k = 0; k < n; k++) {
+            pos = all.indexOf("\u2029", pos + 1);
+            if (pos < 0)
+                break;
+        }
+        if (pos >= 0)
+            logText.remove(0, pos + 1);
+        else
+            logText.text = "";
+    }
+
+    function append(list, dropped) {
+        var follow = logFlick.atYEnd || shown.length === 0;
+        if (dropped > 0) {
+            var gone = 0;
+            for (var d = 0; d < dropped && d < entries.length; d++)
+                if (passes(entries[d]))
+                    gone++;
+            entries = entries.slice(dropped);
+            if (gone > 0) {
+                shown = shown.slice(gone);
+                dropShown(gone);
+            }
+        }
+        var next = shown.slice();
+        for (var i = 0; i < list.length; i++) {
+            entries.push(list[i]);
+            if (passes(list[i])) {
+                next.push(list[i]);
+                logText.append(html(list[i]));
+            }
+        }
+        shown = next;
+        marks.refresh();
+        if (follow)
+            Qt.callLater(col.toEnd);
+    }
+
+    // the raw lines under the selection, whole lines, in surface order
+    function copySelection() {
+        var a = logText.selectionStart, b = logText.selectionEnd;
+        if (a === b || shown.length === 0)
+            return;
+        var first = logText.getText(0, a).split("\u2029").length - 1;
+        var last = logText.getText(0, b).split("\u2029").length - 1;
+        var lines = [];
+        for (var i = first; i <= last && i < shown.length; i++)
+            lines.push(shown[i].raw);
+        dev.setClipboard(lines.join("\n"));
+    }
+
+    function showResidue(side) {
+        col.source = side === "A" ? 0 : 1;
+        sourceSeg.currentIndex = col.source;
+        rebuild();
+        for (var i = 0; i < shown.length; i++)
+            if (shown[i].src === side && shown[i].residue === true) {
+                Qt.callLater(function() { logFlick.contentY = Math.min(i * col.rowH,
+                                              Math.max(0, logFlick.contentHeight - logFlick.height)); });
+                return;
+            }
+    }
+
+    onSourceChanged: rebuild()
+    onFilterChanged: rebuild()
+    Component.onCompleted: rebuild()
 
     Connections {
         target: dev
-        function onRunStarted(side) { col.clearSide(side) }
-        function onConsoleLine(src, line, err) {
-            var follow = logView.atYEnd || logModel.count === 0;
-            logModel.append({src: src, text: line, err: err});
-            col.trim();
-            if (follow)
-                Qt.callLater(logView.positionViewAtEnd);
-        }
+        function onConsoleLines(list, dropped) { col.append(list, dropped) }
+        function onConsoleReset() { col.rebuild() }
+        function onTailShown(side) { col.showResidue(side) }
     }
 
     Column {
@@ -86,8 +179,18 @@ Item {
                 font.weight: Theme.weightMedium
                 color: Theme.textSecondary
             }
-            Rectangle {
+            Label {
+                id: consoleCount
+                objectName: "devConsoleCount"
                 anchors.left: consoleRuleLabel.right
+                anchors.leftMargin: 8
+                anchors.verticalCenter: parent.verticalCenter
+                text: col.thousands(dev.consoleCount) + " lines"
+                font.pixelSize: 11
+                color: Theme.textTertiary
+            }
+            Rectangle {
+                anchors.left: consoleCount.right
                 anchors.leftMargin: 8
                 anchors.right: sourceSeg.left
                 anchors.rightMargin: 8
@@ -142,55 +245,109 @@ Item {
             border.color: Theme.hairline
             clip: true
 
-            ListView {
-                id: logView
+            Flickable {
+                id: logFlick
+                objectName: "devConsoleFlick"
                 anchors.fill: parent
                 anchors.margins: 8
                 anchors.leftMargin: 10
                 anchors.rightMargin: 10
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
-                model: logModel
-                ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
-                delegate: Item {
-                    id: line
-                    required property string src
-                    required property string text
-                    required property bool err
-                    readonly property bool shown: col.shows(line.src)
-                                                  && (col.filter === "" || line.text.toLowerCase().indexOf(col.filter) >= 0)
-                    width: logView.width
-                    height: shown ? Math.round(9.5 * 1.8) : 0
-                    visible: shown
-                    Rectangle {
-                        visible: line.err
-                        anchors.left: parent.left
-                        anchors.top: parent.top
-                        anchors.bottom: parent.bottom
-                        width: 2
-                        color: Theme.danger
+                contentWidth: Math.max(width, logText.contentWidth + 2)
+                contentHeight: Math.max(height, logText.contentHeight)
+                onContentYChanged: marks.refresh()
+                onHeightChanged: marks.refresh()
+
+                // the surface scrolls; the bars ride the box padding, clear of the text
+                ScrollBar.vertical: ScrollBar {
+                    id: vbar
+                    objectName: "devConsoleVBar"
+                    parent: consoleBox
+                    x: consoleBox.width - width - 3
+                    y: 8
+                    height: consoleBox.height - 16
+                    padding: 0
+                    policy: ScrollBar.AsNeeded
+                    background: Item {}
+                    contentItem: Rectangle {
+                        implicitWidth: 4
+                        radius: 2
+                        color: Qt.rgba(1, 1, 1, 0.25)
+                        opacity: vbar.active ? 1 : 0
+                        Behavior on opacity { NumberAnimation { duration: 150 } }
                     }
-                    Label {
-                        anchors.left: parent.left
-                        anchors.leftMargin: line.err ? 6 : 0
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 14
-                        text: line.src
-                        font.pixelSize: Theme.fontMicro - 1
-                        font.family: Theme.monoFamily
-                        color: line.src === "A" ? Theme.accent : line.src === "B" ? Theme.textSecondary : Theme.textTertiary
+                }
+                ScrollBar.horizontal: ScrollBar {
+                    id: hbar
+                    objectName: "devConsoleHBar"
+                    parent: consoleBox
+                    x: 10
+                    y: consoleBox.height - height - 2
+                    width: consoleBox.width - 20
+                    padding: 0
+                    policy: ScrollBar.AsNeeded
+                    background: Item {}
+                    contentItem: Rectangle {
+                        implicitHeight: 4
+                        radius: 2
+                        color: Qt.rgba(1, 1, 1, 0.25)
+                        opacity: hbar.active ? 1 : 0
+                        Behavior on opacity { NumberAnimation { duration: 150 } }
                     }
-                    Label {
-                        anchors.left: parent.left
-                        anchors.leftMargin: (line.err ? 6 : 0) + 16
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: line.text
-                        textFormat: Text.PlainText
-                        elide: Text.ElideRight
-                        font.pixelSize: Theme.fontMicro - 1
-                        font.family: Theme.monoFamily
-                        color: line.err ? Qt.lighter(Theme.danger, 1.35) : Theme.textTertiary
+                }
+
+                Item {
+                    id: marks
+                    objectName: "devConsoleMarks"
+                    width: 2
+                    height: logText.contentHeight
+                    property var rows: []
+                    function refresh() {
+                        if (col.rowH <= 0 || col.shown.length === 0) {
+                            rows = [];
+                            return;
+                        }
+                        var first = Math.max(0, Math.floor(logFlick.contentY / col.rowH));
+                        var last = Math.min(col.shown.length - 1,
+                                            Math.ceil((logFlick.contentY + logFlick.height) / col.rowH));
+                        var out = [];
+                        for (var i = first; i <= last; i++)
+                            if (col.shown[i].err)
+                                out.push(i);
+                        rows = out;
+                    }
+                    Repeater {
+                        model: marks.rows
+                        delegate: Rectangle {
+                            required property int modelData
+                            x: 0
+                            y: modelData * col.rowH
+                            width: 2
+                            height: col.rowH
+                            color: Theme.danger
+                        }
+                    }
+                }
+
+                TextEdit {
+                    id: logText
+                    objectName: "devConsoleText"
+                    width: logFlick.contentWidth
+                    readOnly: true
+                    selectByMouse: true
+                    selectByKeyboard: true
+                    persistentSelection: true
+                    textFormat: TextEdit.RichText
+                    wrapMode: TextEdit.NoWrap
+                    font.pixelSize: Theme.fontMicro - 1
+                    font.family: Theme.monoFamily
+                    color: Theme.textTertiary
+                    Keys.onPressed: function(event) {
+                        if (event.matches(StandardKey.Copy)) {
+                            col.copySelection();
+                            event.accepted = true;
+                        }
                     }
                 }
             }

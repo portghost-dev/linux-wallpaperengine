@@ -257,7 +257,7 @@ def test_persistence(d) -> None:
 
 def test_refusals(d) -> None:
     seen = []
-    d.consoleLine.connect(lambda s, t, e: seen.append((s, t, e)))
+    d.consoleLines.connect(lambda ents, _n: seen.extend((e["src"], e["text"], e["err"]) for e in ents))
     d.setScene("B", "")
     d.launch("B")
     assert seen and seen[-1][0] == "B" and seen[-1][2] is True, "a refused launch says so on stderr"
@@ -268,7 +268,7 @@ def test_refusals(d) -> None:
 
 def test_launch_and_residue(app, d) -> None:
     lines = []
-    d.consoleLine.connect(lambda s, t, e: lines.append((s, t, e)))
+    d.consoleLines.connect(lambda ents, _n: lines.extend((e["src"], e["text"], e["err"]) for e in ents))
     os.environ["FAKE_EXIT"] = "3"
     d.launch("A")
     assert d.runMode() == "window"
@@ -284,9 +284,19 @@ def test_launch_and_residue(app, d) -> None:
     tail = d.tailLines("A")
     assert any("LWE-PRESENT" in t["text"] and not t["err"] for t in tail)
     assert any("puppet" in t["text"] and t["err"] for t in tail), "the tail keeps the severity"
+    assert all(len(t["time"]) == 8 for t in tail), "every retained line carries its receipt time"
+    held = [e for e in d.consoleEntries() if e["src"] == "A"]
+    assert [e["text"] for e in held] == [t for s, t, e in lines if s == "A"], \
+        "the session buffer holds every line the run produced, in order, none dropped"
 
     d2 = devmod.DevBridge()
     assert d2.slotState("A")["lastCode"] == 3 and d2.tailLines("A") == tail, "residue survives restart"
+    replay = [e for e in d2.consoleEntries() if e["src"] == "A"]
+    assert replay and replay[0]["text"].startswith("Last run \u00b7 exit 3 \u00b7 ") and replay[0]["residue"], replay[:1]
+    assert [e["text"] for e in replay[1:]] == [t["text"] for t in tail], "the residue replays at startup under its header"
+    d2.showTail("A")
+    again = [e for e in d2.consoleEntries() if e["src"] == "A"]
+    assert len(again) == len(replay), "Tail replaces the replayed block, it never duplicates it"
 
     os.environ.pop("FAKE_EXIT")
     os.environ["FAKE_SEGV"] = "1"

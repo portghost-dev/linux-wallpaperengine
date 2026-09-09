@@ -47,6 +47,124 @@ def _switches(item) -> list:
             if o.metaObject().indexOfProperty("pillWidth") >= 0 and o.property("visible") is True]
 
 
+def _console_surface(app, root, dev, con_col, settle) -> None:
+    """The console is one text surface: every line held is on it (source and filter aside),
+    marks ride the stderr rows, the bars sit in the box padding, a copy yields raw lines, the
+    count names the buffer, and Tail pins the picker to its side."""
+    from PySide6.QtGui import QGuiApplication
+
+    def shown_list():
+        v = con_col.property("shown")
+        return v.toVariant() if hasattr(v, "toVariant") else list(v)
+
+    text = _find(root, "devConsoleText")
+    flick = _find(root, "devConsoleFlick")
+    box = _find(root, "devConsoleBox")
+    count = _find(root, "devConsoleCount")
+    marks = _find(root, "devConsoleMarks")
+
+    n_shown = len(shown_list())
+    assert n_shown == con_col.lineCount("A") + con_col.lineCount("B") == 5, n_shown
+    plain = text.getText(0, 10 ** 8)
+    assert plain.count("\u2029") == n_shown - 1, "one block per shown line, nothing elided"
+    assert "GL context lost, reinit" in plain and "daemon line" not in plain
+    assert count.property("text") == "6 lines", count.property("text")
+
+    # the stderr rows carry the mark at their row, the others do not
+    err_rows = [i for i, e in enumerate(shown_list()) if e["err"]]
+    got = marks.property("rows")
+    got = got.toVariant() if hasattr(got, "toVariant") else list(got)
+    assert err_rows and got == err_rows, (err_rows, got)
+
+    # the bars ride the padding: clear of the text on the right, of the box edge by 3
+    vbar = _find(box, "devConsoleVBar")
+    assert vbar.parentItem() is box
+    assert int(vbar.property("x") + vbar.property("width")) == int(box.property("width")) - 3
+    assert vbar.property("x") >= flick.property("x") + flick.property("width"), \
+        ("the bar never covers the text", vbar.property("x"), vbar.property("width"), flick.property("x"),
+         flick.property("width"), box.property("width"))
+
+    # a burst past the box: the count grows, the buffer keeps all of it, the filter reads all of it
+    dev._push([dev._entry("A", f"burst {i} {'odd' if i % 2 else 'even'}" + (" x" * 200 if i == 7 else ""),
+                          i % 7 == 0) for i in range(300)])
+    settle()
+    assert count.property("text") == "306 lines"
+    assert len(shown_list()) == 305
+    row_h = con_col.property("rowH")
+    assert row_h > 0 and abs(row_h - text.property("contentHeight") / 305) < 0.01, \
+        "rows are uniform: a long line scrolls sideways, it never wraps"
+    assert flick.property("contentWidth") > flick.property("width") + 100, "the long line widens the surface"
+    con_col.setProperty("filter", "odd")
+    settle()
+    assert len(shown_list()) == 150, "the filter searches the whole buffer, not a window"
+    assert count.property("text") == "306 lines", "the count names the buffer, not the view"
+    con_col.setProperty("filter", "")
+    settle()
+
+    # the bar's handle keeps one size while scrolling: the surface height is exact
+    sizes = set()
+    step = max(1.0, (flick.property("contentHeight") - flick.property("height")) / 12)
+    for k in range(13):
+        flick.setProperty("contentY", k * step)
+        settle(10)
+        sizes.add(round(vbar.property("size"), 4))
+    assert len(sizes) == 1, f"the handle size must not change while scrolling: {sorted(sizes)}"
+
+    # a copy yields the raw lines under the selection, whole lines
+    shown = shown_list()
+    plain = text.getText(0, 10 ** 8)
+    blocks = plain.split("\u2029")
+    start = len("\u2029".join(blocks[:3])) + 4
+    end = len("\u2029".join(blocks[:5])) - 2
+    text.select(start, end)
+    con_col.copySelection()
+    app.processEvents()
+    assert QGuiApplication.clipboard().text() == "\n".join(e["raw"] for e in shown[3:5]), \
+        QGuiApplication.clipboard().text()[:120]
+
+    # the user's own paths: a drag across two lines selects them inside the scrolling surface,
+    # and Ctrl+C on the keyboard copies their raw text
+    from PySide6.QtCore import QPointF, Qt
+    from PySide6.QtTest import QTest
+    win = text.window()
+    flick.setProperty("contentY", 0)
+    settle(20)
+    origin = text.mapToScene(QPointF(30, row_h * 1.5))
+    target = text.mapToScene(QPointF(120, row_h * 2.5))
+    QTest.mousePress(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, origin.toPoint())
+    for k in range(1, 6):
+        QTest.mouseMove(win, (origin + (target - origin) * (k / 5)).toPoint())
+        settle(10)
+    QTest.mouseRelease(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, target.toPoint())
+    settle(20)
+    sel = text.property("selectedText")
+    assert sel.count("\u2029") == 1 and text.property("activeFocus") is True, \
+        ("a drag selects across lines and the surface takes focus", sel[:80], flick.property("contentY"))
+    assert flick.property("contentY") == 0, "the drag selected, it did not flick the surface"
+    QGuiApplication.clipboard().setText("")
+    QTest.keyClick(win, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+    settle(20)
+    assert QGuiApplication.clipboard().text() == "\n".join(e["raw"] for e in shown_list()[1:3]), \
+        ("Ctrl+C yields the raw lines under the drag", QGuiApplication.clipboard().text()[:120])
+
+    # Tail pins the picker to its side and puts the residue in view under its header
+    dev.showTail("A")
+    settle()
+    assert con_col.property("source") == 0
+    rows = shown_list()
+    at = next(i for i, e in enumerate(rows) if e["residue"])
+    assert at == len(rows) - 2 and rows[at]["text"] == "Last run \u00b7 exit 139 \u00b7 09:41", rows[at]
+    assert rows[at]["time"] == " " * 8, "the header names its own time; the time column stays blank"
+    assert rows[at + 1]["text"] == "GL context lost" and rows[at + 1]["err"] is True
+    assert abs(flick.property("contentY") - min(at * row_h, flick.property("contentHeight") - flick.property("height"))) < 1, \
+        "the view lands on the residue header"
+    dev.showTail("A")
+    settle()
+    assert sum(1 for e in shown_list() if e["residue"]) == 2, "Tail twice shows the residue once"
+    con_col.setProperty("source", 2)
+    settle()
+
+
 def main() -> None:
     home = tempfile.mkdtemp(prefix="lwe-devview-")
     orig = {k: os.environ.get(k) for k in ("HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME")}
@@ -93,12 +211,14 @@ def main() -> None:
         backend = Backend()
         editor = EditorBridge()
         bench = bench_bridge.BenchBridge()
+        seed = DevBridge()
+        seed.setScene("A", "111")
+        seed.setScene("B", "111")
+        seed.slots["B"].last_code = 3
+        seed.slots["B"].last_ts = "09:40"
+        seed.slots["B"].last_tail = [("old line", False, "09:39:58")]
+        seed._persist()
         dev = DevBridge()
-        dev.setScene("A", "111")
-        dev.setScene("B", "111")
-        dev.slots["B"].last_code = 3
-        dev.slots["B"].last_ts = "09:40"
-        dev.slots["B"].last_tail = [("old line", False)]
 
         view = QQuickView()
         view.engine().addImportPath(str(_QML_DIR))
@@ -166,16 +286,18 @@ def main() -> None:
 
         dev.slots["A"].last_code = 139
         dev.slots["A"].last_ts = "09:41"
-        dev.slots["A"].last_tail = [("GL context lost", True)]
+        dev.slots["A"].last_tail = [("GL context lost", True, "09:40:59")]
         dev.stateChanged.emit()
         settle()
         assert state_a.property("text") == "exit 139"
         residue = _find(_find(root, "devSlotA"), "devSlotResidue")
         assert "Last run · exit " in residue.property("text") and "139" in residue.property("text")
+        tail_btn = _find(_find(root, "devSlotA"), "devSlotTail")
+        assert tail_btn.property("visible") is True, "a failed run offers Tail beside its exit code"
 
-        dev.consoleLine.emit("A", "present fence ok", False)
-        dev.consoleLine.emit("B", "GL context lost, reinit", True)
-        dev.consoleLine.emit("D", "daemon line", False)
+        dev._say("A", "present fence ok", False)
+        dev._say("B", "GL context lost, reinit", True)
+        dev._say("D", "daemon line", False)
         settle()
         shows = lambda src: con_col.shows(src)
         assert shows("A") and shows("B") and not shows("D"), "Both shows the exhibits and hides the daemon"
@@ -185,14 +307,16 @@ def main() -> None:
         assert shows("A") and not shows("B")
 
         con_col.setProperty("source", 2)
-        dev.runStarted.emit("A")
+        dev._clear_side("A")
         settle()
         assert con_col.lineCount("A") == 0 and con_col.lineCount("B") == 3, \
             "a launch clears only that side's console lines (B keeps its replayed tail and its line)"
-        dev.consoleLine.emit("A", "=================================", False)
-        dev.consoleLine.emit("A", "Beginning new bench run 2026.09.03 17:53:53", False)
+        dev._say("A", "=================================", False)
+        dev._say("A", "Beginning new bench run 2026.09.03 17:53:53", False)
         settle()
         assert con_col.lineCount("A") == 2
+
+        _console_surface(app, root, dev, con_col, settle)
 
         root.setProperty("compactBelow", 5000)
         settle()
@@ -205,6 +329,10 @@ def main() -> None:
         assert int(iso.property("width")) == 1216
 
         view.hide()
+        # drop the QML tree while the application lives: a focused text surface torn down
+        # after the application by the interpreter's collector reaches a dead input method
+        view.setSource(QUrl())
+        settle()
         print("OK test_developer_view_ui - three columns at flagship geometry, full toggle + "
               "instrument grids, grouped isolator, tagged console, compact panes")
     finally:
