@@ -184,7 +184,8 @@ def _test_reach_is_derived_not_prose(sb, b) -> None:
     for key in ("ENGINE_TIMESCALE", "ENGINE_VOLUME", "AUDIO_REACTIVE_DEFAULT",
                 "MOUSE_DEFAULT", "PARALLAX_DEFAULT", "PARTICLES_DEFAULT", "ENGINE_FPS"):
         assert sb.reach(key) == "LIVE", key
-    for key in ("ENGINE_LAYER", "ENGINE_HWDEC", "ENGINE_TEXCOMP", "ASSETS_DIR"):
+    for key in ("ENGINE_LAYER", "ENGINE_HWDEC", "ENGINE_TEXCOMP", "TEXTURE_DETAIL", "RENDER_RESOLUTION",
+                "ASSETS_DIR"):
         assert sb.reach(key) == "SERVICE-RESTART", key
     for key in ("ENGINE_SCALING", "ENGINE_CLAMP", "AUTOMUTE_DEFAULT"):
         assert sb.reach(key) == "NEXT-SHOW", key

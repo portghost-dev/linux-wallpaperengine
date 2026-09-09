@@ -28,6 +28,7 @@ CC_MODES = ("none", "preset", "custom")
 ACQUIRE_METHODS = ("client", "steamcmd")
 LAYERS = ("background", "bottom", "top", "overlay")  # wlr-layer-shell anchor (engine --layer)
 HWDECS = ("no", "auto")  # vendor-specific decoders cut (S-12.5): universal only                     # video decode path (LWE_HWDEC)
+RENDER_RESOLUTIONS = ("screen", "sharpfx", "wallpaper")  # resolution clamp: all, scene target only, none (LWE_SSFACTOR, LWE_CLAMPCOMPOSITES)
 TEXTURE_DETAILS = ("auto", "full")  # mip residency: display-matched resident chains vs authored     # (LWE_TEXDETAIL)
 UI_MODES = ("normal", "advanced")
 DETECT_MODES = ("manual", "launch", "interval", "watch")
@@ -102,6 +103,7 @@ SETTINGS_SCHEMA: dict[str, dict] = {
     "ENGINE_HWDEC": {"type": "enum", "default": "no", "choices": HWDECS},
     "ENGINE_TEXCOMP": {"type": "bool", "default": True},
     "TEXTURE_DETAIL": {"type": "enum", "default": "auto", "choices": TEXTURE_DETAILS},
+    "RENDER_RESOLUTION": {"type": "enum", "default": "screen", "choices": RENDER_RESOLUTIONS},
     "ENGINE_TIMESCALE": {"type": "float", "default": 1.0, "min": 0.1, "max": 10.0},
     # Audio response dials. ENGINE-NATIVE values - the
     # same units set-tuning takes and the same units editor.AUDIO_DIALS maps to and from.

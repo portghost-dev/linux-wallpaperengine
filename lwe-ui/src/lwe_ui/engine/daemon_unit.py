@@ -159,7 +159,7 @@ def _fmt_dial(value: float) -> str:
 #: instead of carrying it forever under the foreign-lines banner.
 MANAGED_ENV_KEYS = frozenset({
     "LWE_ENGINE_ARGS", "LWE_HWDEC", "LWE_TEXCOMP", "LWE_DEADMAN", "LWE_NOPAUSEVRAM",
-    "LWE_TEXDETAIL", "LWE_TEXCAP",
+    "LWE_TEXDETAIL", "LWE_TEXCAP", "LWE_SSFACTOR", "LWE_CLAMPCOMPOSITES",
     *tuple(C.AUDIO_DIAL_ENV.values()),
 })
 
@@ -267,6 +267,13 @@ def build_env_content(outputs: list[str] | None = None, existing: str | None = N
     # written either way: the engine caps by default, so "full" must say so explicitly
     detail = str(s.get("TEXTURE_DETAIL") or "auto").strip()
     lines.append(f"LWE_TEXDETAIL={detail if detail in C.TEXTURE_DETAILS else 'auto'}")
+
+    # the engine clamps everything by default; only the two sharper states write a line
+    res = str(s.get("RENDER_RESOLUTION") or "screen").strip()
+    if res == "sharpfx":
+        lines.append("LWE_CLAMPCOMPOSITES=0")
+    elif res == "wallpaper":
+        lines.append("LWE_SSFACTOR=0")
 
     for skey, env_name in C.AUDIO_DIAL_ENV.items():
         try:

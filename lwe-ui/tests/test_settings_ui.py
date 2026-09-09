@@ -235,6 +235,7 @@ def _test_released_halts_are_actually_built() -> None:
         (engine, "Wayland layer", ["Background", "Overlay"]),
         (engine, "Video decode", ["Software", "Hardware when available"]),
         (engine, "Texture detail", ["Automatic", "Full"]),
+        (engine, "Clamp resolution", ["Full clamping", "Full res effects", "All full res"]),
         (library, "Detect new items", ["On launch", "On a timer"]),
     ):
         assert f'label: "{label}"' in text, f"{label} row must be built"

@@ -550,6 +550,23 @@ Column {
     }
 
     SettingsRow {
+        label: "Clamp resolution"
+        caption: "Clamping content to screen resolution saves video memory at the cost of some sharpness"
+        SettingsCombo {
+            id: renderResCombo
+            // the clamp's three states: everything at the screen's size, effect layers at
+            // their authored size, or nothing clamped
+            readonly property var vals: ["screen", "sharpfx", "wallpaper"]
+            failed: page.isFailed("RENDER_RESOLUTION")
+            model: ["Full clamping", "Full res effects", "All full res"]
+            currentIndex: Math.max(0, vals.indexOf(String(page.val("RENDER_RESOLUTION") || "screen")))
+            onActivated: function(i) {
+                settingsBridge.commit("RENDER_RESOLUTION", renderResCombo.vals[i]);
+            }
+        }
+    }
+
+    SettingsRow {
         label: "Texture compression"
         caption: "Trades a little banding for a lot of video memory"
         ThemedSwitch {

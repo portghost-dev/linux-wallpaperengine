@@ -89,6 +89,25 @@ class DaemonUnitTest(unittest.TestCase):
         self.assertIn("LWE_TEXDETAIL=full", content)
         self.assertNotIn("LWE_TEXCAP", content)
 
+    def test_render_resolution_env(self) -> None:
+        """The clamp's three states: the default writes nothing (the engine clamps on its own),
+        sharp effects writes the composite exemption, wallpaper writes the clamp off. Both
+        lines are managed, so a change of state scrubs the other."""
+        settings.save({"RENDER_RESOLUTION": "screen"})
+        content = daemon_unit.build_env_content(outputs=["DP-1"])
+        self.assertNotIn("LWE_SSFACTOR", content)
+        self.assertNotIn("LWE_CLAMPCOMPOSITES", content)
+
+        settings.save({"RENDER_RESOLUTION": "sharpfx"})
+        content = daemon_unit.build_env_content(outputs=["DP-1"])
+        self.assertIn("LWE_CLAMPCOMPOSITES=0", content)
+        self.assertNotIn("LWE_SSFACTOR", content)
+
+        settings.save({"RENDER_RESOLUTION": "wallpaper"})
+        regenerated = daemon_unit.build_env_content(outputs=["DP-1"], existing=content)
+        self.assertIn("LWE_SSFACTOR=0", regenerated)
+        self.assertNotIn("LWE_CLAMPCOMPOSITES", regenerated)
+
     def test_reconcile_env(self) -> None:
         """Startup drift repair: a stale env rewrites on panel start; a
         current one is left alone; no-outputs never degrades the file."""
