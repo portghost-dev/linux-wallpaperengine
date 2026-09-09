@@ -90,16 +90,23 @@ ApplicationWindow {
                     if (ov.children[i].visible)
                         return;
             }
+            // a live or open search takes the next Escape: cleared and folded away
+            if (header.query !== "" || header.searchOpen) {
+                header.clearSearch();
+                return;
+            }
             if (window.currentView !== "library")
                 window.currentView = "library";
         }
     }
 
+    // the header and the deck span the full width; the rail occupies only the band between
+    // the header's bottom divider and the deck's top divider
     Rail {
         id: rail
         anchors.left: parent.left
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
+        anchors.top: header.bottom
+        anchors.bottom: deck.top
         // F23: the active wash + accent bar follow whichever view is actually mounted.
         // Settings/Developer takeovers activate their own rail item and de-active the
         // scope item; the editor drawer is opened from a card gear (not the rail), so it
@@ -144,7 +151,8 @@ ApplicationWindow {
 
     Deck {
         id: deck
-        anchors.left: rail.right
+        objectName: "deckBar"
+        anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
         engineStatus: window.engineStatus

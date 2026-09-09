@@ -92,6 +92,64 @@ def main() -> None:
 
         roots = len(engine.rootObjects())
         real_errors = [e for e in errors if "Unqualified access" not in e]
+        # a status poke reads the engine at once: a control that changed engine state shows the
+        # engine's word this frame, not at the poke timer's first tick
+        if roots == 1:
+            from PySide6.QtCore import QPointF
+            from PySide6.QtQuick import QQuickItem  # noqa: F401  (registers the item converters)
+            window = engine.rootObjects()[0]
+            window.setProperty("engineStatus", {"marker": "stale"})
+            backend.statusChanged.emit()
+            assert "marker" not in dict(window.property("engineStatus") or {}), \
+                "statusChanged must replace the deck's status immediately"
+            # the root layout: header and deck span the window, the rail sits in the band between
+            rail = next(o for o in window.findChildren(QObject) if o.metaObject().className().startswith("Rail"))
+            hdr = window.findChild(QObject, "headerBar")
+            dk = window.findChild(QObject, "deckBar")
+            assert float(hdr.x()) == 0 and float(hdr.width()) == float(window.width()), "the header spans the window"
+            assert float(dk.x()) == 0 and float(dk.width()) == float(window.width()), "the deck spans the window"
+            assert abs(float(rail.y()) - float(hdr.height())) < 0.5 and abs(float(rail.y()) + float(rail.height()) - float(dk.y())) < 0.5, \
+                "the rail occupies the band between the header and the deck"
+            rail_src = (_QML_DIR / "Rail.qml").read_text(encoding="utf-8")
+            assert "width: 17; height: 17; radius: 5" not in rail_src, "the rail's app mark is gone"
+            # the active indicator sits on the active item: its centre is the All item's centre
+            all_item = next(o for o in rail.findChildren(QObject) if o.property("label") == "All")
+            bar = next(o for o in rail.childItems() if o.metaObject().className().startswith("QQuickRectangle") and int(o.width()) == 2 and int(o.height()) == 18)
+            assert abs((float(bar.y()) + 9) - (all_item.mapToItem(rail, QPointF(0, all_item.height() / 2)).y())) < 0.5, \
+                "the rail's accent bar lines up with the active item"
+            # the transport sits at the midpoint between the left block and the pill
+            row = next(o for o in dk.findChildren(QObject) if o.objectName() == "deckTransportRow")
+            row_c = row.mapToItem(dk, QPointF(row.width() / 2, 0)).x()
+            assert abs(row_c - float(dk.property("midpoint"))) <= 1.0, "the transport centres between the left block and the pill"
+            # the header's search: a press on the library grid, a Flickable that accepts its
+            # own presses, still takes the cursor out (the application-level press listener),
+            # and Escape with a live term and no cursor clears it from the window
+            from PySide6.QtCore import Qt
+            from PySide6.QtTest import QTest
+            from lwe_ui.app import install_search_focus_filter
+            _flt = install_search_focus_filter(app, window)  # noqa: F841
+            window.show()
+            QTest.qWaitForWindowExposed(window, 5000)
+            header = window.findChild(QObject, "headerBar")
+            btn = next(o for o in header.findChildren(QObject) if o.objectName() == "headerSearchBtn")
+            field = next(o for o in header.findChildren(QObject) if o.objectName() == "headerSearch")
+            grid = window.findChild(QObject, "libraryGrid")
+            c = btn.mapToScene(QPointF(14, 14)).toPoint()
+            QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, c)
+            QTest.qWait(260)
+            for ch in "nebula":
+                QTest.keyClick(window, ch)
+            QTest.qWait(30)
+            assert field.property("activeFocus") is True and header.property("query") == "nebula"
+            g = grid.mapToScene(QPointF(grid.width() / 2, grid.height() - 4)).toPoint()
+            QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, g)
+            QTest.qWait(100)
+            assert field.property("activeFocus") is False, "a press on the grid takes the cursor"
+            assert header.property("searchOpen") is True, "a live term keeps the field open"
+            QTest.keyClick(window, Qt.Key_Escape)
+            QTest.qWait(260)
+            assert header.property("query") == "" and header.property("searchOpen") is False, \
+                "Escape with a live term and no cursor clears and folds from the window"
 
         import json
         wdir = str(paths.default_wallpapers_dir())

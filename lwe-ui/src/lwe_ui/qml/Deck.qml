@@ -424,15 +424,26 @@ Rectangle {
         }
     }
 
+    // the transport's centre is the midpoint between the visible left block's right edge and
+    // the pill column's left edge, computed at every width; the bar centres on the same point
+    readonly property real leftBlockEdge: Math.max(
+        leftIdle.visible ? leftIdle.x + leftIdle.width : 0,
+        leftTesting.visible ? leftTesting.x + leftTesting.width : 0,
+        leftWizBench.visible ? leftWizBench.x + leftWizBench.width : 0,
+        leftDevBench.visible ? leftDevBench.x + leftDevBench.width : 0)
+    readonly property real midpoint: (leftBlockEdge + rightCol.x) / 2
+
     Column {
         id: centerProgress
-        anchors.centerIn: parent
+        anchors.verticalCenter: parent.verticalCenter
+        x: Math.round(deck.midpoint - width / 2)
         spacing: 8
 
         // the rotation interval: the engine status when it carries one, else the
         // ACTIVE PLAYLIST's configured interval - so the right-hand MM:SS is always real
         // even against an engine that does not report interval= yet.
         function statusInterval() {
+            if (deck._replyInterval > 0) return deck._replyInterval;
             var iv = parseInt(deck._field("interval"));
             if (!isNaN(iv) && iv > 0) return iv;
             try {
@@ -446,7 +457,14 @@ Rectangle {
 
         Item {
             id: barSlot
-            readonly property int barWidth: Math.max(110, Math.min(240, Theme.usableWidth - 430))
+            // the bar centres on the deck's midpoint and shrinks symmetrically until it clears
+            // the left block and the right time label by 12 px each, never wider than its ruled
+            // 240 px; the times ride the bar's ends
+            readonly property int pillGap: Theme.spacingMd
+            readonly property real leftBound: deck.leftBlockEdge + pillGap + elapsedLabel.width + 10
+            readonly property real rightBound: rightCol.x - pillGap - totalLabel.width - 10
+            readonly property int barWidth: Math.max(110, Math.min(240,
+                Math.floor(2 * Math.min(deck.midpoint - leftBound, rightBound - deck.midpoint))))
             width: barSlot.barWidth
             height: 14
             anchors.horizontalCenter: parent.horizontalCenter

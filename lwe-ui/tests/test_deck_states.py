@@ -168,6 +168,110 @@ def main() -> None:
         assert _find(deck, "deckLast").property("text") == "Last: ", "an empty Last keeps its label"
         assert _find(deck, "deckBack").property("enabled") is False, "back is off in static"
         assert deck.property("isStatic") is True
+        # the mode toggles flank the transport: static lit, shuffle dark; the engine's word wins
+        shuffle_t, static_t = _find(deck, "deckShuffle"), _find(deck, "deckStatic")
+        assert shuffle_t is not None and static_t is not None, "the two mode toggles need their objectNames"
+        assert static_t.property("on") is True and shuffle_t.property("on") is False
+        deck.setProperty("engineStatus", {"state": "up", "current": "111", "interval": "900", "next_in": "300", "order": "shuffle"})
+        settle()
+        assert shuffle_t.property("on") is True and static_t.property("on") is False
+        deck.setProperty("engineStatus", {"state": "up", "current": "111", "interval": "900", "next_in": "300", "order": "sequential"})
+        settle()
+        assert shuffle_t.property("on") is False and static_t.property("on") is False, "both off is sequential"
+        # a tap writes the playlist's MODE and one turning on turns the other off; with no engine
+        # word the deck follows the store
+        from lwe_ui.storage import playlists as _pl
+        deck.setProperty("engineStatus", {"state": "up", "current": "111", "interval": "900", "next_in": "300"})
+        _pl.set_active(_pl.active_slug() or next(p["slug"] for p in backend.playlistList()))
+        backend.setPlaylistMode("sequential")
+        settle()
+        assert shuffle_t.property("on") is False and static_t.property("on") is False
+        from PySide6.QtCore import QPointF, Qt
+        def click(item):
+            c = item.mapToScene(QPointF(item.width() / 2, item.height() / 2)).toPoint()
+            QTest.mouseClick(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, c)
+            settle()
+        def icon_color(item):
+            return next(c for c in item.childItems() if c.isVisible() and c.property("size") is not None).property("color").name().lower()
+        accent, grey = str(tokens.color("accent")).lower(), str(tokens.color("textSecondary")).lower()
+        pokes = []
+        backend.statusChanged.connect(lambda: pokes.append(1))
+        click(shuffle_t)
+        assert backend.activePlaylist()["mode"] == "shuffle" and shuffle_t.property("on") is True
+        assert icon_color(shuffle_t) == accent and icon_color(static_t) == grey, "lit is the accent, dark is the grey"
+        assert pokes, "a mode write pokes the status poll so the deck shows the engine's word at once"
+        click(static_t)
+        assert backend.activePlaylist()["mode"] == "static" and static_t.property("on") is True and shuffle_t.property("on") is False
+        assert icon_color(static_t) == accent and icon_color(shuffle_t) == grey
+        click(static_t)
+        assert backend.activePlaylist()["mode"] == "sequential" and static_t.property("on") is False
+        # with the engine's word present the tap still lands: the store changes, and the engine
+        # word (stale here, since no engine answers) is what the deck shows until the poke
+        deck.setProperty("engineStatus", {"state": "up", "current": "111", "interval": "900", "next_in": "300", "order": "sequential"})
+        settle()
+        click(shuffle_t)
+        assert backend.activePlaylist()["mode"] == "shuffle"
+        # an engine word outside the three reads from the store
+        deck.setProperty("engineStatus", {"state": "up", "current": "111", "interval": "900", "next_in": "300", "order": "random"})
+        settle()
+        assert shuffle_t.property("on") is True, "a retired order word falls back to the store's mode"
+        # a bench hold disables the toggles and a click does nothing
+        backend.setPlaylistMode("sequential")
+        deck.setProperty("engineStatus", {"state": "up", "current": "111", "interval": "900", "next_in": "300"})
+        wizard.set_phase("p3")
+        settle()
+        assert shuffle_t.property("enabled") is False
+        click(shuffle_t)
+        assert backend.activePlaylist()["mode"] == "sequential", "a held transport takes no mode tap"
+        wizard.set_phase("p1")
+        backend.setPlaylistMode("sequential")
+        # the bar fills the width between the left block and the pill, ending a gap before the
+        # total label; compact takes a third off the transport gap: 16 px between the 24 px
+        # targets at flagship (22 px glyph edge to pause edge), 8 px under compact (14 px)
+        row = _find(deck, "deckTransportRow")
+        assert row is not None and int(row.property("spacing")) == 16
+        children = [c for c in row.childItems() if c.isVisible()]
+        assert [c.objectName() for c in children][:2] == ["deckShuffle", "deckBack"] and children[-1].objectName() == "deckStatic", \
+            "shuffle, prev, pause, next, static, in that order"
+        # in the deck's own context, where the Theme singleton resolves
+        from PySide6.QtQml import QQmlEngine, QQmlExpression
+        def set_usable(w):
+            value, undefined = QQmlExpression(QQmlEngine.contextForObject(deck), deck, "Theme.usableWidth = %d" % w).evaluate()
+            assert not undefined, "Theme.usableWidth must resolve"
+        set_usable(800)
+        settle()
+        assert int(row.property("spacing")) == 8, "compact transport pitch is 8 px"
+        # compact: the bar ends a fixed gap before the pill and the pill never covers the
+        # total label, at a deck narrower than the flagship layout would need
+        from PySide6.QtCore import QPointF as _P
+        deck.setProperty("engineStatus", {"state": "up", "current": "111", "last": "222", "next_up": "333", "interval": "900", "next_in": "300", "order": "sequential"})
+        old_w = deck.width()
+        for w in (760, 700, 640):
+            deck.setProperty("width", w)
+            settle()
+            total = _find(deck, "deckTotal")
+            right_col = _find(deck, "deckRightCol")
+            bar = _find(deck, "deckProgressBar")
+            total_right = total.mapToItem(deck, _P(total.width(), 0)).x()
+            pill_left = right_col.mapToItem(deck, _P(0, 0)).x()
+            assert total_right + 12 <= pill_left + 0.5, f"at {w}: the total label ({total_right:.0f}) runs into the pill ({pill_left:.0f})"
+            assert float(bar.property("width")) >= 110, f"at {w}: the bar keeps its floor"
+            elapsed = _find(deck, "deckElapsed")
+            left_edge = _find(deck, "deckLeftIdle").mapToItem(deck, _P(_find(deck, "deckLeftIdle").width(), 0)).x()
+            assert elapsed.mapToItem(deck, _P(0, 0)).x() >= left_edge + 12 - 0.5, f"at {w}: the elapsed label clears the left block by 12"
+            # the transport and the bar share the midpoint between the left block and the pill
+            bar_c = bar.mapToItem(deck, _P(bar.width() / 2, 0)).x()
+            row_c = row.mapToItem(deck, _P(row.width() / 2, 0)).x()
+            mid = (left_edge + pill_left) / 2
+            assert abs(row_c - mid) <= 1.0, f"at {w}: transport centre {row_c:.0f} vs midpoint {mid:.0f}"
+            assert abs(bar_c - row_c) <= 1.0, f"at {w}: bar centre {bar_c:.0f} vs transport centre {row_c:.0f}"
+        deck.setProperty("width", old_w)
+        set_usable(1216)
+        settle()
+        assert int(row.property("spacing")) == 16
+        deck.setProperty("engineStatus", {"state": "up", "current": "111", "last": "", "next_up": "",
+                                          "interval": "", "next_in": "", "back_enabled": False, "order": "static"})
+        settle()
         assert float(_find(deck, "deckProgressFill").property("width")) == 0, "static: the bar is flat (spec 4)"
         # the progress bar is the shared glow filament: static is the flat bed
         pbar = _find(deck, "deckProgressBar")

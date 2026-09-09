@@ -9,7 +9,6 @@ Rectangle {
     // Which rail item actually shows the wash/bar right now (see doc comment above).
     property string activeItem: currentScope
     property int reviewCount: 0
-    readonly property int markGap: 14
 
     signal scopeSelected(string scope)
     signal developerRequested()
@@ -101,16 +100,6 @@ Rectangle {
         anchors.horizontalCenter: parent.horizontalCenter
         spacing: Theme.spacingXs
 
-        Rectangle {
-            width: 17; height: 17; radius: 5
-            color: Theme.accent
-            anchors.horizontalCenter: parent.horizontalCenter
-        }
-        // G6: the mark sits 14px above the first item. The Column's spacing adds a
-        // 4px gap on BOTH sides of this spacer (mark->spacer and spacer->item0), so the spacer
-        // height is markGap(14) - 2*spacingXs(4) = 6, making the total 4 + 6 + 4 = 14.
-        Item { width: 1; height: rail.markGap - Theme.spacingXs * 2 }
-
         RailItem {
             id: allItem
             label: "All"
@@ -183,12 +172,8 @@ Rectangle {
                                  : rail.activeItem === "settings" ? 1 : -1
         y: {
             if (topIndex >= 0) {
-                // top of item0 = topMargin(12) + mark(17) + column pitch(4) + mark spacer(6)
-                // + column pitch(4) = 43. The spacer is markGap(14) - 2*spacingXs(4) = 6, so
-                // the mark-to-item0 gap (4 + spacer + 4) is the drawn 14.
-                var spacer = rail.markGap - Theme.spacingXs * 2;
-                var base = Theme.spacingMd + 17 + Theme.spacingXs
-                         + spacer + Theme.spacingXs;
+                // top of item0 = the column's topMargin(12): the items start at the rail's top
+                var base = Theme.spacingMd;
                 return base + topIndex * (44 + Theme.spacingXs) + (44 - 18) / 2;
             }
             var rowsFromBottom = 1 - bottomIndex;
