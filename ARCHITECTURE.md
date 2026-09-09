@@ -333,6 +333,11 @@ is to be the daemon API's reference client and the system's owner:
   wizard that by default requires a human verdict
   before an item becomes rotation-eligible; turning off `REVIEW_REQUIRED`
   (`lwe-ui/src/lwe_ui/constants.py::REVIEW_REQUIRED`) lands items automatically.
+- It **carries the Developer view** (`lwe-ui/src/lwe_ui/dev.py`): two windowed exhibit
+  slots for A/B runs of any engine build beside the desktop engine, per-slot feature
+  toggles that map one to one onto the engine's environment switches, an isolator, and one
+  console that holds the session's exhibit output and the daemon journal (5,000 lines,
+  every read kept whole, raw lines on copy) with the last run's residue per slot.
 - Display policy lives in the engine, not the panel: the fullscreen gate and the
   running-apps condition are both engine-side detectors (see section 2), configured by
   the panel via `set-fullscreen`, `set-fullscreen-ignore`, and `set-app-conditions`.

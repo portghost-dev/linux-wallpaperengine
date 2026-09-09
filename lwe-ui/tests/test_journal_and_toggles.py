@@ -53,21 +53,32 @@ def _cross_check_engine_grammar(toggles) -> None:
         print("   (skipped grammar cross-check: no engine tree beside lwe-ui)")
         return
     reads: dict[str, list[str]] = {}
+    files: dict[str, list[str]] = {}
     for f in root.rglob("*.cpp"):
         if "Testing" in f.parts:
             continue
-        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        text = f.read_text(encoding="utf-8", errors="replace")
+        lines = text.splitlines()
         for i, line in enumerate(lines):
             for env in re.findall(r'getenv *\( *"(LWE_[A-Z0-9_]+)"', line):
                 reads.setdefault(env, []).append(" ".join(x.strip() for x in lines[i:i + 4]))
+                files.setdefault(env, []).append(text)
     for t in toggles:
         lines = reads.get(t["env"])
         assert lines, f"{t['env']} is not read anywhere in the engine"
         joined = " ".join(lines)
         presence = "nullptr" in joined and not re.search(r'"(0|1|ccw|exact)"|\[0\] *==', joined)
+        numeric = re.search(r"\bato[fi] *\(", joined) is not None
         if presence:
             assert None in (t["on"], t["off"]) and "1" in (t["on"], t["off"]), \
                 f"{t['env']} is presence tested: one side must be unset, the other any value"
+        elif numeric:
+            # a number is parsed, so the value is compared in the file that consumes it
+            value = next((v for v in (t["on"], t["off"]) if v is not None), None)
+            assert value is not None and any(
+                re.search(rf"(<=|==|<|>=|>) *{re.escape(value)}(\.0+f?)?\b", text)
+                for text in files[t["env"]]), \
+                f"{t['env']}: value {value!r} is never compared where the engine consumes it"
         else:
             value = next((v for v in (t["on"], t["off"]) if v is not None), None)
             assert value is not None and (f'"{value}"' in joined or f"'{value}'" in joined
@@ -148,6 +159,30 @@ def test_stderr_is_never_filtered(dev) -> None:
     assert [t for t, _e, _ts in tail] == real and all(e for _t, e, _ts in tail), \
         "the slot buffer keeps stderr for the tail, marked as stderr"
     assert all(len(ts) == 8 for _t, _e, ts in tail), "exhibit lines are stamped HH:MM:SS at receipt"
+
+
+def test_clamp_rows_exclude_each_other(dev) -> None:
+    """The two clamp rows are one choice per side: turning one on turns the other off, and
+    the environment carries exactly the state chosen. Both off leaves nothing clamped."""
+    assert dev.toggleOn("A", "resclamp") is True and dev.toggleOn("A", "resclampfx") is False
+    env, unset = dev.compose_env("A")
+    assert "LWE_SSFACTOR" in unset and "LWE_CLAMPCOMPOSITES" in unset, "default: the engine clamps on its own"
+
+    dev.setToggle("A", "resclampfx", True)
+    assert dev.toggleOn("A", "resclamp") is False, "the plain clamp drops when the effects clamp goes on"
+    env, unset = dev.compose_env("A")
+    assert env.get("LWE_CLAMPCOMPOSITES") == "0" and "LWE_SSFACTOR" in unset and "LWE_SSFACTOR" not in env, \
+        "effects clamp: composites exempt, the scene clamp still on"
+    assert dev.toggleOn("B", "resclamp") is True, "side B is untouched"
+
+    dev.setToggle("A", "resclamp", True)
+    assert dev.toggleOn("A", "resclampfx") is False, "the effects clamp drops when the plain clamp goes on"
+    env, unset = dev.compose_env("A")
+    assert "LWE_SSFACTOR" in unset and "LWE_CLAMPCOMPOSITES" in unset
+
+    dev.setToggle("A", "resclamp", False)
+    env, unset = dev.compose_env("A")
+    assert env.get("LWE_SSFACTOR") == "0" and "LWE_CLAMPCOMPOSITES" in unset, "both off: nothing clamped"
 
 
 def test_journal_lines_are_tagged(dev) -> None:
@@ -328,6 +363,7 @@ def main() -> None:
         test_toggle_grammar()
         test_unset_env_partition(DevBridge())
         test_stderr_is_never_filtered(DevBridge())
+        test_clamp_rows_exclude_each_other(DevBridge())
         test_journal_lines_are_tagged(DevBridge())
         test_journal_follower_lifecycle(DevBridge(), qwait)
         test_journal_flood_keeps_every_line(DevBridge())

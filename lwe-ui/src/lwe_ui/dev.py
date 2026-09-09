@@ -102,6 +102,17 @@ FEATURE_TOGGLES = [
      "on": None, "off": "1", "default_on": True,
      "tip": "Sizes layer composite FBOs to the scaled image coverage instead of the raw image size.",
      "cite": "CImage.cpp::s_fboCoverage"},
+    # the two clamp rows exclude each other per side: one on turns the other off, both off
+    # leaves nothing clamped (compose_env keeps LWE_SSFACTOR unset while the second is on)
+    {"key": "resclamp", "label": "Resolution clamp", "env": "LWE_SSFACTOR",
+     "on": None, "off": "0", "default_on": True, "excludes": "resclampfx",
+     "tip": "Caps every framebuffer at the output size; off renders them at their authored size.",
+     "cite": "CScene.cpp::clampToCap"},
+    {"key": "resclampfx", "label": "Resolution clamp + effects", "env": "LWE_CLAMPCOMPOSITES",
+     "on": "0", "off": None, "default_on": False, "excludes": "resclamp",
+     "tip": "Caps the scene framebuffer only; layer composites and effect targets keep their "
+            "authored size so effect chains stay sharp.",
+     "cite": "CImage.cpp::clampComposites"},
     {"key": "frontface", "label": "Clockwise winding", "env": "LWE_FRONTFACE",
      "on": None, "off": "ccw", "default_on": True,
      "tip": "Treats clockwise model triangles as front faces; off uses counter-clockwise.",
@@ -885,6 +896,9 @@ class DevBridge(QObject):
         if s is None or key not in {t["key"] for t in FEATURE_TOGGLES}:
             return
         s.toggles[key] = bool(on)
+        entry = next(t for t in FEATURE_TOGGLES if t["key"] == key)
+        if on and entry.get("excludes"):
+            s.toggles[entry["excludes"]] = False
         if s.alive():
             self._schedule_relaunch(s)
         self._changed()
@@ -1161,6 +1175,10 @@ class DevBridge(QObject):
                 unset.append(t["env"])
             else:
                 env[t["env"]] = val
+        if self.toggleOn(side, "resclampfx"):
+            # the clamp stays on for the scene target; only the composites are exempt
+            env.pop("LWE_SSFACTOR", None)
+            unset.append("LWE_SSFACTOR")
         if s.trail == "Exact":
             env[TRAIL_ENV] = "exact"
         else:
