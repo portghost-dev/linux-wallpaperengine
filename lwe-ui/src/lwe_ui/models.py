@@ -500,7 +500,9 @@ class LibraryModel(QAbstractListModel):
             title = proj.get("title") if isinstance(proj, dict) else ""
             row.title = title or wid
             row.thumb = (proj.get("preview") if isinstance(proj, dict) else "") or ""
-            row.type = (proj.get("type") if isinstance(proj, dict) else "") or ""
+            # the type as the census stores it, one spelling: project files carry "Scene" and
+            # "Web" beside "scene", and the funnel compares by the word
+            row.type = str((proj.get("type") if isinstance(proj, dict) else "") or "").strip().lower()
             row.in_playlist = wid in members
             entry = meta_all.get(wid) if isinstance(meta_all, dict) else None
             row.favorite = bool(entry.get("favorite")) if isinstance(entry, dict) else False
@@ -553,7 +555,7 @@ class LibraryFilterModel(QSortFilterProxyModel):
         self.setDynamicSortFilter(True)
         self._search = ""
         self._scope = "all"      # rail: "all" | "favorites" | "review"
-        self._type = "all"       # funnel: "all" | "scene" | "video"
+        self._type = "all"       # funnel: "all" | "scene" | "video" | "web" | "untyped"
         self._pl = "any"         # funnel: "any" | "in" | "out" (active playlist)
 
     @Slot(str)
@@ -600,8 +602,10 @@ class LibraryFilterModel(QSortFilterProxyModel):
         # (workshop) items show ONLY under the review scope, never in All/favorites.
         if self._scope != "review" and bool(src.data(idx, _ROLE_PENDING_REVIEW)):
             return False
-        if self._type != "all" and str(src.data(idx, _ROLE_TYPE) or "") != self._type:
-            return False
+        if self._type != "all":
+            kind = str(src.data(idx, _ROLE_TYPE) or "").strip().lower()
+            if (kind == "") != (self._type == "untyped") or (self._type != "untyped" and kind != self._type):
+                return False
         if self._pl == "in" and not bool(src.data(idx, _ROLE_IN_PLAYLIST)):
             return False
         if self._pl == "out" and bool(src.data(idx, _ROLE_IN_PLAYLIST)):

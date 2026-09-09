@@ -541,7 +541,8 @@ Rectangle {
                         title: "Type"
                         value: "all"
                         options: [{v: "all", label: "All"}, {v: "scene", label: "Scenes"},
-                                  {v: "video", label: "Videos"}]
+                                  {v: "video", label: "Videos"}, {v: "web", label: "Web"},
+                                  {v: "untyped", label: "Untyped"}]
                         // setTypeFilter/setPlaylistFilter live on the filter model, not
                         // backend itself (grep models.py: LibraryFilterModel owns them) -
                         // these were dead calls to a nonexistent backend.* method before.

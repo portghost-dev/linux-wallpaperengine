@@ -96,6 +96,33 @@ def main() -> None:
     print("OK test_filter_model - search case-insensitive (#1), filter recompute (#2), live favorites (#3)")
 
 
+def test_type_filter_covers_the_census() -> None:
+    """Every wallpaper answers to exactly one Type entry: the stored word is read in one
+    spelling (project files carry "Scene" and "Web" beside "scene"), Web is an entry, and
+    Untyped is the entry for a file that names no type."""
+    m = LibraryModel()
+    objs = []
+    for wid, kind in (("1", "scene"), ("2", "Scene"), ("3", "video"), ("4", "Web"), ("5", "web"), ("6", ""), ("7", "  ")):
+        r = _Row(wid)
+        r.title = wid
+        r.type = kind.strip().lower()   # as reload() stores it
+        objs.append(r)
+    m.beginResetModel()
+    m._rows = objs
+    m.endResetModel()
+    proxy = LibraryFilterModel(m)
+    seen: list[set[str]] = []
+    for entry, want in (("scene", {"1", "2"}), ("video", {"3"}), ("web", {"4", "5"}), ("untyped", {"6", "7"})):
+        proxy.setTypeFilter(entry)
+        assert _ids(proxy) == want, f"{entry}: got {_ids(proxy)}"
+        seen.append(_ids(proxy))
+    assert set().union(*seen) == {str(i) for i in range(1, 8)} and sum(len(s) for s in seen) == 7, \
+        "the entries partition the library: each row in exactly one"
+    proxy.setTypeFilter("all")
+    assert proxy.rowCount() == 7
+    print("OK test_type_filter_covers_the_census")
+
+
 def test_review_scope() -> None:
     """F10: review scope renders the pendingReview-filtered model, not an unconditional empty set."""
     src = _model_with_review([
@@ -147,4 +174,5 @@ def test_scope_wiring_contract() -> None:
 if __name__ == "__main__":
     main()
     test_review_scope()
+    test_type_filter_covers_the_census()
     test_scope_wiring_contract()
