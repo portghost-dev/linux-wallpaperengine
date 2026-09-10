@@ -118,6 +118,22 @@ def spawn_tray_if_needed() -> bool:
     return True
 
 
+def _settle_state_tree(process: str) -> None:
+    """Move the panel's state files into the tree once, then open the panel log and record
+    what moved and which dead files remain for the user to delete."""
+    from . import logbook
+    try:
+        report = paths.migrate_state_tree()
+    except Exception:
+        report = {"moved": [], "dead": []}
+    log = logbook.install(process)
+    if report["moved"]:
+        log.info("state tree: moved %s", ", ".join(report["moved"]))
+    if report["dead"]:
+        log.info("state tree: %d dead file(s) with no writer, safe to delete: %s",
+                 len(report["dead"]), ", ".join(report["dead"]))
+
+
 def interface_scale_factor(store: dict, env: dict) -> str | None:
     """Qt's startup scale factor for the stored Interface scale percent, or None when the
     store says 100 or the environment already carries QT_SCALE_FACTOR (a hand-set factor
@@ -152,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
     if "--tray" in argv:
         paths.ensure_dirs()
         settings.ensure_exists()
+        _settle_state_tree("tray")
         from .tray import main as tray_main
         return tray_main([a for a in argv if a != "--tray"])
 
@@ -184,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
 
     paths.ensure_dirs()
     settings.ensure_exists()
+    _settle_state_tree("window")
     apply_interface_scale(os.environ)
 
     QCoreApplication.setApplicationName("LWE Control Panel")

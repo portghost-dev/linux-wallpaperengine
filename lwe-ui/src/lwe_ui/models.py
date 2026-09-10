@@ -1436,7 +1436,7 @@ class Backend(QObject):
 
     @Slot()
     def openLogs(self) -> None:
-        self.openPath(str(paths.state_dir()))
+        self.openPath(str(paths.logs_dir()))
 
     def _ensure_open(self, name: str, header: str) -> None:
         fp = paths.config_dir() / name

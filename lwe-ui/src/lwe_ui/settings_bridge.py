@@ -332,7 +332,8 @@ class SettingsBridge(QObject):
         fallback for the rare session with no FileManager1 provider.
         """
         try:
-            target = paths.state_dir()
+            target = paths.logs_dir()
+            target.mkdir(parents=True, exist_ok=True)
         except Exception:
             return self._fail("Logs", "The log folder could not be found.")
         url = QUrl.fromLocalFile(str(target)).toString()

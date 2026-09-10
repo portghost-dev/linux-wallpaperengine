@@ -50,6 +50,88 @@ def data_dir() -> Path:
     return _xdg("XDG_DATA_HOME", ".local/share") / "lwe"
 
 
+# --- the state tree: logs/<subsystem>/, panel/, engine/, probes/ under the state dir.
+# The engine's own files (engine-state.json, boot-history.json, texcache, cef.log) stay at
+# the top level until the engine moves them; this module never moves an engine file.
+LOG_SUBSYSTEMS = ("engine", "cef", "panel", "bench", "developer")
+
+#: top-level files with no writer left in either tree: named by the migration, never deleted
+DEAD_STATE_FILES = ("engine-api.log", "engine-api.log.old", "engine-manual.log", "wallpaper.log",
+                    "panel.log", "rotation-state", "last-shown", "next-up",
+                    "dev-verdicts.log", "dev-palette.json", "tombstones.json.migrated",
+                    "passprobe-post.ppm")
+
+
+def logs_dir() -> Path:
+    return state_dir() / "logs"
+
+
+def log_dir(subsystem: str) -> Path:
+    return logs_dir() / subsystem
+
+
+def panel_state_dir() -> Path:
+    return state_dir() / "panel"
+
+
+def engine_state_dir() -> Path:
+    return state_dir() / "engine"
+
+
+def probes_dir() -> Path:
+    return state_dir() / "probes"
+
+
+def dev_slots_file() -> Path:
+    return panel_state_dir() / "dev-slots.json"
+
+
+def bench_log_file() -> Path:
+    return log_dir("bench") / "bench.log"
+
+
+def dev_slot_log_file(side: str) -> Path:
+    return log_dir("developer") / f"{side}.log"
+
+
+def migrate_state_tree() -> dict[str, list[str]]:
+    """One-time move of the panel's files from the flat state dir into the tree.
+
+    Idempotent: a file already in place is skipped, an old copy beside a new one is left
+    alone (never merged, never overwritten). Returns {"moved": [...], "dead": [...]} where
+    dead lists the top-level files nothing writes any more, for the user to delete.
+    """
+    moves = {
+        "objindex": panel_state_dir() / "objindex",
+        "propindex": panel_state_dir() / "propindex",
+        "records": panel_state_dir() / "records",
+        "draft": panel_state_dir() / "draft",
+        "dev-slots.json": dev_slots_file(),
+        "restart-engine.lock": panel_state_dir() / "restart-engine.lock",
+        "wizard-bench.log": bench_log_file(),
+    }
+    moved: list[str] = []
+    top = state_dir()
+    for name, dest in moves.items():
+        src = top / name
+        if not src.exists() or src == dest:
+            continue
+        if dest.exists():
+            # an empty dir made by ensure_dirs is not a conflict
+            if dest.is_dir() and not any(dest.iterdir()):
+                dest.rmdir()
+            else:
+                continue
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            src.rename(dest)
+            moved.append(name)
+        except OSError:
+            continue
+    dead = [n for n in DEAD_STATE_FILES if (top / n).exists()]
+    return {"moved": moved, "dead": dead}
+
+
 # --- Tier A (shell-sourceable) -------------------------------------------------------
 def settings_file() -> Path:
     return config_dir() / "settings.conf"
@@ -81,7 +163,7 @@ def theme_file() -> Path:
 
 
 def objindex_dir() -> Path:
-    return state_dir() / "objindex"
+    return panel_state_dir() / "objindex"
 
 
 def objindex_file(wid: str) -> Path:
@@ -89,7 +171,7 @@ def objindex_file(wid: str) -> Path:
 
 
 def propindex_dir() -> Path:
-    return state_dir() / "propindex"
+    return panel_state_dir() / "propindex"
 
 
 def propindex_file(wid: str) -> Path:
@@ -114,9 +196,9 @@ def legacy_playlists_dir() -> Path:
 
 
 def records_dir() -> Path:
-    """Per-wid item RECORD store: state/records/<wid>.jsonl append-only event logs.
+    """Per-wid item RECORD store: state/panel/records/<wid>.jsonl append-only event logs.
     Supersedes the flat config/tombstones.json map."""
-    return state_dir() / "records"
+    return panel_state_dir() / "records"
 
 
 def record_file(wid: str) -> Path:
@@ -124,7 +206,7 @@ def record_file(wid: str) -> Path:
 
 
 def draft_dir() -> Path:
-    return state_dir() / "draft"
+    return panel_state_dir() / "draft"
 
 
 def draft_file(wid: str) -> Path:
@@ -237,6 +319,7 @@ def default_settings() -> dict:
 
 
 def ensure_dirs() -> None:
-    for d in (config_dir(), wp_dir(), playlists_dir(), state_dir(), objindex_dir(),
-              propindex_dir(), records_dir(), draft_dir()):
+    for d in (config_dir(), wp_dir(), playlists_dir(), state_dir(), panel_state_dir(),
+              engine_state_dir(), probes_dir(), objindex_dir(), propindex_dir(), records_dir(),
+              draft_dir(), *(log_dir(s) for s in LOG_SUBSYSTEMS)):
         d.mkdir(parents=True, exist_ok=True)

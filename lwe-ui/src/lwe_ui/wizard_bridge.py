@@ -358,7 +358,7 @@ class WizardBridge(QObject):
                 "--no-audio-processing", "--disable-mouse", "--no-fullscreen-pause",
                 "--window", geo, "--api-socket", "--bg", d]
         try:
-            (paths.state_dir() / "wizard-bench.log").write_text(
+            (paths.bench_log_file()).write_text(
                 "=== bench " + self._wid + " ===\n" + " ".join(argv) + "\n", encoding="utf-8")
         except OSError:
             pass
@@ -486,10 +486,10 @@ class WizardBridge(QObject):
         proc.start(argv[0], argv[1:])
 
     def _log_bench(self, text: str) -> None:
-        """Append to the per-bench diagnostic log (state/lwe/wizard-bench.log, truncated per bench in
+        """Append to the per-bench diagnostic log (state/lwe/logs/bench/bench.log, truncated per bench in
         _launch_bench). Best-effort: a logging failure never affects the bench."""
         try:
-            with open(paths.state_dir() / "wizard-bench.log", "a", encoding="utf-8") as f:
+            with open(paths.bench_log_file(), "a", encoding="utf-8") as f:
                 f.write(text)
         except OSError:
             pass

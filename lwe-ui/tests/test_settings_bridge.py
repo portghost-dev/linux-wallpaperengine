@@ -357,7 +357,7 @@ def _test_open_logs_reaches_a_file_manager_never_a_terminal(sb) -> None:
     assert len(opened) == 1, opened
     for url in opened:
         assert url.startswith("file://"), f"must be a file:// URL, got {url!r}"
-        assert str(paths.state_dir()) in url, f"must open the LOG DIRECTORY, got {url!r}"
+        assert str(paths.logs_dir()) in url, f"must open the LOGS folder, got {url!r}"
     assert spawned == [], "no subprocess, so no terminal can be reached"
 
     source = (Path(__file__).resolve().parent.parent

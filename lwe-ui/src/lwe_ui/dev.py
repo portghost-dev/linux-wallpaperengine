@@ -377,7 +377,7 @@ def _binaries_dir() -> Path:
 
 def _slots_file() -> Path:
     """Slot configuration + crash residue, one JSON beside the other state files."""
-    return paths.state_dir() / "dev-slots.json"
+    return paths.dev_slots_file()
 
 
 def _is_shell_ident(name: str) -> bool:
@@ -500,6 +500,7 @@ class _Slot:
         self.skip: set[str] = set()
         self.buf: list[tuple[str, bool, str]] = []
         self.partial: dict[str, str] = {}
+        self.logf = None   # the open logs/developer/<side>.log while the slot runs
         self.placed = False
         self.place_tries = 0
         self.overlay_stats = False
@@ -1353,6 +1354,42 @@ class DevBridge(QObject):
         self._b_pending = False
         self._place_timer.stop()
 
+    # -- per-slot log file: logs/developer/<side>.log, real time, truncated at every launch
+
+    @staticmethod
+    def _slot_log_open(s: _Slot, mode: str) -> None:
+        DevBridge._slot_log_close(s)
+        try:
+            path = paths.dev_slot_log_file(s.side)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            s.logf = open(path, "w", encoding="utf-8")
+            s.logf.write(f"=== {s.side} {mode} {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n")
+            s.logf.flush()
+        except OSError:
+            s.logf = None
+
+    @staticmethod
+    def _slot_log_write(s: _Slot, lines: list[str], stderr: bool, now: str) -> None:
+        f = s.logf
+        if f is None:
+            return
+        mark = "!" if stderr else " "
+        try:
+            f.write("".join(f"{now} {mark}{ln}\n" for ln in lines))
+            f.flush()
+        except OSError:
+            s.logf = None
+
+    @staticmethod
+    def _slot_log_close(s: _Slot) -> None:
+        f = s.logf
+        s.logf = None
+        if f is not None:
+            try:
+                f.close()
+            except OSError:
+                pass
+
     def _spawn(self, s: _Slot, window: str | None) -> None:
         """Spawn one slot's engine with its current argv + env. The presentation (standdown
         for bench, nothing for window) is already arranged by the caller. Channels stay
@@ -1362,6 +1399,7 @@ class DevBridge(QObject):
             return
         s.buf = []
         s.partial = {}
+        self._slot_log_open(s, "window" if window else "bench")
         env, unset = self.compose_env(s.side)
         proc = QProcess(self)
         qenv = QProcessEnvironment.systemEnvironment()
@@ -1593,6 +1631,7 @@ class DevBridge(QObject):
         s.mode = ""
         s.stopping = False
         s.relaunching = False
+        self._slot_log_close(s)
         if p is not None:
             try:
                 p.deleteLater()
@@ -1633,6 +1672,7 @@ class DevBridge(QObject):
         now = _now_hhmmss()
         s.buf.extend((ln, stderr, now) for ln in lines)
         del s.buf[:-4000]
+        self._slot_log_write(s, lines, stderr, now)
         self._push([self._entry(side, ln, stderr, ts=now) for ln in lines])
 
     @Slot(str, result="QVariantList")
