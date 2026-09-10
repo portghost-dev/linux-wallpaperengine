@@ -63,10 +63,16 @@ def _test_shell_has_no_nav_column_or_page_title() -> None:
         "the page title is deleted - the segment names the page"
     assert "SegmentControl" in view, "page nav is a four-cell SegmentControl"
     assert 'sizeClass: "h24"' in view, "the page segment is the h24 size class (P16)"
-    assert "Math.min(640" in view, "the content column stays capped at 640"
-    assert "readonly property int groupW: 28 + 640 + 28" in view, \
-        "the centring arithmetic must drop the nav terms or the column strands left (P17)"
-    print("OK T1 shell: no nav column, no page title, h24 segment, 640 column")
+    # column law (SETTINGS-COLUMN-AND-SCALE-SPEC-v1.0 sec 1): 720 centred at every flagship
+    # width with 16 px padding, compact unchanged at 640 with 28
+    assert "readonly property int colMax: Theme.compact ? 640 : 720" in view, \
+        "the content column is 720 in flagship and 640 in compact"
+    assert "readonly property int colPad: Theme.compact ? 28 : 16" in view, \
+        "the side padding is 16 in flagship and 28 in compact"
+    assert "width: Theme.compact ? parent.width : Math.min(groupW, parent.width)" in view, \
+        "flagship centres the column at every width, not only past a threshold"
+    assert "1400" not in view, "the old 1400 centring threshold is gone"
+    print("OK T1 shell: no nav column, no page title, h24 segment, 720/640 column law")
 
 
 def _test_no_srow_on_the_reworked_pages() -> None:
@@ -81,12 +87,15 @@ def _test_every_section_header_is_a_prule() -> None:
     """T3: header-with-rule is the ONLY section anatomy; no chevrons, no disclosure."""
     for name in ("SettingsGeneral.qml", "SettingsEngine.qml", "SettingsLibrary.qml"):
         text = _code(name)
-        assert "PRule {" in text, f"{name} must use PRule for section headers"
+        assert "PSection {" in text, f"{name} must use the settings-tier PSection header"
+        assert "PRule {" not in text, f"{name} must not use the instrument-tier PRule"
         assert "SectionHeader" not in text, f"{name} must not use the dead SectionHeader"
+        # the first header takes the shell's 14 under the tab strip, the rest their own 26
+        assert text.count("first: true") == 1, f"{name}: exactly one first header"
         assert "IconChevron" not in text, f"{name} must carry no disclosure chevron"
         assert "advanced" not in text.replace("Advanced", ""), \
             f"{name} must carry no Normal/Advanced gate"
-    print("OK T3 every section header is a PRule; no disclosure anatomy anywhere")
+    print("OK T3 every section header is a PSection; no disclosure anatomy anywhere")
 
 
 def _test_confirmpop_and_prule_are_new_standalone_files() -> None:
@@ -215,7 +224,7 @@ def _test_released_halts_are_actually_built() -> None:
     assert 'childCaption: "These apps never trigger the rule"' in engine
     assert 'childLabel: "Apps"' in engine
     assert 'childCaption: "The rule applies while any of these is open"' in engine
-    assert 'PRule { label: "App rules" }' in engine, "the section header is App rules (A1)"
+    assert 'PSection { label: "App rules" }' in engine, "the section header is App rules (A1)"
     assert "AppListPopup" in engine, "both Edit doors open the shared list editor"
     assert (_QML_SRC_DIR / "AppListPopup.qml").exists()
     assert "exceptionsList" not in engine, "the rejected inline exceptions editor must stay dead"
@@ -367,7 +376,10 @@ Window { width: 1400; height: 620; visible: true
             col = next(i for i in items
                        if i.property("objectName") == "settingsContentColumn")
             cx, cy, cw, _ = rect(col)
-            assert abs(cw - 640) < 0.51, f"page {page_index}: content column {cw}, expected 640"
+            assert abs(cw - 720) < 0.51, f"page {page_index}: content column {cw}, expected 720"
+            # centred between the rail and the edge: the group is 16 + 720 + 16
+            assert abs(cx - (view.width() - 752) / 2 - 16) < 0.51, \
+                f"page {page_index}: column x {cx}, expected centred with 16 padding"
             # S3's "flush right" is now flush at the CONTENT right edge, which reserves the
             # 16px scrollbar clearance (defect 2). The column is still 640; content ends 16
             # short of it so the bar has somewhere to be that is not on top of a control.
@@ -393,13 +405,21 @@ Window { width: 1400; height: 620; visible: true
                 f"{column_right - (hx + hw):.2f}"
             assert bar.property("background") is None, "no track (S10)"
 
-            rules = [i for i in items if cls(i) == "PRule" and i.isVisible()]
+            rules = [i for i in items if cls(i) == "PSection" and i.isVisible()]
             assert rules, f"page {page_index} must have section headers"
             rx, _, rw, _ = rect(rules[0])
             assert abs(right_edge - (rx + rw)) < 0.51, \
                 "the section rule runs to the content right edge, clearance included"
-            for r in rules:
-                assert abs(rect(r)[3] - 24) < 0.51, f"PRule height {rect(r)[3]}, expected 24"
+            # settings tier: 26 above and 6 below the label, the first header 0 above (the
+            # shell's 14 under the tab strip is its margin)
+            for k, r in enumerate(rules):
+                lab = next(c for c in r.childItems() if cls(c) in ("Label", "QQuickLabel"))
+                want_top = 0 if k == 0 else 26
+                assert bool(r.property("first")) is (k == 0), "first header flag"
+                assert abs(lab.y() - want_top) < 0.51, f"header top margin {lab.y()}, expected {want_top}"
+                assert abs(rect(r)[3] - (want_top + lab.implicitHeight() + 6)) < 0.51, \
+                    f"PSection height {rect(r)[3]}"
+                assert int(lab.property("font").pixelSize()) == 13, "settings header is 13px"
 
             rows = [i for i in items if cls(i) == "SettingsRow" and i.isVisible()]
             assert rows, f"page {page_index} must have rows"
@@ -423,8 +443,8 @@ Window { width: 1400; height: 620; visible: true
             for v in [i for i in items if cls(i) == "SettingsVerb" and i.isVisible()]:
                 assert abs(rect(v)[3] - 24) < 0.51, "verb buttons are h24"
 
-        print("OK T1/T2/T3/T4/T5 measured live: 640 column, h24 segment @18, 34/40 rows, "
-              "flush right edges, 24px PRule, 4px trackless bar 3px inside")
+        print("OK T1/T2/T3/T4/T5 measured live: 720 column centred, h24 segment @18, 34/40 rows, "
+              "flush right edges, settings-tier headers, 4px trackless bar 3px inside")
 
         occlusion_report = []
         for page_index in (0, 1, 2, 3):

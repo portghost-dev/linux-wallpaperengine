@@ -70,8 +70,7 @@ Column {
         return ((r < 10 && r === Math.round(r)) ? r.toFixed(1) : String(r)) + "x";
     }
 
-    PRule { label: "Rendering" }
-    Item { width: 1; height: 23.75 - 12 }
+    PSection { label: "Rendering"; first: true }
 
     SettingsRow {
         label: "FPS"
@@ -173,9 +172,7 @@ Column {
         }
     }
 
-    Item { width: 1; height: 39 - 12 }
-    PRule { label: "Audio" }
-    Item { width: 1; height: 23.75 - 12 }
+    PSection { label: "Audio" }
 
     SettingsRow {
         id: volumeRow
@@ -225,9 +222,7 @@ Column {
         }
     }
 
-    Item { width: 1; height: 39 - 12 }
-    PRule { label: "Audio response" }
-    Item { width: 1; height: 23.75 - 12 }
+    PSection { label: "Audio response" }
 
     Repeater {
         // Seeded on load and after a DIAL commit only - never on the global rev, which
@@ -294,9 +289,7 @@ Column {
         return spec.lo + (spec.hi - spec.lo) * t;
     }
 
-    Item { width: 1; height: 39 - 12 }
-    PRule { label: "App rules" }
-    Item { width: 1; height: 23.75 - 12 }
+    PSection { label: "App rules" }
 
     component RuleChild: Item {
         id: child
@@ -469,9 +462,7 @@ Column {
         dimmed: String(page.val("APP_CONDITION_BEHAVIOR") || "off") === "off"
     }
 
-    Item { width: 1; height: 39 - 12 }
-    PRule { label: "Interaction" }
-    Item { width: 1; height: 23.75 - 12 }
+    PSection { label: "Interaction" }
 
     SettingsRow {
         label: "Mouse input"
@@ -495,9 +486,7 @@ Column {
         }
     }
 
-    Item { width: 1; height: 39 - 12 }
-    PRule { label: "Advanced" }
-    Item { width: 1; height: 23.75 - 12 }
+    PSection { label: "Advanced" }
 
     SettingsRow {
         label: "Wayland layer"

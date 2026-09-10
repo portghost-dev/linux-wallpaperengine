@@ -39,6 +39,9 @@ QtObject {
     readonly property color hairlineFaint:  isLight ? Qt.rgba(0, 0, 0, 0.06) : Qt.rgba(1, 1, 1, 0.06)
     readonly property color hairline:       isLight ? Qt.rgba(0, 0, 0, 0.12) : Qt.rgba(1, 1, 1, 0.12)
     readonly property color hairlineStrong: isLight ? Qt.rgba(0, 0, 0, 0.20) : Qt.rgba(1, 1, 1, 0.20)
+    // settings-tier section header rule: white at 0.08 on dark, the text colour at 0.08 on light
+    readonly property color hairlineSection: isLight ? Qt.rgba(textPrimary.r, textPrimary.g, textPrimary.b, 0.08)
+                                                     : Qt.rgba(1, 1, 1, 0.08)
     readonly property color hoverWash:      (rev, ThemeTokens.color("hoverWash", "#0FFFFFFF"))
     readonly property color activeWash:     (rev, ThemeTokens.color("activeWash", "#14FFFFFF"))
     // imagery law (v2.3.7): plates and text sitting on ARTWORK are never themed - fixed dark

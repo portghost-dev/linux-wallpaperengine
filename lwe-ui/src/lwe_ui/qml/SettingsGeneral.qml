@@ -32,8 +32,7 @@ Column {
     width: parent ? parent.width : 0
     spacing: 0
 
-    PRule { label: "App" }
-    Item { width: 1; height: 23.75 - 12 }
+    PSection { label: "App"; first: true }
 
     SettingsRow {
         label: "Start on login"
@@ -51,9 +50,7 @@ Column {
         }
     }
 
-    Item { width: 1; height: 39 - 12 }
-    PRule { label: "System" }
-    Item { width: 1; height: 23.75 - 12 }
+    PSection { label: "System" }
 
     SettingsRow {
         label: "Engine mode"

@@ -54,12 +54,17 @@ Rectangle {
         onTriggered: { view.failedKeys = []; view.failReason = ""; }
     }
 
+    // Column law: flagship centres a 720 column between the rail and the window edge at
+    // every width, filling with 16 px padding below 752; compact keeps 640 with 28 px padding.
+    readonly property int colPad: Theme.compact ? 28 : 16
+    readonly property int colMax: Theme.compact ? 640 : 720
+
     Item {
-        readonly property int groupW: 28 + 640 + 28
+        readonly property int groupW: view.colPad + view.colMax + view.colPad
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
-        width: parent.width > 1400 ? Math.min(groupW, parent.width) : parent.width
+        width: Theme.compact ? parent.width : Math.min(groupW, parent.width)
 
         Item {
             id: contentBox
@@ -69,8 +74,8 @@ Rectangle {
             anchors.left: parent.left
             anchors.topMargin: 0
             anchors.bottomMargin: Theme.spacingLg
-            anchors.leftMargin: 28
-            width: Math.max(0, Math.min(640, parent.width - 28 * 2))
+            anchors.leftMargin: view.colPad
+            width: Math.max(0, Math.min(view.colMax, parent.width - view.colPad * 2))
 
             Item { id: pinnedTop; width: 1; height: 18 }
 

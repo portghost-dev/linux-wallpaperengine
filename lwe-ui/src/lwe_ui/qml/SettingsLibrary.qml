@@ -29,8 +29,7 @@ Column {
 
     property string pickKey: ""
 
-    PRule { label: "Locations" }
-    Item { width: 1; height: 23.75 - 12 }
+    PSection { label: "Locations"; first: true }
 
     Repeater {
         model: [{"label": "Steam install",    "key": "STEAM_DIR"},
@@ -73,9 +72,7 @@ Column {
         onAccepted: settingsBridge.commitPath(page.pickKey, selectedFolder)
     }
 
-    Item { width: 1; height: 39 - 12 }
-    PRule { label: "Detection" }
-    Item { width: 1; height: 23.75 - 12 }
+    PSection { label: "Detection" }
 
     SettingsRow {
         label: "Detect new items"
@@ -115,9 +112,7 @@ Column {
     }
     Timer { id: rescanLatch; interval: 5000 }
 
-    Item { width: 1; height: 39 - 12 }
-    PRule { label: "Import" }
-    Item { width: 1; height: 23.75 - 12 }
+    PSection { label: "Import" }
 
     SettingsRow {
         label: "Require review"
@@ -143,9 +138,7 @@ Column {
         }
     }
 
-    Item { width: 1; height: 39 - 12 }
-    PRule { label: "Storage" }
-    Item { width: 1; height: 23.75 - 12 }
+    PSection { label: "Storage" }
 
     SettingsRow {
         label: "Disk usage"
