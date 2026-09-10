@@ -377,7 +377,7 @@ def _test_schedule_ui_gate_is_gone() -> None:
     """The Schedule section renders: the engine executes the schedule now, so the build-time
     gate that hid an inert section has no reason left."""
     assert not hasattr(C, "SCHEDULE_UI"), "the SCHEDULE_UI gate must not come back"
-    print("OK the Schedule section is ungated")
+    print("OK the SCHEDULE_UI gate stays gone")
 
 
 def main() -> None:

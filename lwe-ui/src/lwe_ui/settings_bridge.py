@@ -592,16 +592,6 @@ class SettingsBridge(QObject):
         match = re.search(rf"^{field}=(\S+)\s*$", text, re.MULTILINE)
         return match.group(1) if match else ""
 
-    @Slot(result="QVariantList")
-    def playlistSlugs(self) -> list:
-        """Slugs + names for the Schedule playlist dropdowns (flag-gated section)."""
-        try:
-            from .storage import playlists
-            return [{"slug": p.get("slug", ""), "name": p.get("NAME") or p.get("slug", "")}
-                    for p in playlists.list_playlists()]
-        except Exception:
-            return []
-
     @Slot(result=bool)
     def restartEngine(self) -> bool:
         """This is never called automatically - it

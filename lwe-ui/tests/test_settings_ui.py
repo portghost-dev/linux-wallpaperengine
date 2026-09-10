@@ -144,8 +144,6 @@ def _test_ruled_strings_are_verbatim() -> None:
     for text, phrase in (
         (general, 'label: "Start on login"'),
         (general, 'label: "Close to tray"'),
-        (general, 'label: "Switch playlists by time of day"'),
-        (general, '"Changes at the next rotation, never mid-wallpaper."'),
         (general, 'label: "Engine mode"'),
         (general, 'caption: "Set by the service file"'),
         (general, 'text: "Open logs"'),
@@ -609,30 +607,18 @@ Window { width: 1400; height: 620; visible: true
 
         view.setProperty("pageIndex", 0)
         QTest.qWait(120)
-        section = next((i for i in walk(view)
-                        if i.property("objectName") == "scheduleSection"), None)
-        assert section is not None and section.property("visible") is True, \
-            "the Schedule section renders: the engine executes the schedule (chunk 8)"
-
-        sec_rows = [i for i in walk(section)
-                    if cls(i) == "SettingsRow" and i.isVisible()]
-        labels = [r.property("label") for r in sec_rows]
-        assert "Switch playlists by time of day" in labels, labels
-        assert "Daytime playlist" in labels and "Night playlist" in labels, labels
-
-        assert sb.commit("SCHEDULE_ENABLED", True) is True
-        section.setProperty("packed", None)
-        assert sb.commit("SCHEDULE", "07:30=day;19:00=night") is True
-        assert settings.load()["SCHEDULE"] == "07:30=day;19:00=night"
-        assert sb.commit("SCHEDULE", "7:30=day") is False, "HH:MM validation is live"
-
-        assert sb.commit("SCHEDULE_ENABLED", False) is True
-        QTest.qWait(120)
-        dimmed = [r for r in walk(section)
-                  if cls(r) == "SettingsRow" and r.property("label") == "Daytime playlist"]
-        assert dimmed and abs(dimmed[0].property("opacity") - 0.5) < 0.01, \
-            "a row whose precondition is off renders at 0.5 opacity"
-        print("OK T29 Schedule section: ungated, fully wired and packing")
+        # R117: the deck's schedule modal is the schedule's only editor. The General page
+        # carries no schedule block, no schedule key and no playlist picker.
+        assert next((i for i in walk(view)
+                     if i.property("objectName") == "scheduleSection"), None) is None, \
+            "the General page must not render a schedule section"
+        gen_labels = [r.property("label") for r in walk(view) if cls(r) == "SettingsRow"]
+        for gone in ("Switch playlists by time of day", "Daytime playlist", "Night playlist"):
+            assert gone not in gen_labels, gen_labels
+        general_src = _src("SettingsGeneral.qml")
+        for key in ("SCHEDULE", "playlistSlugs"):
+            assert key not in general_src, f"{key} must not be read by the General page"
+        print("OK T29 General page: no schedule block, the deck modal is the sole editor")
     finally:
         for k, v in orig.items():
             if v is None:
