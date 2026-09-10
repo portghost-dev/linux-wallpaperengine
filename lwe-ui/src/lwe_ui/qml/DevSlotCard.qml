@@ -104,6 +104,9 @@ Rectangle {
                     color: Theme.surfaceVariant
                     border.width: 1
                     border.color: Theme.borderStrong
+                    // a press anywhere on the popup takes the exclusive grab: a passive one
+                    // travels on to the fields the popup covers
+                    TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds }
                 }
                 onAboutToShow: sceneList.model = scenePop.entries()
 
@@ -164,6 +167,7 @@ Rectangle {
                             HoverHandler { id: sceneHover; enabled: sceneRow.modelData.kind === "scene" }
                             TapHandler {
                                 enabled: sceneRow.modelData.kind === "scene"
+                                gesturePolicy: TapHandler.ReleaseWithinBounds
                                 onTapped: { dev.setScene(card.side, sceneRow.modelData.wid); scenePop.close(); }
                             }
                         }
@@ -187,6 +191,7 @@ Rectangle {
             }
             Rectangle {
                 id: binDrop
+                objectName: "devBinaryField"
                 anchors.left: parent.left
                 anchors.leftMargin: 42
                 anchors.right: parent.right
@@ -226,6 +231,7 @@ Rectangle {
                 }
                 Menu {
                     id: binMenu
+                    objectName: "devBinaryMenu"
                     property var choices: []
                     parent: binDrop
                     closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent

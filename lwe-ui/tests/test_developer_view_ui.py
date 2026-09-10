@@ -272,6 +272,27 @@ def main() -> None:
         assert entries[0]["wid"] == "111" and entries[1]["kind"] == "rule" and entries[2]["kind"] == "empty", entries
         pop.close()
         settle()
+
+        # the user's path: a click on a scene row of the open popup lands on that row alone, it
+        # never reaches the Binary field the popup covers (a passive grab travelled through)
+        from PySide6.QtCore import QPointF, Qt
+        bin_menu = _find(_find(root, "devSlotA"), "devBinaryMenu")
+        dev.setScene("A", "")
+        settle()
+        pop.open()
+        settle()
+        row = next(o for o in _items(scene_list) if o.metaObject().indexOfProperty("modelData") >= 0
+                   and (o.property("modelData") or {}).get("wid") == "111")
+        at = row.mapToScene(QPointF(row.property("width") / 2, row.property("height") / 2)).toPoint()
+        bin_drop = next(o for o in _items(_find(root, "devSlotA")) if o.objectName() == "devBinaryField")
+        tl = bin_drop.mapToScene(QPointF(0, 0)); br = bin_drop.mapToScene(QPointF(bin_drop.property("width"), bin_drop.property("height")))
+        assert tl.x() <= at.x() <= br.x() and tl.y() <= at.y() <= br.y(), \
+            ("the probe must land over the Binary field or it proves nothing", at, tl, br)
+        QTest.mouseClick(view, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, at)
+        settle(150)
+        assert dev.slotState("A")["scene"] == "111", "the click chose the scene"
+        assert pop.property("visible") is False, "the popup closed on the choice"
+        assert bin_menu.property("visible") is False, "the Binary menu under the popup must not open"
         dev.setScene("B", "")
         settle()
         assert [o for o in _items(_find(root, "devSlotB")) if o.property("text") == "Scene"], \
