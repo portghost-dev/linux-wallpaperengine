@@ -31,7 +31,7 @@ from pathlib import Path
 from .. import constants as C
 from ..discovery import project
 from ..discovery.project import derive_cc as _derive_cc
-from . import meta, paths, settings, tags, wp
+from . import meta, paths, settings, tags, tier_a, wp
 
 
 def _snapshot() -> dict:
@@ -153,16 +153,18 @@ _IMPORTER_KEYS = ("BG", "TYPE")
 
 
 def _write_conf(wid: str, d: dict) -> None:
-    """Write the import-time override, keeping a pre-seeded one: a conf restored from a
-    backup before its wallpaper arrived keeps every user key, the importer sets only the
-    folder and the type."""
+    """Write the override at a wallpaper's FIRST ARRIVAL: identity and the facts the
+    wallpaper declares, never a default. A conf that already exists (restored from a backup
+    before the wallpaper arrived) keeps every key the user set; the importer sets the
+    identity and adds only the facts the user has not set. A preset wire is not an arrival
+    and rewrites whole."""
+    facts = wp.facts_to_keys(d)
     if wp.exists(wid):
-        kept = wp.load(wid)
-        for k in _IMPORTER_KEYS:
-            kept[k] = d.get(k, kept.get(k))
-        wp.save(wid, kept)
+        present = tier_a.parse(paths.wp_file(wid).read_text(encoding="utf-8"))
+        changes = {k: v for k, v in facts.items() if k in wp.IDENTITY_KEYS or k not in present}
+        wp.update_set(wid, changes)
         return
-    wp.save(wid, d)
+    wp.write_keys(wid, facts)
 
 
 def import_one(wid: str, cfg: dict | None = None) -> dict:
@@ -244,11 +246,9 @@ def import_one(wid: str, cfg: dict | None = None) -> dict:
     else:
         bg = str(src)
 
-    d = {k: spec["default"] for k, spec in C.WP_SCHEMA.items()}
-    d["props"] = {}
+    d: dict = {"props": {}, "BG": bg}
     if wtype in C.WALLPAPER_TYPES:
         d["TYPE"] = wtype
-    d["BG"] = bg
     raw = proj.get("raw") or {}
     preset = raw.get("preset")
     d["CC"] = _derive_cc(preset if isinstance(preset, dict) else raw)
@@ -371,7 +371,7 @@ def _wire_preset_conf(wid: str, proj: dict, dep: str, cfg: dict) -> bool:
     BG); an on-disk-only dep falls back to its absolute path."""
     raw = proj.get("raw") or {}
     preset = raw.get("preset") if isinstance(raw.get("preset"), dict) else {}
-    d = {k: spec["default"] for k, spec in C.WP_SCHEMA.items()}
+    d: dict = {}
     try:
         dep_conf = wp.load(dep)
     except Exception:
@@ -402,7 +402,7 @@ def _wire_preset_conf(wid: str, proj: dict, dep: str, cfg: dict) -> bool:
     d["CC"] = _derive_cc(preset)
     d["props"] = _preset_props(preset)
     try:
-        _write_conf(wid, d)
+        wp.write_keys(wid, wp.facts_to_keys(d))
         return True
     except Exception:
         return False
@@ -436,8 +436,7 @@ def _import_held(wid: str, src: Path, title: str, missing: list[str], cfg: dict)
     consistent stored set keeps depInfo/modal coherent."""
     if _copy_or_reference(wid, src, cfg) is None:
         return {"wid": wid, "title": title, "type": "", "action": "skipped-copy-failed"}
-    d = {k: spec["default"] for k, spec in C.WP_SCHEMA.items()}
-    d["BG"] = str(src)   # placeholder; the resolve pass rewires it through the base
+    d: dict = {"BG": str(src)}   # placeholder; the resolve pass rewires it through the base
     try:
         _write_conf(wid, d)
     except Exception:

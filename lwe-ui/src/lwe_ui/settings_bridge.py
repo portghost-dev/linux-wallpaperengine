@@ -382,8 +382,6 @@ class SettingsBridge(QObject):
         local = self._local(url)
         if not local:
             return self._fail("Configuration", "The backup could not be written.")
-        if not local.endswith(backup.EXTENSION):
-            local += backup.EXTENSION
         try:
             r = backup.export_to(local)
         except Exception:

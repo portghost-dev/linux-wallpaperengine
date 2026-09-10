@@ -130,11 +130,10 @@ def _test_export_import_round_trip(b) -> None:
     from lwe_ui.models import ImportBridge
     from lwe_ui.settings_bridge import SettingsBridge
     sb = SettingsBridge(b, ImportBridge(b))
-    target = Path(_TMP) / "round-trip"
+    archive = Path(_TMP) / ("round-trip" + backup.EXTENSION)
     settings.save({**settings.load(), "ENGINE_LAYER": "top"})
-    assert sb.exportBackup("file://" + str(target)) is True
-    archive = Path(str(target) + backup.EXTENSION)
-    assert archive.is_file(), "the extension is appended when the dialog left it off"
+    assert sb.exportBackup("file://" + str(archive)) is True
+    assert archive.is_file(), "written under exactly the name the dialog returned"
     settings.save({**settings.load(), "ENGINE_LAYER": "bottom"})
     assert sb.importBackup(str(archive)) is True
     assert settings.load()["ENGINE_LAYER"] == "top"

@@ -1,8 +1,9 @@
-"""The panel's log file: logs/panel/panel.log, written in real time by both panel processes.
+"""The panel's log files: logs/panel/window.log and logs/panel/tray.log, written in real time.
 
-Python logging and Qt messages land in the same file, one line each with a timestamp, the
-process tag (window or tray) and the level; the file rotates by size so it can never grow
-unbounded. Qt messages keep going to stderr as well, so the journal keeps its copy.
+Python logging and Qt messages land in the process's own file, one line each with a
+timestamp, the process tag and the level; each file rotates by size so it can never grow
+unbounded, and each process owns its file, since a size rotation shared by two writers
+loses lines. Qt messages keep going to stderr as well, so the journal keeps its copy.
 """
 from __future__ import annotations
 
@@ -12,15 +13,14 @@ import sys
 
 from .storage import paths
 
-LOG_NAME = "panel.log"
 MAX_BYTES = 2 * 1024 * 1024
 BACKUPS = 3
 
 _installed: dict[str, logging.Logger] = {}
 
 
-def log_file():
-    return paths.log_dir("panel") / LOG_NAME
+def log_file(process: str = "window"):
+    return paths.log_dir("panel") / f"{process}.log"
 
 
 def install(process: str) -> logging.Logger:
@@ -38,7 +38,7 @@ def install(process: str) -> logging.Logger:
     try:
         paths.log_dir("panel").mkdir(parents=True, exist_ok=True)
         handler = logging.handlers.RotatingFileHandler(
-            str(log_file()), maxBytes=MAX_BYTES, backupCount=BACKUPS, encoding="utf-8")
+            str(log_file(process)), maxBytes=MAX_BYTES, backupCount=BACKUPS, encoding="utf-8")
         handler.setFormatter(fmt)
         logger.addHandler(handler)
     except OSError as exc:

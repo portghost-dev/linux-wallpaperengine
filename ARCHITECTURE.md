@@ -325,9 +325,13 @@ is to be the daemon API's reference client and the system's owner:
   engine's env file (`engine/daemon_unit.py`), reconciling drift at every start. The
   restart-class engine settings live there, among them the resolution cap's three states
   (`Clamp resolution` on Engine > Advanced: everything clamped, composites exempt, or off).
+- It **writes overrides sparsely**: a per-wallpaper conf carries only what the user set or
+  the wallpaper declares; a present key pins, an absent key inherits the global, so a
+  default shipped later reaches every wallpaper that never chose otherwise.
 - It **backs up through its schemas**: a `.lwebackup` is one zip with a manifest, and a
-  restore loads every entry through the current schema rather than copying files, so a
-  backup survives keys added, removed or renamed between builds.
+  restore loads every entry through the current schema and the same migrations a normal
+  load applies, rather than copying files, so a backup survives keys added, removed or
+  renamed between builds.
 - It **logs to files as it runs**: the state dir is a tree with one real-time log per
   subsystem under `logs/` (panel, developer exhibits, bench; the engine and CEF logs join
   from the engine side), so a crash leaves a full trail on disk without the panel's console.

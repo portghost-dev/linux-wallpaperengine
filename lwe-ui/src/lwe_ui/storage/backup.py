@@ -4,10 +4,13 @@ What travels is what the user authored and the app cannot regenerate: settings, 
 playlists, per-wallpaper overrides, tags, favourites and the app rules. Nothing generated
 travels (the engine env file, caches, state, logs).
 
-Durability across builds comes from the schemas, not from the files: import never copies a
-file, it loads each one through this build's schema and re-saves it, so unknown keys drop,
-missing keys take defaults and renamed keys go through the same migrations a normal load
-does. The manifest carries a format version so a future breaking change is refused with a
+Durability across builds comes from the schemas, not from the files. Import never extracts
+a file: settings go through the same migrations and coercion a normal load applies,
+playlists through their validator, overrides key by key against the override schema with
+their set-ness kept (a key the file does not carry stays absent, so it keeps inheriting the
+global), theme keys against the theme's defaults, tags against the tag states. Unknown
+keys are dropped and named. The rule files are line lists with no schema and travel as
+lines. The manifest carries a format version so a future breaking change is refused with a
 plain reason instead of mangled.
 """
 from __future__ import annotations
@@ -23,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import constants as C
-from . import meta, paths, playlists, settings, tags, theme_cfg, tier_a, wp
+from . import atomic, meta, paths, playlists, settings, tags, theme_cfg, tier_a, wp
 
 FORMAT = 1
 EXTENSION = ".lwebackup"
@@ -42,6 +45,10 @@ def _receipt(kind: str) -> dict[str, Any]:
             "reresolved": [], "followups": [], "errors": []}
 
 
+def _override_header(wid: str) -> str:
+    return f"lwe wallpaper override {wid} (Tier A)"
+
+
 # --- export ---------------------------------------------------------------------------
 
 def _portable_bg(wid: str, bg: str) -> str:
@@ -50,6 +57,17 @@ def _portable_bg(wid: str, bg: str) -> str:
     if bg and os.path.isabs(bg) and os.path.basename(bg.rstrip("/")) == wid:
         return wid
     return bg
+
+
+def _override_text(wid: str, text: str) -> str:
+    """An override as it travels: the keys the file carries and nothing more, so set-ness
+    (a present key overrides, an absent key inherits) survives the round trip."""
+    raw = tier_a.parse(text)
+    kept = {k: v for k, v in raw.items()
+            if k in C.WP_SCHEMA or (k.startswith(C.WP_PROP_PREFIX) and len(k) > len(C.WP_PROP_PREFIX))}
+    if "BG" in kept:
+        kept["BG"] = _portable_bg(wid, kept["BG"])
+    return tier_a.serialize(kept, header=_override_header(wid))
 
 
 def export_to(path: str | Path) -> dict[str, Any]:
@@ -77,12 +95,10 @@ def export_to(path: str | Path) -> dict[str, Any]:
             if not paths.is_safe_wid(wid):
                 continue
             try:
-                d = wp.load_path(conf)
-            except Exception as exc:
+                z.writestr(f"wp/{wid}.conf", _override_text(wid, conf.read_text(encoding="utf-8")))
+            except (OSError, ValueError) as exc:
                 r["errors"].append({"file": conf.name, "reason": str(exc)})
                 continue
-            d["BG"] = _portable_bg(wid, str(d.get("BG") or ""))
-            z.writestr(f"wp/{wid}.conf", wp.serialize(d, wid))
             counts["overrides"] += 1
         rows = tags.load()
         out = io.StringIO()
@@ -112,7 +128,12 @@ def export_to(path: str | Path) -> dict[str, Any]:
             "machine_keys": list(MACHINE_KEYS),
         }
         z.writestr(MANIFEST, json.dumps(manifest, indent=1))
-    Path(path).write_bytes(buf.getvalue())
+    # temp beside the target then rename: a failure mid-write never leaves a truncated
+    # backup where a good one was
+    target = Path(path)
+    tmp = target.with_name(target.name + ".part")
+    tmp.write_bytes(buf.getvalue())
+    os.replace(tmp, target)
     r["counts"] = counts
     return r
 
@@ -142,6 +163,30 @@ def _wallpaper_present(wid: str, cfg: dict[str, Any]) -> bool:
     return bool(root) and os.path.isdir(os.path.join(root, wid))
 
 
+def _override_value_ok(spec: dict, raw: str) -> bool:
+    """Whether a stored override value is one this build can hold for that key."""
+    t = spec["type"]
+    s = str(raw).strip()
+    try:
+        if t == "int":
+            int(s)
+        elif t == "int_or_empty":
+            if s:
+                int(s)
+        elif t == "float":
+            v = float(s)
+            lo, hi = spec.get("min"), spec.get("max")
+            if (lo is not None and v < lo) or (hi is not None and v > hi):
+                return False
+        elif t == "enum":
+            return s in spec.get("choices", ())
+        elif t == "enum_or_empty":
+            return s == "" or s in spec.get("choices", ())
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
 def preflight(path: str | Path) -> dict[str, Any]:
     """Everything the import will do, decided before anything is written."""
     r = _receipt("import")
@@ -163,9 +208,10 @@ def preflight(path: str | Path) -> dict[str, Any]:
         names = set(z.namelist())
         current = settings.load()
 
-        # settings: through the schema; unknown keys are dropped and named
+        # settings: the same migrations and coercion a normal load applies; unknown keys
+        # are dropped and named
         if "settings.conf" in names:
-            raw = tier_a.parse(z.read("settings.conf").decode("utf-8", "replace"))
+            raw = settings.migrate_raw(tier_a.parse(z.read("settings.conf").decode("utf-8", "replace")))
             known = {k: v for k, v in raw.items() if k in C.SETTINGS_SCHEMA}
             for k in raw:
                 if k not in C.SETTINGS_SCHEMA:
@@ -187,9 +233,14 @@ def preflight(path: str | Path) -> dict[str, Any]:
         if "theme.json" in names:
             try:
                 t = json.loads(z.read("theme.json").decode("utf-8"))
-                plan["theme"] = t if isinstance(t, dict) else None
             except ValueError:
+                t = None
                 r["errors"].append({"file": "theme.json", "reason": "not readable, skipped"})
+            if isinstance(t, dict):
+                plan["theme"] = {k: v for k, v in t.items() if k in C.THEME_DEFAULTS}
+                for k in t:
+                    if k not in C.THEME_DEFAULTS:
+                        r["dropped"].append({"kind": "theme", "id": k, "reason": "unknown to this version"})
 
         cfg_after = {**current, **plan["settings"]}
         for n in sorted(names):
@@ -211,24 +262,36 @@ def preflight(path: str | Path) -> dict[str, Any]:
                     r["dropped"].append({"kind": "override", "id": wid, "reason": "bad id"})
                     continue
                 raw = tier_a.parse(z.read(n).decode("utf-8", "replace"))
-                for k in raw:
-                    if k not in C.WP_SCHEMA and not k.startswith(C.WP_PROP_PREFIX):
+                kept: dict[str, str] = {}
+                for k, v in raw.items():
+                    if k in C.WP_SCHEMA:
+                        if _override_value_ok(C.WP_SCHEMA[k], v):
+                            kept[k] = str(v)
+                        else:
+                            r["dropped"].append({"kind": "override-key", "id": f"{wid}:{k}", "reason": "not a value this version holds"})
+                    elif k.startswith(C.WP_PROP_PREFIX) and tier_a.is_valid_key(k):
+                        kept[k] = str(v)
+                    else:
                         r["dropped"].append({"kind": "override-key", "id": f"{wid}:{k}", "reason": "unknown to this version"})
-                d = wp.load_text("\n".join(f"{k}={tier_a.quote(v)}" for k, v in raw.items()))
-                bg = str(d.get("BG") or "")
+                bg = kept.get("BG", "")
                 if bg and os.path.isabs(bg) and not os.path.isdir(bg):
                     r["reresolved"].append({"key": f"override {wid} folder", "from": bg, "to": wid})
-                    d["BG"] = wid
-                if not d.get("BG"):
-                    d["BG"] = wid
+                    kept["BG"] = wid
+                if not kept.get("BG"):
+                    kept["BG"] = wid
                 if not _wallpaper_present(wid, cfg_after):
                     r["held"].append({"kind": "override", "id": wid})
-                plan["overrides"][wid] = d
+                plan["overrides"][wid] = kept
             elif n.startswith("rules/"):
                 name = n[len("rules/"):]
                 if name in RULE_FILES:
-                    plan["rules"][name] = z.read(n).decode("utf-8", "replace")
+                    lines = [ln.rstrip("\r") for ln in z.read(n).decode("utf-8", "replace").splitlines()]
+                    plan["rules"][name] = "".join(ln + "\n" for ln in lines if ln.strip() and ln.isprintable())
 
+        # tags: a row for a wallpaper not in the library would put a card with no folder in
+        # the grid, so those rows wait; importing the backup again after the wallpapers
+        # arrive restores them
+        held_tags = 0
         if "tags.csv" in names:
             reader = csv.DictReader(io.StringIO(z.read("tags.csv").decode("utf-8", "replace")))
             for row in reader:
@@ -237,7 +300,12 @@ def preflight(path: str | Path) -> dict[str, Any]:
                 if not paths.is_safe_wid(wid) or state not in tags._VALID_STATES:
                     r["dropped"].append({"kind": "tag", "id": wid or "?", "reason": "bad row"})
                     continue
+                if not _wallpaper_present(wid, cfg_after):
+                    held_tags += 1
+                    continue
                 plan["tags"].append({"id": wid, "title": str(row.get("title") or ""), "state": state})
+        if held_tags:
+            r["held"].append({"kind": "tags", "count": held_tags})
         if "meta.json" in names:
             try:
                 m = json.loads(z.read("meta.json").decode("utf-8"))
@@ -251,6 +319,7 @@ def preflight(path: str | Path) -> dict[str, Any]:
             "overrides": len(plan["overrides"]),
             "overrides_held": held_over,
             "tags": len(plan["tags"]),
+            "tags_held": held_tags,
             "favourites": sum(1 for v in plan["meta"].values() if v.get("favorite")),
             "rules": len(plan["rules"]),
         }
@@ -281,7 +350,7 @@ def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
         return r
     if plan.get("theme"):
         try:
-            theme_cfg.save(plan["theme"])
+            theme_cfg.save({**theme_cfg.load(), **plan["theme"]})
         except Exception as exc:
             r["errors"].append({"file": "theme.json", "reason": str(exc)})
     for slug, d in plan["playlists"].items():
@@ -289,9 +358,9 @@ def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
             playlists.save(slug, d)
         except Exception as exc:
             r["errors"].append({"file": f"playlists/{slug}.conf", "reason": str(exc)})
-    for wid, d in plan["overrides"].items():
+    for wid, kept in plan["overrides"].items():
         try:
-            wp.save(wid, d)
+            atomic.atomic_write_text(paths.wp_file(wid), tier_a.serialize(kept, header=_override_header(wid)))
         except Exception as exc:
             r["errors"].append({"file": f"wp/{wid}.conf", "reason": str(exc)})
     if plan["tags"]:
@@ -312,8 +381,8 @@ def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
             r["errors"].append({"file": "meta.json", "reason": str(exc)})
     for name, text in plan["rules"].items():
         try:
-            (paths.config_dir() / name).write_text(text, encoding="utf-8")
-        except OSError as exc:
+            atomic.atomic_write_text(paths.config_dir() / name, text)
+        except Exception as exc:
             r["errors"].append({"file": name, "reason": str(exc)})
     return r
 
@@ -335,9 +404,9 @@ def receipt_line(r: dict[str, Any]) -> str:
     if c.get("tags"):
         parts.append(f"{c['tags']} tag{'s' if c['tags'] != 1 else ''}")
     line = "Restored " + (", ".join(parts) if parts else "settings")
-    held = c.get("overrides_held", 0)
-    if held:
-        line += f" · {held} waiting for wallpapers"
+    waiting = c.get("overrides_held", 0) + c.get("tags_held", 0)
+    if waiting:
+        line += f" · {waiting} waiting for wallpapers"
     if r.get("dropped"):
         line += f" · {len(r['dropped'])} dropped"
     return line

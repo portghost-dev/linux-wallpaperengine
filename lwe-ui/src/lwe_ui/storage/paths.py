@@ -98,8 +98,9 @@ def migrate_state_tree() -> dict[str, list[str]]:
     """One-time move of the panel's files from the flat state dir into the tree.
 
     Idempotent: a file already in place is skipped, an old copy beside a new one is left
-    alone (never merged, never overwritten). Returns {"moved": [...], "dead": [...]} where
-    dead lists the top-level files nothing writes any more, for the user to delete.
+    alone (never merged, never overwritten) and named under "skipped". Returns
+    {"moved": [...], "skipped": [...], "dead": [...]} where dead lists the top-level files
+    nothing writes any more, for the user to delete.
     """
     moves = {
         "objindex": panel_state_dir() / "objindex",
@@ -111,6 +112,7 @@ def migrate_state_tree() -> dict[str, list[str]]:
         "wizard-bench.log": bench_log_file(),
     }
     moved: list[str] = []
+    skipped: list[str] = []
     top = state_dir()
     for name, dest in moves.items():
         src = top / name
@@ -121,6 +123,7 @@ def migrate_state_tree() -> dict[str, list[str]]:
             if dest.is_dir() and not any(dest.iterdir()):
                 dest.rmdir()
             else:
+                skipped.append(name)
                 continue
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
@@ -129,7 +132,7 @@ def migrate_state_tree() -> dict[str, list[str]]:
         except OSError:
             continue
     dead = [n for n in DEAD_STATE_FILES if (top / n).exists()]
-    return {"moved": moved, "dead": dead}
+    return {"moved": moved, "skipped": skipped, "dead": dead}
 
 
 # --- Tier A (shell-sourceable) -------------------------------------------------------

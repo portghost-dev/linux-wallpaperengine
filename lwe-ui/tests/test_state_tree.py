@@ -40,7 +40,7 @@ def main() -> None:
     (state / "wizard-bench.log").write_text("bench\n")
     (state / "engine-state.json").write_text("{}")
     (state / "engine-api.log").write_text("dead\n")
-    (state / "passprobe-post.ppm").write_bytes(b"P6")
+    (state / "show-request").write_text("1\n")
     paths.ensure_dirs()
     report = paths.migrate_state_tree()
     assert (state / "panel" / "objindex" / "1.json").exists(), "objindex moved under panel/"
@@ -50,8 +50,16 @@ def main() -> None:
     assert (state / "engine-state.json").exists(), "engine files stay until the engine moves them"
     assert (state / "engine-api.log").exists(), "dead files are named, never deleted"
     assert sorted(report["moved"]) == ["dev-slots.json", "objindex", "wizard-bench.log"], report
-    assert "engine-api.log" in report["dead"] and "passprobe-post.ppm" in report["dead"], report
+    assert report["skipped"] == [], report
+    assert "engine-api.log" in report["dead"] and "show-request" in report["dead"], report
     assert paths.migrate_state_tree()["moved"] == [], "a second run moves nothing"
+    (state / "propindex").mkdir()
+    (state / "propindex" / "old.json").write_text("{}")
+    (state / "panel" / "propindex").mkdir(parents=True, exist_ok=True)
+    (state / "panel" / "propindex" / "new.json").write_text("{}")
+    again = paths.migrate_state_tree()
+    assert again["skipped"] == ["propindex"] and (state / "propindex" / "old.json").exists(), \
+        "a non-empty destination is named, never merged or overwritten"
     for d in ("engine", "cef", "panel", "bench", "developer"):
         assert (state / "logs" / d).is_dir(), d
 
@@ -59,12 +67,13 @@ def main() -> None:
     from lwe_ui import logbook
     logger = logbook.install("window")
     logger.warning("probe line")
-    text = logbook.log_file().read_text(encoding="utf-8")
+    assert logbook.log_file("window").name == "window.log" and logbook.log_file("tray").name == "tray.log"
+    text = logbook.log_file("window").read_text(encoding="utf-8")
     assert "window INFO lwe_ui: panel window started" in text, text
     assert "window WARNING lwe_ui: probe line" in text, text
     from PySide6.QtCore import qWarning
     qWarning("qt probe")
-    assert "window WARNING lwe_ui.qt: qt probe" in logbook.log_file().read_text(encoding="utf-8")
+    assert "window WARNING lwe_ui.qt: qt probe" in logbook.log_file("window").read_text(encoding="utf-8")
 
     # --- developer slot log: header at launch, lines appended as drained, kept after retire
     from lwe_ui import dev

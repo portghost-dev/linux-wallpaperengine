@@ -253,7 +253,7 @@ Column {
     FileDialog {
         id: importDialog
         fileMode: FileDialog.OpenFile
-        nameFilters: [settingsBridge.backupFilter()]
+        nameFilters: [settingsBridge.backupFilter(), "All files (*)"]
         onAccepted: settingsBridge.importBackup(selectedFile)
     }
 

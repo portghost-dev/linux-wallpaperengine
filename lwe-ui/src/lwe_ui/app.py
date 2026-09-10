@@ -125,13 +125,46 @@ def _settle_state_tree(process: str) -> None:
     try:
         report = paths.migrate_state_tree()
     except Exception:
-        report = {"moved": [], "dead": []}
+        report = {"moved": [], "skipped": [], "dead": []}
     log = logbook.install(process)
     if report["moved"]:
         log.info("state tree: moved %s", ", ".join(report["moved"]))
+    if report.get("skipped"):
+        log.warning("state tree: left in place, a newer copy already sits in the tree: %s",
+                    ", ".join(report["skipped"]))
     if report["dead"]:
         log.info("state tree: %d dead file(s) with no writer, safe to delete: %s",
                  len(report["dead"]), ", ".join(report["dead"]))
+    if process == "window":
+        _sparsify_overrides_once(log)
+
+
+def _sparsify_overrides_once(log) -> None:
+    """Strip materialised defaults from every override once, after a snapshot of the
+    config, so a default an importer wrote stops reading as a pin (R125)."""
+    import datetime
+    from .storage import backup, wp
+    marker = paths.panel_state_dir() / "overrides-sparse"
+    if marker.exists():
+        return
+    try:
+        snaps = paths.state_dir() / "backups"
+        snaps.mkdir(parents=True, exist_ok=True)
+        snap = snaps / f"pre-sparsify-{datetime.datetime.now():%Y%m%d-%H%M%S}{backup.EXTENSION}"
+        backup.export_to(snap)
+        report = wp.sparsify_overrides()
+    except Exception as exc:
+        log.warning("override clean-up skipped: %s", exc)
+        return
+    removed = sum(len(v) for v in report.values())
+    log.info("overrides: %d materialised default key(s) removed from %d file(s); snapshot %s",
+             removed, len(report), snap.name)
+    for wid, keys in report.items():
+        log.info("overrides: %s dropped %s", wid, ", ".join(keys))
+    try:
+        marker.write_text("1\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def interface_scale_factor(store: dict, env: dict) -> str | None:

@@ -161,6 +161,67 @@ def update_set_path(path, changes: dict[str, Any]) -> None:
         path, tier_a.serialize(flat, header=f"lwe wallpaper override {stem} (Tier A)"))
 
 
+#: keys that are the wallpaper's identity, never inherited, always written
+IDENTITY_KEYS = ("BG", "TYPE")
+
+
+def facts_to_keys(d: dict[str, Any]) -> dict[str, str]:
+    """The flat keys an importer writes for a wallpaper: its identity, the facts it declares
+    (a colour grade that is not identity, audio support when declared, preset properties),
+    and nothing else. A default is never written; an absent key inherits the global."""
+    flat: dict[str, str] = {}
+    for key in IDENTITY_KEYS:
+        if d.get(key) not in (None, ""):
+            flat[key] = str(d[key])
+    for key, spec in C.WP_SCHEMA.items():
+        if key in IDENTITY_KEYS or key not in d:
+            continue
+        val = d[key]
+        if _coerce(spec, str(val)) == spec["default"] or (spec["type"] == "bool" and not val):
+            continue
+        flat[key] = _bool_str(val) if spec["type"] == "bool" else str(val)
+    for name, pval in (d.get("props") or {}).items():
+        key = f"{C.WP_PROP_PREFIX}{name}"
+        if pval is None or str(pval) == "" or not tier_a.is_valid_key(key):
+            continue
+        flat[key] = str(pval)
+    return flat
+
+
+def write_keys(wid: str, flat: dict[str, str]) -> None:
+    """Write wp/<wid>.conf as exactly these keys: the sparse whole-file writer."""
+    paths.ensure_dirs()
+    atomic.atomic_write_text(paths.wp_file(wid),
+                             tier_a.serialize(flat, header=f"lwe wallpaper override {wid} (Tier A)"))
+
+
+def sparsify_overrides() -> dict[str, list[str]]:
+    """One-time clean-up: drop every schema key whose value equals the current default
+    (identity keys and PROP_ keys kept), so a materialised default stops reading as a pin.
+    Returns {wid: [removed keys]} for the files that changed."""
+    report: dict[str, list[str]] = {}
+    for conf in sorted(paths.wp_dir().glob("*.conf")):
+        wid = conf.stem
+        if not paths.is_safe_wid(wid):
+            continue
+        try:
+            raw = tier_a.parse(conf.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        removed = [k for k, v in raw.items()
+                   if k in C.WP_SCHEMA and k not in IDENTITY_KEYS
+                   and _coerce(C.WP_SCHEMA[k], v) == C.WP_SCHEMA[k]["default"]]
+        if not removed:
+            continue
+        kept = {k: v for k, v in raw.items() if k not in removed}
+        try:
+            atomic.atomic_write_text(conf, tier_a.serialize(kept, header=f"lwe wallpaper override {wid} (Tier A)"))
+        except OSError:
+            continue
+        report[wid] = removed
+    return report
+
+
 def update_set(wid: str, changes: dict[str, Any]) -> None:
     """Presence-preserving key edit of wp/<wid>.conf. See update_set_path."""
     update_set_path(paths.wp_file(wid), changes)

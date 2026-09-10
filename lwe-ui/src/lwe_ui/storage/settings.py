@@ -54,6 +54,26 @@ def _clamp_int(key: str, val: int, spec: dict) -> int:
     return val
 
 
+def migrate_raw(raw: dict[str, str]) -> dict[str, str]:
+    """The renames and retirements a stored settings text goes through before coercion.
+    One function, so a normal load and a backup import apply exactly the same migrations."""
+    # MIGRATION (ledger S-12.5): vendor-specific decoder tokens collapse to auto. The
+    # schema choices are (no, auto) now; without this a stored nvdec would coerce to the
+    # DEFAULT (no) and silently flip a hardware-decode user to software.
+    if str(raw.get("ENGINE_HWDEC", "")).strip() in ("nvdec", "vaapi", "vulkan"):
+        raw["ENGINE_HWDEC"] = "auto"
+    # MIGRATION: DETECT_INTERVAL_MIN (minutes) became DETECT_INTERVAL_SEC (seconds).
+    # Without this a stored minutes value would be dropped and the user's period reset.
+    if "DETECT_INTERVAL_MIN" in raw:
+        if "DETECT_INTERVAL_SEC" not in raw:
+            try:
+                raw["DETECT_INTERVAL_SEC"] = str(int(str(raw["DETECT_INTERVAL_MIN"]).strip()) * 60)
+            except (ValueError, TypeError):
+                pass
+        raw.pop("DETECT_INTERVAL_MIN", None)
+    return raw
+
+
 def load() -> dict[str, Any]:
     """Read settings.conf, coerce per schema. Missing keys filled from default_settings()."""
     defaults = paths.default_settings()
@@ -64,19 +84,7 @@ def load() -> dict[str, Any]:
             text = p.read_text(encoding="utf-8")
         except OSError:
             text = ""
-    raw = tier_a.parse(text)
-    # MIGRATION (ledger S-12.5): vendor-specific decoder tokens collapse to auto. The
-    # schema choices are (no, auto) now; without this a stored nvdec would coerce to the
-    # DEFAULT (no) and silently flip a hardware-decode user to software.
-    if str(raw.get("ENGINE_HWDEC", "")).strip() in ("nvdec", "vaapi", "vulkan"):
-        raw["ENGINE_HWDEC"] = "auto"
-    # MIGRATION: DETECT_INTERVAL_MIN (minutes) became DETECT_INTERVAL_SEC (seconds).
-    # Without this a stored minutes value would be dropped and the user's period reset.
-    if "DETECT_INTERVAL_MIN" in raw and "DETECT_INTERVAL_SEC" not in raw:
-        try:
-            raw["DETECT_INTERVAL_SEC"] = str(int(str(raw["DETECT_INTERVAL_MIN"]).strip()) * 60)
-        except (ValueError, TypeError):
-            pass
+    raw = migrate_raw(tier_a.parse(text))
     out: dict[str, Any] = {}
     for key, spec in C.SETTINGS_SCHEMA.items():
         if key in raw:
