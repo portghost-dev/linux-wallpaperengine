@@ -652,7 +652,6 @@ class SettingsBridge(QObject):
     @Slot(result="QVariantMap")
     def systemTruth(self) -> dict:
         return {
-            "socketLive": bool(api_client.available()),
             "memoryHigh": self._unit_cap("MemoryHigh"),
             "memoryMax": self._unit_cap("MemoryMax"),
         }
@@ -674,15 +673,3 @@ class SettingsBridge(QObject):
         match = re.search(rf"^{field}=(\S+)\s*$", text, re.MULTILINE)
         return match.group(1) if match else ""
 
-    @Slot(result=bool)
-    def restartEngine(self) -> bool:
-        """This is never called automatically - it
-        exists so the honest row can offer the restart the user chooses to take."""
-        try:
-            proc = subprocess.run(["systemctl", "--user", "restart", C.ENGINE_SERVICE],
-                                  capture_output=True, timeout=20, check=False)
-        except (OSError, subprocess.SubprocessError):
-            return self._fail("Advanced", "The engine service could not be restarted.")
-        if proc.returncode != 0:
-            return self._fail("Advanced", "The engine service could not be restarted.")
-        return True

@@ -106,6 +106,23 @@ def main() -> None:
             rail = next(o for o in window.findChildren(QObject) if o.metaObject().className().startswith("Rail"))
             hdr = window.findChild(QObject, "headerBar")
             dk = window.findChild(QObject, "deckBar")
+            # the master toggle: an active unit with a silent socket is amber for the start
+            # window and red after it, and back to the accent the moment status answers
+            hdr.setProperty("startWindowMs", 60)
+            # written through the QML property system so the bindings to the window's
+            # polled state are replaced, not overwritten on the next poll
+            from PySide6.QtQml import QQmlProperty
+            QQmlProperty.write(hdr, "masterState", "active")
+            QQmlProperty.write(hdr, "engineStatus", {"state": ""})
+            assert hdr.property("statusKind") == "starting", hdr.property("statusKind")
+            from PySide6.QtTest import QTest as _QT
+            _QT.qWait(200)
+            assert hdr.property("statusKind") == "down", hdr.property("statusKind")
+            assert hdr.property("statusText") == "Engine running but not answering"
+            QQmlProperty.write(hdr, "engineStatus", {"state": "up"})
+            assert hdr.property("statusKind") == "running", hdr.property("statusKind")
+            QQmlProperty.write(hdr, "masterState", "inactive")
+            assert hdr.property("statusKind") == "off"
             assert float(hdr.x()) == 0 and float(hdr.width()) == float(window.width()), "the header spans the window"
             assert float(dk.x()) == 0 and float(dk.width()) == float(window.width()), "the deck spans the window"
             assert abs(float(rail.y()) - float(hdr.height())) < 0.5 and abs(float(rail.y()) + float(rail.height()) - float(dk.y())) < 0.5, \

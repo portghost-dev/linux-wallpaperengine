@@ -190,20 +190,6 @@ Column {
     PSection { label: "System" }
 
     SettingsRow {
-        label: "Engine mode"
-        Label {
-            text: {
-                var t = page.truth();
-                return t.socketLive ? "Daemon · live control on"
-                                    : "Daemon · socket not answering";
-            }
-            color: Theme.textTertiary
-            font.pixelSize: 11
-            horizontalAlignment: Text.AlignRight
-        }
-    }
-
-    SettingsRow {
         label: "Memory limit"
         caption: "Set by the service file"
         Label {

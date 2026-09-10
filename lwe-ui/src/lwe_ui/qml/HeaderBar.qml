@@ -73,6 +73,18 @@ Rectangle {
     readonly property bool intentOn: masterState === "active" || masterState === "activating"
                                   || masterState === "reloading" || masterState === "failed"
 
+    // an active unit whose socket stays silent past the start window is DOWN, not starting:
+    // amber for the first stretch after activation, then the crashed state's red
+    property int startWindowMs: 20000
+    property bool startWindowOver: false
+    onMasterStateChanged: header.startWindowOver = false
+    onEngineUpChanged: if (header.engineUp) header.startWindowOver = false
+    Timer {
+        interval: header.startWindowMs
+        running: header.masterState === "active" && !header.engineUp && !header.startWindowOver
+        onTriggered: header.startWindowOver = true
+    }
+
     readonly property string statusKind: {
         if (masterState === "failed")
             return "crashed";
@@ -80,12 +92,14 @@ Rectangle {
             return "starting";
         if (masterState !== "active")
             return "off";
-        return header.engineUp ? "running" : "starting";
+        if (header.engineUp)
+            return "running";
+        return header.startWindowOver ? "down" : "starting";
     }
 
     readonly property color statusTrack: statusKind === "running" ? Theme.accent
                                        : statusKind === "starting" ? Theme.warning
-                                       : statusKind === "crashed" ? Theme.danger
+                                       : (statusKind === "crashed" || statusKind === "down") ? Theme.danger
                                        : Theme.toggleOffTrack
 
     readonly property string statusText: {
@@ -93,6 +107,7 @@ Rectangle {
         case "running":  return "Engine running";
         case "starting": return masterState === "reloading" ? "Engine reloading" : "Engine starting";
         case "crashed":  return "Engine crashed. Check the Developer log";
+        case "down":     return "Engine running but not answering";
         default:         return masterState === "absent" ? "Engine unit not installed" : "Engine off";
         }
     }

@@ -155,7 +155,6 @@ def _test_ruled_strings_are_verbatim() -> None:
         (general, 'label: "Close to tray"'),
         (general, 'label: "Interface scale"'),
         (general, 'caption: "Applies after relaunch"'),
-        (general, 'label: "Engine mode"'),
         (general, 'caption: "Set by the service file"'),
         (general, 'text: "Open logs"'),
         (engine, 'label: "FPS"'),
@@ -638,8 +637,9 @@ Window { width: 1400; height: 620; visible: true
         gen_labels = [r.property("label") for r in walk(view) if cls(r) == "SettingsRow"]
         for gone in ("Switch playlists by time of day", "Daytime playlist", "Night playlist"):
             assert gone not in gen_labels, gen_labels
+        assert "Engine mode" not in gen_labels, "the socket health light left the page (R119)"
         general_src = _src("SettingsGeneral.qml")
-        for key in ("SCHEDULE", "playlistSlugs"):
+        for key in ("SCHEDULE", "playlistSlugs", "socketLive", "restartEngine"):
             assert key not in general_src, f"{key} must not be read by the General page"
         print("OK T29 General page: no schedule block, the deck modal is the sole editor")
 
