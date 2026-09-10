@@ -69,6 +69,11 @@ def load_path(path) -> dict[str, Any]:
         text = _read_raw(path)
     except OSError:
         text = ""
+    return load_text(text)
+
+
+def load_text(text: str) -> dict[str, Any]:
+    """The conf TEXT into a typed dict + props: the one deserialization every reader uses."""
     raw = tier_a.parse(text)
     out: dict[str, Any] = {}
     for key, spec in C.WP_SCHEMA.items():
@@ -166,11 +171,16 @@ def _bool_str(val: Any) -> str:
 
 
 def save_path(path, d: dict[str, Any]) -> None:
-    """Inverse of load_path: expand props to PROP_<name>, omit empty optionals, write atomically.
+    """Inverse of load_path: serialize and write atomically. Path-based core behind save(wid),
+    so every writer of a wp-schema conf shares one serialization."""
+    from pathlib import Path
 
-    Path-based core behind save(wid), so every writer of a wp-schema conf shares one
-    serialization.
-    """
+    atomic.atomic_write_text(path, serialize(d, Path(path).stem))
+
+
+def serialize(d: dict[str, Any], wid: str = "") -> str:
+    """The conf TEXT for a typed dict + props: expand props to PROP_<name>, omit empty
+    optionals. The one serialization every writer uses."""
     flat: dict[str, str] = {}
     for key, spec in C.WP_SCHEMA.items():
         if key not in d:
@@ -214,11 +224,7 @@ def save_path(path, d: dict[str, Any]) -> None:
             continue
         flat[key] = sval
 
-    from pathlib import Path
-
-    stem = Path(path).stem
-    text = tier_a.serialize(flat, header=f"lwe wallpaper override {stem} (Tier A)")
-    atomic.atomic_write_text(path, text)
+    return tier_a.serialize(flat, header=f"lwe wallpaper override {wid} (Tier A)")
 
 
 def save(wid: str, d: dict[str, Any]) -> None:

@@ -125,15 +125,22 @@ def _test_reset_preserves_the_path_keys(b) -> None:
 
 
 def _test_export_import_round_trip(b) -> None:
-    backup_root = Path(_TMP) / "backups"
-    backup_root.mkdir(exist_ok=True)
+    """The bridge's backup slots: one file out, the same file back in, a receipt line."""
+    from lwe_ui.storage import backup
+    from lwe_ui.models import ImportBridge
+    from lwe_ui.settings_bridge import SettingsBridge
+    sb = SettingsBridge(b, ImportBridge(b))
+    target = Path(_TMP) / "round-trip"
     settings.save({**settings.load(), "ENGINE_LAYER": "top"})
-    assert b.exportConfig(str(backup_root)) is True
-    backup = sorted(backup_root.glob("lwe-backup-*"))[-1]
+    assert sb.exportBackup("file://" + str(target)) is True
+    archive = Path(str(target) + backup.EXTENSION)
+    assert archive.is_file(), "the extension is appended when the dialog left it off"
     settings.save({**settings.load(), "ENGINE_LAYER": "bottom"})
-    assert b.importConfig(str(backup)) is True
+    assert sb.importBackup(str(archive)) is True
     assert settings.load()["ENGINE_LAYER"] == "top"
-    print("OK export / import round-trip")
+    assert sb.receiptLine.startswith("Restored"), sb.receiptLine
+    assert sb.importBackup(str(Path(_TMP) / "missing.lwebackup")) is False
+    print("OK export / import round-trip through the bridge, with a receipt")
 
 
 def _test_autostart(b) -> None:

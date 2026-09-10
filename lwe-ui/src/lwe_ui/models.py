@@ -1492,44 +1492,6 @@ class Backend(QObject):
             stones = 0
         return f"{gb:.1f} GB · {stones} tombstones"
 
-    @Slot(str, result=bool)
-    def exportConfig(self, dir_url: str) -> bool:
-        """Copy the whole config dir into <chosen>/lwe-backup-<ts>/."""
-        dest_root = dir_url
-        if dest_root.startswith("file://"):
-            dest_root = QUrl(dest_root).toLocalFile()
-        if not dest_root or not os.path.isdir(dest_root):
-            return False
-        import time as _time
-        dest = os.path.join(dest_root, "lwe-backup-" + _time.strftime("%Y%m%d-%H%M%S"))
-        try:
-            shutil.copytree(paths.config_dir(), dest)
-            return True
-        except OSError:
-            return False
-
-    @Slot(str, result=bool)
-    def importConfig(self, dir_url: str) -> bool:
-        """Copy a backup dir's contents over the config dir (files win; nothing deleted)."""
-        src = dir_url
-        if src.startswith("file://"):
-            src = QUrl(src).toLocalFile()
-        if not src or not os.path.isfile(os.path.join(src, "settings.conf")):
-            return False
-        try:
-            shutil.copytree(src, paths.config_dir(), dirs_exist_ok=True)
-        except OSError:
-            return False
-        self.refresh()
-        self.settingsChanged.emit()
-        self.playlistsChanged.emit()
-        self.themeRefreshRequested.emit()
-        try:
-            self._sync_engine()
-        except Exception:
-            pass
-        return True
-
     #: Keys a Reset must CARRY FORWARD: the five resolved path keys, because a reset
     #: that relocates the library or the workshop root is data loss.
     _RESET_PRESERVED = ("ENGINE_BIN", "ASSETS_DIR",

@@ -158,7 +158,6 @@ def _test_ruled_strings_are_verbatim() -> None:
         (general, 'label: "Engine mode"'),
         (general, 'caption: "Set by the service file"'),
         (general, 'text: "Open logs"'),
-        (general, 'caption: "Reset keeps the engine mode"'),
         (engine, 'label: "FPS"'),
         (engine, 'label: "Speed"'),
         (engine, 'label: "Scaling"'),

@@ -232,7 +232,8 @@ Column {
     SettingsRow {
         id: configRow
         label: "Configuration"
-        caption: "Reset keeps the engine mode"
+        // the receipt of the last import this session; empty until then
+        caption: (page.rev, settingsBridge.receiptLine)
 
         Row {
             spacing: 10
@@ -255,13 +256,19 @@ Column {
         onConfirmed: settingsBridge.resetConfig()
     }
 
-    FolderDialog {
+    FileDialog {
         id: exportDialog
-        onAccepted: settingsBridge.exportConfig(selectedFolder)
+        fileMode: FileDialog.SaveFile
+        nameFilters: [settingsBridge.backupFilter()]
+        defaultSuffix: "lwebackup"
+        onAccepted: settingsBridge.exportBackup(selectedFile)
+        onVisibleChanged: if (visible) selectedFile = currentFolder + "/" + settingsBridge.backupDefaultName()
     }
-    FolderDialog {
+    FileDialog {
         id: importDialog
-        onAccepted: settingsBridge.importConfig(selectedFolder)
+        fileMode: FileDialog.OpenFile
+        nameFilters: [settingsBridge.backupFilter()]
+        onAccepted: settingsBridge.importBackup(selectedFile)
     }
 
     Item { width: 1; height: 8 }

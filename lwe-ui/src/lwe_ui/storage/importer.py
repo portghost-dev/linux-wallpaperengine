@@ -148,6 +148,23 @@ def scan_new(cfg: dict | None = None) -> list[str]:
     return out
 
 
+#: what the importer owns in an override; everything else is the user's
+_IMPORTER_KEYS = ("BG", "TYPE")
+
+
+def _write_conf(wid: str, d: dict) -> None:
+    """Write the import-time override, keeping a pre-seeded one: a conf restored from a
+    backup before its wallpaper arrived keeps every user key, the importer sets only the
+    folder and the type."""
+    if wp.exists(wid):
+        kept = wp.load(wid)
+        for k in _IMPORTER_KEYS:
+            kept[k] = d.get(k, kept.get(k))
+        wp.save(wid, kept)
+        return
+    wp.save(wid, d)
+
+
 def import_one(wid: str, cfg: dict | None = None) -> dict:
     """Run the mechanical pass on one workshop item. Returns
     {"wid", "title", "type", "action"} where action is one of
@@ -238,7 +255,7 @@ def import_one(wid: str, cfg: dict | None = None) -> dict:
     gen = raw.get("general") if isinstance(raw.get("general"), dict) else {}
     d["AUDIO_REACTIVE"] = bool(gen.get("supportsaudioprocessing"))
     try:
-        wp.save(wid, d)
+        _write_conf(wid, d)
     except Exception:
         return {"wid": wid, "title": title, "type": wtype, "action": "skipped-conf-failed"}
 
@@ -385,7 +402,7 @@ def _wire_preset_conf(wid: str, proj: dict, dep: str, cfg: dict) -> bool:
     d["CC"] = _derive_cc(preset)
     d["props"] = _preset_props(preset)
     try:
-        wp.save(wid, d)
+        _write_conf(wid, d)
         return True
     except Exception:
         return False
@@ -422,7 +439,7 @@ def _import_held(wid: str, src: Path, title: str, missing: list[str], cfg: dict)
     d = {k: spec["default"] for k, spec in C.WP_SCHEMA.items()}
     d["BG"] = str(src)   # placeholder; the resolve pass rewires it through the base
     try:
-        wp.save(wid, d)
+        _write_conf(wid, d)
     except Exception:
         return {"wid": wid, "title": title, "type": "", "action": "skipped-conf-failed"}
     try:

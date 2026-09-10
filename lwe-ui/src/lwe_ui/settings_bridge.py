@@ -25,17 +25,19 @@ persists nothing.
 """
 from __future__ import annotations
 
+import json
+import logging
 import os
 import re
 import subprocess
 from typing import Any
 
-from PySide6.QtCore import QObject, QUrl, Signal, Slot
+from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 
 from . import api_client
 from . import constants as C
 from .engine import daemon_unit
-from .storage import atomic, paths, settings, tags
+from .storage import atomic, backup, paths, settings, tags
 
 _CLASS_NEXT_SHOW = ("ENGINE_SCALING", "ENGINE_CLAMP", "AUTOMUTE_DEFAULT")
 _CLASS_SERVICE_RESTART = ("ENGINE_LAYER", "ENGINE_HWDEC", "ENGINE_TEXCOMP", "TEXTURE_DETAIL",
@@ -63,6 +65,7 @@ class SettingsBridge(QObject):
         super().__init__(parent)
         self._backend = backend
         self._import = import_bridge
+        self._receipt: dict = {}
         try:
             backend.settingsChanged.connect(self.changed)
         except Exception:
@@ -356,19 +359,82 @@ class SettingsBridge(QObject):
         return True
 
 
+    # --- backup: one .lwebackup file, a receipt line on the Configuration row after import
+    receiptChanged = Signal()
+
+    @Slot(result=str)
+    def backupDefaultName(self) -> str:
+        return backup.default_name()
+
+    @Slot(result=str)
+    def backupFilter(self) -> str:
+        return f"LWE backup (*{backup.EXTENSION})"
+
+    def _local(self, url: str) -> str:
+        local = str(url)
+        if local.startswith("file://"):
+            local = QUrl(local).toLocalFile()
+        return local
+
     @Slot(str, result=bool)
-    def exportConfig(self, url: str) -> bool:
-        if not bool(self._backend.exportConfig(url)):
+    def exportBackup(self, url: str) -> bool:
+        """Save dialog accept: write the archive where the user put it. Success is silent."""
+        local = self._local(url)
+        if not local:
             return self._fail("Configuration", "The backup could not be written.")
+        if not local.endswith(backup.EXTENSION):
+            local += backup.EXTENSION
+        try:
+            r = backup.export_to(local)
+        except Exception:
+            return self._fail("Configuration", "The backup could not be written.")
+        log = logging.getLogger("lwe_ui.backup")
+        log.info("exported %s: %s", local, json.dumps(r["counts"]))
+        for e in r["errors"]:
+            log.warning("export skipped %s: %s", e["file"], e["reason"])
         return True
 
     @Slot(str, result=bool)
-    def importConfig(self, url: str) -> bool:
-        if not bool(self._backend.importConfig(url)):
-            return self._fail("Configuration", "That folder is not an LWE backup.")
+    def importBackup(self, url: str) -> bool:
+        """Open dialog accept: preflight, write through the schemas, refresh, receipt."""
+        local = self._local(url)
+        if not local or not os.path.isfile(local):
+            return self._fail("Configuration", "That file is not an LWE backup.")
+        try:
+            r = backup.apply(backup.preflight(local))
+        except Exception:
+            return self._fail("Configuration", "That backup could not be restored.")
+        log = logging.getLogger("lwe_ui.backup")
+        if r["errors"] and not r.get("counts"):
+            return self._fail("Configuration", r["errors"][0]["reason"])
+        log.info("restored %s: %s", local, json.dumps(r["counts"]))
+        for key in ("dropped", "held", "reresolved", "followups", "errors"):
+            for item in r.get(key, []):
+                log.info("restore %s: %s", key, json.dumps(item))
+        self._receipt = r
+        # the same refresh a settings edit gets, then the engine sees the new policy
+        try:
+            self._backend.refresh()
+            self._backend.settingsChanged.emit()
+            self._backend.playlistsChanged.emit()
+            self._backend.themeRefreshRequested.emit()
+            self._backend._sync_engine()
+        except Exception:
+            pass
+        if any(f["kind"] == "engine-restart" for f in r["followups"]):
+            self._regenerate()
         self.changed.emit()
         self.truthRefreshed.emit()
+        self.receiptChanged.emit()
         return True
+
+    @Property(str, notify=receiptChanged)
+    def receiptLine(self) -> str:
+        return backup.receipt_line(self._receipt) if self._receipt else ""
+
+    @Property("QVariantMap", notify=receiptChanged)
+    def receipt(self) -> dict:
+        return dict(self._receipt or {})
 
     @Slot(result=bool)
     def resetConfig(self) -> bool:
