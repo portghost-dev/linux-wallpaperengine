@@ -50,6 +50,7 @@ class LibraryOrderModel(QAbstractListModel):
         self._map_dirty = True
         self._updates = 0           # incremental membership updates applied (tests read this)
         self._reset_fallbacks = 0   # membership updates that had to reset instead
+        self._column_resets = 0     # column changes applied as a reset (tests read this)
         self._flush_timer = QTimer(self)
         self._flush_timer.setSingleShot(True)
         self._flush_timer.setInterval(0)
@@ -107,6 +108,19 @@ class LibraryOrderModel(QAbstractListModel):
             self._columns = n
             self.columnsChanged.emit()
             self._apply(self._compute())
+
+    @Slot(int)
+    def resetColumns(self, columns: int) -> None:
+        """A column change while a row edit may still be animating: rebuild the rows whole,
+        since a view never re-places an item mid-transition and a reset discards them all."""
+        self._flush()
+        self._columns = max(1, int(columns))
+        self.columnsChanged.emit()
+        self._column_resets += 1
+        self.beginResetModel()
+        self._rows = self._compute()
+        self.endResetModel()
+        self.memberCountChanged.emit()
 
     columns = Property(int, _get_columns, notify=columnsChanged)
 

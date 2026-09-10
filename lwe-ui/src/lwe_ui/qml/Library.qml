@@ -146,8 +146,32 @@ Item {
                                         : Math.round(Math.max(216, Math.min(260, 216 + (width - 1200) * 44 / 1280)))
         readonly property int maxTile: 320
         readonly property int cols: Math.max(1, Math.round(width / (targetTile + gap)))
-        onColsChanged: backend.orderModel.setColumns(cols)
-        Component.onCompleted: backend.orderModel.setColumns(cols)
+        // a column change is a relayout: re-cut padding lands with the transitions off and the
+        // layout forced in one turn; a view never re-places an item mid-transition, so inside
+        // the reflow window of any row edit the change rebuilds the rows instead
+        property bool recutting: false
+        property real lastRowEdit: 0
+        Connections {
+            target: backend.orderModel
+            function onRowsRemoved() { grid.lastRowEdit = Date.now() }
+            function onRowsInserted() { grid.lastRowEdit = Date.now() }
+            function onRowsMoved() { grid.lastRowEdit = Date.now() }
+        }
+        function setCols() {
+            if (root.dragId === "" && Date.now() - lastRowEdit < Motion.removeReflow + 40) {
+                backend.orderModel.resetColumns(cols);
+                return;
+            }
+            recutting = true;
+            try {
+                backend.orderModel.setColumns(cols);
+                forceLayout();
+            } finally {
+                recutting = false;
+            }
+        }
+        onColsChanged: setCols()
+        Component.onCompleted: setCols()
         readonly property int tileW: Math.min(maxTile, cellWidth - gap)
         readonly property real baseThumbH: tileW * 10 / 16
         readonly property int nominalCellH: Math.round(baseThumbH) + 34 + gap
@@ -193,12 +217,15 @@ Item {
         // grid-removal contract (v2.3.1): the trashed card fades, the rest reflow to close the
         // gap. Shared timings from Motion so every grid removes the same way.
         remove: Transition {
+            enabled: !grid.recutting
             NumberAnimation { property: "opacity"; to: 0; duration: Motion.removeFade }
         }
         displaced: Transition {
+            enabled: !grid.recutting
             NumberAnimation { properties: "x,y"; duration: Motion.removeReflow; easing.type: Motion.removeReflowEasing }
         }
         move: Transition {
+            enabled: !grid.recutting
             NumberAnimation { properties: "x,y"; duration: Motion.removeReflow; easing.type: Motion.removeReflowEasing }
         }
 
