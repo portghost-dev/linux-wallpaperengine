@@ -50,6 +50,143 @@ Column {
         }
     }
 
+    SettingsRow {
+        label: "Interface scale"
+        caption: "Applies after relaunch"
+        Column {
+            id: scaleCtl
+            objectName: "interfaceScale"
+            spacing: 4
+            topPadding: 6
+            bottomPadding: 6
+            readonly property int trackW: 260
+            readonly property int knobW: 10
+            readonly property var detents: [75, 100, 150]
+            readonly property real glyphFont: 8.5
+            readonly property color tickInk: Theme.isLight
+                ? Qt.rgba(Theme.textPrimary.r, Theme.textPrimary.g, Theme.textPrimary.b, 0.30)
+                : Qt.rgba(1, 1, 1, 0.30)
+            // linear position map: the knob centre sits at (v - 75) / 75 of the track
+            function xFor(v) { return (v - 75) / 75 * scaleCtl.trackW }
+
+            // one monitor glyph per detent, centred on its tick, lit when it is the value
+            Item {
+                x: scaleCtl.knobW / 2
+                width: scaleCtl.trackW
+                height: 25.5
+                Repeater {
+                    model: [{"v": 75, "t": "1080p"}, {"v": 100, "t": "1440p"}, {"v": 150, "t": "2160p"}]
+                    delegate: Item {
+                        id: glyph
+                        required property var modelData
+                        objectName: "scaleGlyph"
+                        x: scaleCtl.xFor(modelData.v) - 17
+                        width: 34
+                        height: parent.height
+                        readonly property bool current: scaleSlider.shown === modelData.v
+                        readonly property color ink: current ? Theme.textPrimary : Theme.textSecondary
+                        Rectangle {
+                            width: 34; height: 22; radius: 3
+                            color: "transparent"
+                            border.width: 1.5
+                            border.color: glyph.ink
+                            Label {
+                                anchors.centerIn: parent
+                                text: glyph.modelData.t
+                                color: glyph.ink
+                                font.pixelSize: scaleCtl.glyphFont
+                            }
+                        }
+                        Rectangle { x: 12; y: 24; width: 10; height: 1.5; color: glyph.ink }
+                    }
+                }
+            }
+
+            Row {
+                spacing: 10
+                Slider {
+                    id: scaleSlider
+                    objectName: "interfaceScaleSlider"
+                    // the knob's travel is the track: Qt maps a press over width - knob, so
+                    // the slider is the track plus one knob and the track is drawn inset
+                    width: scaleCtl.trackW + scaleCtl.knobW
+                    height: 16
+                    padding: 0
+                    from: 75
+                    to: 150
+                    stepSize: 1
+                    readonly property int stored: (page.rev, Math.round(Number(page.val("INTERFACE_SCALE"))) || 100)
+                    // the chip and the glyphs read the knob while it is held, the store otherwise
+                    readonly property int shown: pressed ? Math.round(value) : stored
+                    Binding {
+                        target: scaleSlider
+                        property: "value"
+                        value: scaleSlider.stored
+                        when: !scaleSlider.pressed
+                        restoreMode: Binding.RestoreBindingOrValue
+                    }
+                    onPressedChanged: {
+                        if (pressed) return;
+                        var v = settingsBridge.settleScale(value);
+                        value = v;
+                        settingsBridge.commit("INTERFACE_SCALE", v);
+                    }
+                    background: Rectangle {
+                        x: scaleCtl.knobW / 2
+                        y: scaleSlider.height / 2 - height / 2
+                        width: scaleCtl.trackW
+                        height: 3
+                        radius: 1.5
+                        color: Theme.border
+                        Rectangle {
+                            width: scaleSlider.visualPosition * parent.width
+                            height: parent.height
+                            radius: 1.5
+                            color: Theme.accent
+                        }
+                        Repeater {
+                            model: scaleCtl.detents
+                            delegate: Rectangle {
+                                required property int modelData
+                                objectName: "scaleTick"
+                                x: scaleCtl.xFor(modelData) - 0.75
+                                y: -3
+                                width: 1.5
+                                height: 9
+                                color: scaleCtl.tickInk
+                            }
+                        }
+                    }
+                    handle: Rectangle {
+                        x: scaleSlider.visualPosition * scaleCtl.trackW
+                        y: scaleSlider.height / 2 - height / 2
+                        width: scaleCtl.knobW
+                        height: scaleCtl.knobW
+                        radius: scaleCtl.knobW / 2
+                        color: Theme.textPrimary
+                    }
+                }
+                Rectangle {
+                    objectName: "interfaceScaleChip"
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: 22
+                    width: Math.max(46, chipLabel.implicitWidth + 16)
+                    radius: 5
+                    color: Theme.surface
+                    border.width: 1
+                    border.color: page.isFailed("INTERFACE_SCALE") ? Theme.danger : Theme.border
+                    Label {
+                        id: chipLabel
+                        anchors.centerIn: parent
+                        text: scaleSlider.shown + "%"
+                        color: Theme.textPrimary
+                        font.pixelSize: Theme.fontMeta
+                    }
+                }
+            }
+        }
+    }
+
     PSection { label: "System" }
 
     SettingsRow {

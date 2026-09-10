@@ -153,6 +153,8 @@ def _test_ruled_strings_are_verbatim() -> None:
     for text, phrase in (
         (general, 'label: "Start on login"'),
         (general, 'label: "Close to tray"'),
+        (general, 'label: "Interface scale"'),
+        (general, 'caption: "Applies after relaunch"'),
         (general, 'label: "Engine mode"'),
         (general, 'caption: "Set by the service file"'),
         (general, 'text: "Open logs"'),
@@ -425,6 +427,8 @@ Window { width: 1400; height: 620; visible: true
             assert rows, f"page {page_index} must have rows"
             for r in rows:
                 want = 40 if r.property("caption") else 34
+                if r.property("label") == "Interface scale":
+                    want = 63.5   # the one tall row on the page: glyphs over the track
                 got = rect(r)[3]
                 assert abs(got - want) < 0.51, \
                     f"page {page_index} row {r.property('label')!r}: {got}, spec {want}"
@@ -639,6 +643,33 @@ Window { width: 1400; height: 620; visible: true
         for key in ("SCHEDULE", "playlistSlugs"):
             assert key not in general_src, f"{key} must not be read by the General page"
         print("OK T29 General page: no schedule block, the deck modal is the sole editor")
+
+        # Interface scale (SETTINGS-COLUMN-AND-SCALE-SPEC-v1.0 sec 3): 75..150 percent, three
+        # detents with a glyph each, the chip reads the store, the release settles on a detent
+        sl = next(i for i in walk(view) if i.property("objectName") == "interfaceScaleSlider")
+        assert (sl.property("from"), sl.property("to"), sl.property("stepSize")) == (75, 150, 1)
+        assert abs(sl.width() - 270) < 0.51, "track 260 plus one 10px knob of travel"
+        ticks = [i for i in walk(view) if i.property("objectName") == "scaleTick"]
+        glyphs = [i for i in walk(view) if i.property("objectName") == "scaleGlyph"]
+        assert len(ticks) == 3 and len(glyphs) == 3, (len(ticks), len(glyphs))
+        assert sorted(round(g.x() + 17) for g in glyphs) == [0, 87, 260], "glyphs centre on the ticks"
+        chip = next(i for i in walk(view) if i.property("objectName") == "interfaceScaleChip")
+        chip_label = next(c for c in chip.childItems() if cls(c) in ("Label", "QQuickLabel"))
+        assert chip_label.property("text") == "100%", chip_label.property("text")
+        assert [g.property("current") for g in sorted(glyphs, key=lambda g: g.x())] == [False, True, False]
+        assert sb.commit("INTERFACE_SCALE", 74) is False and sb.commit("INTERFACE_SCALE", 151) is False
+        assert sb.commit("INTERFACE_SCALE", 125) is True
+        QTest.qWait(120)
+        assert chip_label.property("text") == "125%", "the chip reads the store"
+        assert not any(g.property("current") for g in glyphs), "no detent at 125, no lit glyph"
+        assert sb.commit("INTERFACE_SCALE", 150) is True
+        QTest.qWait(120)
+        assert [g.property("current") for g in sorted(glyphs, key=lambda g: g.x())] == [False, False, True]
+        assert sb.reach("INTERFACE_SCALE") == "PANEL"
+        for v, want in ((102, 100), (98, 100), (104, 104), (147, 150), (78, 75), (72, 75), (160, 150), (125, 125)):
+            assert sb.settleScale(v) == want, (v, sb.settleScale(v), want)
+        assert sb.commit("INTERFACE_SCALE", 100) is True
+        print("OK T31 Interface scale row: range, detents, glyphs, chip, settle")
     finally:
         for k, v in orig.items():
             if v is None:

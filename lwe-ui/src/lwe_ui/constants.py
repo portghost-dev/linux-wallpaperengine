@@ -118,6 +118,8 @@ SETTINGS_SCHEMA: dict[str, dict] = {
     "PARALLAX_DEFAULT": {"type": "bool", "default": True},
     "PARTICLES_DEFAULT": {"type": "bool", "default": True},
     "CLOSE_TO_TRAY": {"type": "bool", "default": True},
+    # panel scale in percent: Qt's startup scale factor, so it applies after relaunch
+    "INTERFACE_SCALE": {"type": "int", "default": 100, "min": 75, "max": 150},
     "DETECT_MODE": {"type": "enum", "default": "watch", "choices": DETECT_MODES},
     # detection period for DETECT_MODE=interval, in SECONDS. The floor exists because
     # every pass scandirs the workshop root; 15s keeps a misconfigured box harmless.

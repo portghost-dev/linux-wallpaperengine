@@ -40,7 +40,7 @@ from .storage import atomic, paths, settings, tags
 _CLASS_NEXT_SHOW = ("ENGINE_SCALING", "ENGINE_CLAMP", "AUTOMUTE_DEFAULT")
 _CLASS_SERVICE_RESTART = ("ENGINE_LAYER", "ENGINE_HWDEC", "ENGINE_TEXCOMP", "TEXTURE_DETAIL",
                           "RENDER_RESOLUTION", "ASSETS_DIR")
-_CLASS_PANEL = ("CLOSE_TO_TRAY", "STEAM_DIR")
+_CLASS_PANEL = ("CLOSE_TO_TRAY", "STEAM_DIR", "INTERFACE_SCALE")
 _CLASS_BOUNDARY = ("SCHEDULE_ENABLED", "SCHEDULE")
 _CLASS_NEXT_SCAN = ("WORKSHOP_DIR", "WALLPAPERS_DIR")
 _CLASS_RE_ARM = ("DETECT_MODE", "DETECT_INTERVAL_SEC")
@@ -376,6 +376,21 @@ class SettingsBridge(QObject):
         self.changed.emit()
         self.truthRefreshed.emit()
         return True
+
+    #: Interface scale detents: a release within three points of one settles on it.
+    _SCALE_DETENTS = (75, 100, 150)
+
+    @Slot(float, result=int)
+    def settleScale(self, value: float) -> int:
+        """The percent a released Interface scale knob settles on: the nearest detent when
+        within three points of one, else the integer the knob sits at."""
+        spec = C.SETTINGS_SCHEMA["INTERFACE_SCALE"]
+        v = int(round(float(value)))
+        v = max(int(spec["min"]), min(int(spec["max"]), v))
+        for d in self._SCALE_DETENTS:
+            if abs(v - d) <= 3:
+                return d
+        return v
 
     @Slot(result=bool)
     def autostart(self) -> bool:

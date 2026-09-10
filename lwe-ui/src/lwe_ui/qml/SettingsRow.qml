@@ -10,8 +10,8 @@ import "."
 //
 // S3 - ONE CONTROL PER ROW, FLUSH RIGHT. The slot is anchored to the row's right edge, which
 // is the content column's right edge, so every control on every page lines up on one axis.
-// The two Schedule playlist/time rows are the only sanctioned exception and they pass a Row
-// into the same single slot rather than opening a second one.
+// A control that needs two lines (the Interface scale slider under its glyphs) passes one
+// Column into the same single slot rather than opening a second one.
 //
 // `dim` is the precondition state (sec 3.3): a row whose precondition is off renders at 0.5
 // opacity, LABEL AND CONTROL TOGETHER, so it reads as one unavailable fact rather than a

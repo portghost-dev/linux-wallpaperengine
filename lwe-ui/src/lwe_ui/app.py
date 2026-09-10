@@ -118,6 +118,33 @@ def spawn_tray_if_needed() -> bool:
     return True
 
 
+def interface_scale_factor(store: dict, env: dict) -> str | None:
+    """Qt's startup scale factor for the stored Interface scale percent, or None when the
+    store says 100 or the environment already carries QT_SCALE_FACTOR (a hand-set factor
+    wins over the setting: it is the same knob)."""
+    if str(env.get("QT_SCALE_FACTOR", "")).strip():
+        return None
+    spec = C.SETTINGS_SCHEMA["INTERFACE_SCALE"]
+    try:
+        pct = int(store.get("INTERFACE_SCALE", spec["default"]))
+    except (TypeError, ValueError):
+        return None
+    pct = max(int(spec["min"]), min(int(spec["max"]), pct))
+    if pct == 100:
+        return None
+    return f"{pct / 100:g}"
+
+
+def apply_interface_scale(env: dict) -> None:
+    """Set QT_SCALE_FACTOR from the store before the QApplication exists; Qt reads it once."""
+    try:
+        factor = interface_scale_factor(settings.load(), env)
+    except Exception:
+        return
+    if factor is not None:
+        env["QT_SCALE_FACTOR"] = factor
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv if argv is None else argv)
 
@@ -157,6 +184,7 @@ def main(argv: list[str] | None = None) -> int:
 
     paths.ensure_dirs()
     settings.ensure_exists()
+    apply_interface_scale(os.environ)
 
     QCoreApplication.setApplicationName("LWE Control Panel")
     QCoreApplication.setOrganizationName("lwe")

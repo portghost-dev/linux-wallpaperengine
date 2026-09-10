@@ -325,6 +325,9 @@ is to be the daemon API's reference client and the system's owner:
   engine's env file (`engine/daemon_unit.py`), reconciling drift at every start. The
   restart-class engine settings live there, among them the resolution cap's three states
   (`Clamp resolution` on Engine > Advanced: everything clamped, composites exempt, or off).
+- It **scales itself** through Qt, not through its own pixels: the `Interface scale`
+  setting (75..150 percent) becomes Qt's startup scale factor at bootstrap, so the QML
+  stays in logical pixels and a change applies at the next launch.
 - It **drives the verbs**: `show` with fully resolved per-wallpaper args, `rotate-set`
   on every playlist change, `set-*` for live dials, `ping`+`status` every 2 seconds -
   which doubles as the deadman heartbeat. Policy is pushed once per panel life, on
