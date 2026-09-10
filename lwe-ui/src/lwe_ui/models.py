@@ -556,28 +556,43 @@ class LibraryFilterModel(QSortFilterProxyModel):
     live in favorites mode). Matching is case-insensitive on title+id (lowercased BOTH sides).
     """
 
+    # one invalidateFilter() emits a rowsRemoved/rowsInserted per contiguous run; this fires
+    # once after the last of them, so a listener can apply the whole change as one update
+    filterInvalidated = Signal()
+
     def __init__(self, source: QAbstractListModel, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.setSourceModel(source)
         self.setDynamicSortFilter(True)
+        # a source edit can re-filter rows without a setter; the proxy's own slots ran first
+        # (connection order), so this is the end of that batch too
+        for sig in (source.dataChanged, source.rowsInserted, source.rowsRemoved):
+            sig.connect(self._announce)
         self._search = ""
         self._scope = "all"      # rail: "all" | "favorites" | "review"
         self._type = "all"       # funnel: "all" | "scene" | "video" | "web" | "untyped"
         self._pl = "any"         # funnel: "any" | "in" | "out" (active playlist)
+
+    def _invalidate(self) -> None:
+        self.invalidateFilter()
+        self.filterInvalidated.emit()
+
+    def _announce(self, *_args) -> None:
+        self.filterInvalidated.emit()
 
     @Slot(str)
     def setSearchText(self, text: str) -> None:
         s = (text or "").strip().casefold()  # casefold (not lower) for correct non-ASCII matching
         if s != self._search:
             self._search = s
-            self.invalidateFilter()
+            self._invalidate()
 
     @Slot(str)
     def setScope(self, scope: str) -> None:
         s = scope or "all"
         if s != self._scope:
             self._scope = s
-            self.invalidateFilter()
+            self._invalidate()
 
     @Slot(str)
     def setFilterMode(self, mode: str) -> None:
@@ -589,14 +604,14 @@ class LibraryFilterModel(QSortFilterProxyModel):
         v = t or "all"
         if v != self._type:
             self._type = v
-            self.invalidateFilter()
+            self._invalidate()
 
     @Slot(str)
     def setPlaylistFilter(self, p: str) -> None:
         v = p or "any"
         if v != self._pl:
             self._pl = v
-            self.invalidateFilter()
+            self._invalidate()
 
     def filterAcceptsRow(self, row: int, parent: QModelIndex) -> bool:  # noqa: N802 (Qt override)
         src = self.sourceModel()

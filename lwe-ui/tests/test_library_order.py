@@ -27,7 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from PySide6.QtGui import QGuiApplication  # noqa: E402
 
 from lwe_ui.library_order import FILLER, MEMBER, POOL  # noqa: E402
-from lwe_ui.storage import playlists, tags  # noqa: E402
+from lwe_ui.storage import meta, playlists, tags  # noqa: E402
 
 IDS = ["100", "200", "300", "400", "500", "600", "700"]
 
@@ -112,6 +112,153 @@ class LibraryOrder(unittest.TestCase):
         self.assertEqual([w for k, w in self.rows() if k == MEMBER], ["300", "500", "400"])
         self.assertEqual([w for k, w in self.rows() if k == POOL], ["100", "200", "600", "700"])
         self.assertEqual(self.resets, 0, "a checkbox is one row move, never a reset")
+
+    # --- a filter change: rows leave and arrive, the survivors keep their delegates ---
+    def test_a_filter_change_is_row_edits_never_a_reset(self) -> None:
+        om = self.b.orderModel
+        om.setColumns(3)
+        edits = {"removed": 0, "inserted": 0, "moved": 0, "layout": 0}
+        om.rowsRemoved.connect(lambda *a: edits.__setitem__("removed", edits["removed"] + 1))
+        om.rowsInserted.connect(lambda *a: edits.__setitem__("inserted", edits["inserted"] + 1))
+        om.rowsMoved.connect(lambda *a: edits.__setitem__("moved", edits["moved"] + 1))
+        om.layoutChanged.connect(lambda *a: edits.__setitem__("layout", edits["layout"] + 1))
+        # favourites that leave three separate holes: one member and two runs of the pool
+        starred = ("300", "500", "200", "600")
+        for wid in starred:
+            self.b.toggleFavorite(wid)
+        try:
+            self.resets = 0
+            updates, fallbacks = om._updates, om._reset_fallbacks
+            self.b.filterModel.setScope("favorites")
+            self.assertEqual(self.resets, 0, "a filter change never resets the grid's model")
+            self.assertEqual(edits["moved"], 0)
+            self.assertEqual(edits["layout"], 0)
+            self.assertGreater(edits["removed"], 1, "three holes: more than one contiguous run")
+            self.assertEqual(om._updates - updates, 1, "several source signals, one update")
+            self.assertEqual(om._reset_fallbacks - fallbacks, 0)
+            self.assertEqual(self.rows(), om._compute())
+            self.assertEqual(self.rows(), [(MEMBER, "300"), (MEMBER, "500"), (FILLER, ""),
+                                           (POOL, "200"), (POOL, "600")])
+            # and back: the rows that return arrive as insertions
+            self.b.filterModel.setScope("all")
+            self.assertEqual(self.resets, 0)
+            self.assertGreater(edits["inserted"], 1)
+            self.assertEqual(om._updates - updates, 2)
+            self.assertEqual(self.rows(), om._compute())
+        finally:
+            self.b.filterModel.setScope("all")
+            for wid in starred:
+                self.b.toggleFavorite(wid)
+
+    def test_a_search_narrowing_and_widening_keeps_the_filler_band_correct(self) -> None:
+        om = self.b.orderModel
+        om.setColumns(5)
+        self.resets = 0
+        self.b.filterModel.setSearchText("00")   # every id, three members: two padding cells
+        self.assertEqual(om.fillerCount, 2)
+        self.assertEqual(om.hairlineIndex, 5)
+        self.b.filterModel.setSearchText("400")  # one pool card, no member block: no padding
+        self.assertEqual(self.rows(), [(POOL, "400")])
+        self.assertEqual(om.fillerCount, 0)
+        self.assertEqual(om.hairlineIndex, -1)
+        self.b.filterModel.setSearchText("")
+        self.assertEqual(om.fillerCount, 2)
+        self.assertEqual(self.rows(), om._compute())
+        self.assertEqual(self.resets, 0, "padding is re-cut with row edits, not a reset")
+
+    def test_a_genuine_reorder_falls_back_to_a_reset_and_is_counted(self) -> None:
+        om = self.b.orderModel
+        om.setColumns(3)
+        d = playlists.load(self.slug)
+        d["MEMBERS"] = " ".join(["500", "300", "100"])   # same members, new order
+        playlists.save(self.slug, d)
+        self.resets = 0
+        fallbacks = om._reset_fallbacks
+        self.b.filterModel.layoutChanged.emit()          # the source announces a re-order
+        self.assertEqual([w for k, w in self.rows() if k == MEMBER], ["500", "300", "100"])
+        self.assertEqual(self.resets, 1, "a reorder is a reset")
+        self.assertEqual(om._reset_fallbacks - fallbacks, 1, "and the fallback is counted")
+
+    def test_a_filter_change_under_a_lifted_card_resets_and_cancels_the_drag(self) -> None:
+        om = self.b.orderModel
+        om.setColumns(3)
+        self.assertTrue(om.beginDrag("300"))
+        om.dragOver(0)
+        self.resets = 0
+        self.b.filterModel.setSearchText("500")
+        self.assertFalse(om.dragging, "a lifted card cannot survive its source changing")
+        self.assertEqual(self.resets, 1, "the drag path is the reset path, never the diff")
+        self.assertEqual(playlists.members(self.slug), ["300", "100", "500"], "nothing stored")
+        self.b.filterModel.setSearchText("")
+
+    def test_a_pool_only_change_leaves_the_padding_band_untouched(self) -> None:
+        om = self.b.orderModel
+        om.setColumns(3)
+        self.set_members(["300", "100"])                  # two members, one padding cell
+        self.assertEqual([k for k, _ in self.rows()][:3], [MEMBER, MEMBER, FILLER])
+        removed: list[tuple[int, int]] = []
+        inserted: list[tuple[int, int]] = []
+        om.rowsRemoved.connect(lambda _p, a, b: removed.append((a, b)))
+        om.rowsInserted.connect(lambda _p, a, b: inserted.append((a, b)))
+        try:
+            for wid in ("300", "100", "400"):
+                self.b.toggleFavorite(wid)
+            self.resets = 0
+            removed.clear(); inserted.clear()
+            self.b.filterModel.setScope("favorites")      # the members stay, one pool row stays
+            self.assertEqual(self.rows(), [(MEMBER, "300"), (MEMBER, "100"), (FILLER, ""), (POOL, "400")])
+            self.assertTrue(removed and all(a > 2 for a, _ in removed), f"the band at row 2 was touched: {removed}")
+            self.assertEqual(inserted, [], f"the band was re-cut: {inserted}")
+            self.b.filterModel.setScope("all")            # the pool comes back around the band
+            self.assertEqual([k for k, _ in self.rows()][:3], [MEMBER, MEMBER, FILLER])
+            self.assertTrue(inserted and all(a > 2 for a, _ in inserted), f"the band was re-cut: {inserted}")
+            self.assertEqual(self.resets, 0)
+        finally:
+            self.b.filterModel.setScope("all")
+            for wid in ("300", "100", "400"):
+                if meta.get(wid).get("favorite"):
+                    self.b.toggleFavorite(wid)
+
+    def test_a_dynamic_refilter_lands_in_the_same_turn(self) -> None:
+        om = self.b.orderModel
+        om.setColumns(3)
+        try:
+            self.b.filterModel.setScope("favorites")
+            self.b.toggleFavorite("300")
+            self.b.toggleFavorite("400")
+            self.assertEqual([w for k, w in self.rows() if k != FILLER], ["300", "400"])
+            self.resets = 0
+            self.b.toggleFavorite("400")                  # a source edit re-filters 400 out
+            self.assertEqual([w for k, w in self.rows() if k != FILLER], ["300"],
+                             "the row left in the same turn, without an event-loop pass")
+            self.assertFalse(om._pending, "nothing is left waiting for the timer")
+            self.assertEqual(self.resets, 0)
+        finally:
+            self.b.filterModel.setScope("all")
+            for wid in ("300", "400"):
+                if meta.get(wid).get("favorite"):
+                    self.b.toggleFavorite(wid)
+
+    def test_a_source_signal_outside_a_filter_change_updates_on_the_next_turn(self) -> None:
+        om = self.b.orderModel
+        om.setColumns(3)
+        self.resets = 0
+        updates = om._updates
+        self.b.toggleFavorite("400")
+        try:
+            self.b.filterModel.setScope("favorites")     # only 400 shows
+            self.assertEqual(self.rows(), [(POOL, "400")])
+            self.b.toggleFavorite("300")                 # dataChanged, no invalidateFilter
+            _APP.processEvents()                         # the zero-timer flush
+            self.assertEqual(self.rows(), [(MEMBER, "300"), (FILLER, ""), (FILLER, ""),
+                                           (POOL, "400")])
+            self.assertEqual(self.resets, 0)
+            self.assertGreater(om._updates, updates)
+        finally:
+            self.b.filterModel.setScope("all")
+            for wid in ("400", "300"):
+                if self.b.orderModel.rowOf(wid) >= 0 and meta.get(wid).get("favorite"):
+                    self.b.toggleFavorite(wid)
 
     # --- drop table ---
     def test_member_over_a_member_slot_reorders(self) -> None:

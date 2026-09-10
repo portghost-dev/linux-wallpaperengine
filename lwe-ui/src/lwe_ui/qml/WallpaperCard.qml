@@ -90,6 +90,7 @@ Rectangle {
         }
         Image {
             id: rawThumb
+            objectName: "rawThumb"
             anchors.fill: parent
             source: card.thumb
             fillMode: Image.PreserveAspectCrop

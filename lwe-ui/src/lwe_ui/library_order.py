@@ -4,7 +4,9 @@ member block to a column boundary, then the pool in library order (design spec 1
 Sits over the search/scope filter model, so what the filter hides never shows here either. The
 row list is recomputed from the filter model and the stored member order; a single card moving
 between the two blocks (a checkbox, a drop) is applied as one row move so the grid animates it,
-and the filler block is re-padded around it. Anything larger is a reset.
+and the filler block is re-padded around it. A filter change is applied as row removals and row
+insertions by identity, coalesced to one update per event-loop turn, so the cards that survive
+the change keep their delegates. Anything larger is a reset.
 
 The drag API holds a provisional member order while a card is lifted (R37: dragging never removes;
 a pool card over a member slot is a provisional insert, a member over the pool goes home). The
@@ -16,8 +18,8 @@ import math
 from typing import Any, Callable
 
 from PySide6.QtCore import (
-    QAbstractItemModel, QAbstractListModel, QByteArray, QModelIndex, QObject, Property, Qt,
-    Signal, Slot,
+    QAbstractItemModel, QAbstractListModel, QByteArray, QModelIndex, QObject, Property, QTimer,
+    Qt, Signal, Slot,
 )
 
 _ROLE_ID = Qt.ItemDataRole.UserRole + 1  # LibraryModel's id role, the same number by contract
@@ -25,6 +27,9 @@ ROLE_FILLER = Qt.ItemDataRole.UserRole + 50
 ROLE_MEMBER = Qt.ItemDataRole.UserRole + 51
 
 MEMBER, FILLER, POOL = "member", "filler", "pool"
+
+
+_BOOL_ROLES = (b"favorite", b"inPlaylist", b"missing", b"refused", b"pendingReview")
 
 
 class LibraryOrderModel(QAbstractListModel):
@@ -41,11 +46,24 @@ class LibraryOrderModel(QAbstractListModel):
         self._rows: list[tuple[str, str]] = []  # (kind, wid); fillers carry ""
         self._src_row: dict[str, int] = {}
         self._drag: dict[str, Any] | None = None
+        self._pending = False       # a membership change is waiting for its one update
+        self._map_dirty = True
+        self._updates = 0           # incremental membership updates applied (tests read this)
+        self._reset_fallbacks = 0   # membership updates that had to reset instead
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setSingleShot(True)
+        self._flush_timer.setInterval(0)
+        self._flush_timer.timeout.connect(self._flush)
         source.modelReset.connect(self._rebuild)
-        source.rowsInserted.connect(self._rebuild)
-        source.rowsRemoved.connect(self._rebuild)
-        source.layoutChanged.connect(self._rebuild)
+        source.rowsInserted.connect(self._membership_changed)
+        source.rowsRemoved.connect(self._membership_changed)
+        source.layoutChanged.connect(self._membership_changed)
         source.dataChanged.connect(self._source_changed)
+        # one invalidateFilter() emits a row signal per contiguous run; this marks the end of
+        # the batch, so a keystroke lands as one update in the same turn rather than N
+        done = getattr(source, "filterInvalidated", None)
+        if done is not None:
+            done.connect(self._flush)
         self._rebuild()
 
     # --- Qt model plumbing ---------------------------------------------------------------
@@ -67,7 +85,11 @@ class LibraryOrderModel(QAbstractListModel):
         if role == ROLE_MEMBER:
             return kind == MEMBER
         if kind == FILLER:
-            return "" if role == _ROLE_ID else None
+            # a padding cell answers a typed empty for every role, so a delegate that scrolls
+            # it into view binds "" and false instead of undefined
+            name = bytes(self._source.roleNames().get(role, QByteArray()))
+            return False if name in _BOOL_ROLES else ""
+        self._refresh_map()
         src = self._src_row.get(wid, -1)
         if src < 0:
             return None
@@ -79,6 +101,7 @@ class LibraryOrderModel(QAbstractListModel):
 
     @Slot(int)
     def setColumns(self, columns: int) -> None:
+        self._flush()
         n = max(1, int(columns))
         if n != self._columns:
             self._columns = n
@@ -110,16 +133,19 @@ class LibraryOrderModel(QAbstractListModel):
 
     @Slot(int, result=str)
     def idAt(self, row: int) -> str:
+        self._flush()
         return self._rows[row][1] if 0 <= row < len(self._rows) else ""
 
     @Slot(str, result=int)
     def rowOf(self, wid: str) -> int:
+        self._flush()
         for i, (kind, w) in enumerate(self._rows):
             if kind != FILLER and w == wid:
                 return i
         return -1
 
     def order(self) -> list[tuple[str, str]]:
+        self._flush()
         return list(self._rows)
 
     # --- order computation --------------------------------------------------------------
@@ -150,27 +176,55 @@ class LibraryOrderModel(QAbstractListModel):
         return ([(MEMBER, w) for w in members] + [(FILLER, "")] * fillers
                 + [(POOL, w) for w in pool])
 
-    def _rebuild(self, *_args: Any) -> None:
-        if self._drag is not None:
-            # the source changed under a lifted card: the drag is over, nothing is stored
-            self._drag = None
-            self.draggingChanged.emit()
+    def _refresh_map(self) -> None:
+        """id -> source row. Rebuilt lazily; it emits nothing, so it is safe to run anywhere."""
+        if not self._map_dirty:
+            return
+        self._map_dirty = False
         self._src_row = {}
         for r in range(self._source.rowCount()):
             wid = self._source.data(self._source.index(r, 0), _ROLE_ID)
             if wid:
                 self._src_row[str(wid)] = r
+
+    def _rebuild(self, *_args: Any) -> None:
+        if self._drag is not None:
+            # the source changed under a lifted card: the drag is over, nothing is stored
+            self._drag = None
+            self.draggingChanged.emit()
+        self._pending = False
+        self._flush_timer.stop()
+        self._map_dirty = True
+        self._refresh_map()
         self.beginResetModel()
         self._rows = self._compute()
         self.endResetModel()
         self.memberCountChanged.emit()
 
+    def _membership_changed(self, *_args: Any) -> None:
+        """The filter let rows in or out. Coalesced: one update per event-loop turn."""
+        self._map_dirty = True
+        if self._drag is not None:
+            self._rebuild()  # a lifted card cannot survive its source changing under it
+            return
+        self._pending = True
+        self._flush_timer.start()
+
+    def _flush(self) -> None:
+        if not self._pending:
+            return
+        self._pending = False
+        self._flush_timer.stop()
+        self._apply_membership(self._compute())
+
     @Slot()
     def resync(self) -> None:
         """The stored member order changed outside a source signal (a playlist switch or edit)."""
+        self._flush()
         self._apply(self._compute())
 
     def _source_changed(self, top: QModelIndex, bottom: QModelIndex, roles: list) -> None:
+        self._flush()  # a membership change waiting in this turn lands before the data edit
         names = self._source.roleNames()
         touched = {bytes(names.get(r, QByteArray())).decode() for r in roles}
         if not roles or "inPlaylist" in touched:
@@ -182,6 +236,88 @@ class LibraryOrderModel(QAbstractListModel):
                 idx = self.index(row, 0)
                 self.dataChanged.emit(idx, idx, roles)
 
+    def _apply_membership(self, new_rows: list[tuple[str, str]]) -> None:
+        """A filter change: rows leave and rows arrive, and every row that stays keeps its
+        delegate. The law that makes remove-then-insert order-correct is that a filter changes
+        membership only, never order (members follow the stored order, the pool follows the
+        source order), so the rows that survive are in the same relative order before and after
+        and keep their kind. When that does not hold the change is a real reorder: reset."""
+        if new_rows == self._rows:
+            return
+        self._updates += 1
+        old = [(k, w) for k, w in self._rows if k != FILLER]
+        new = [(k, w) for k, w in new_rows if k != FILLER]
+        old_ids = [w for _, w in old]
+        new_ids = [w for _, w in new]
+        old_set, new_set = set(old_ids), set(new_ids)
+        kinds = {w: k for k, w in new}
+        fill = [i for i, (k, _) in enumerate(self._rows) if k == FILLER]
+        held = ([w for w in old_ids if w in new_set] == [w for w in new_ids if w in old_set]
+                and len(old_set) == len(old_ids) and len(new_set) == len(new_ids)
+                and all(kinds[w] == k for k, w in old if w in new_set)
+                and (not fill or fill[-1] - fill[0] == len(fill) - 1))
+        if not held:
+            self._reset_fallbacks += 1
+            self.beginResetModel()
+            self._rows = new_rows
+            self.endResetModel()
+            self.memberCountChanged.emit()
+            return
+        old_members = [w for k, w in self._rows if k == MEMBER]
+        new_members = [w for k, w in new_rows if k == MEMBER]
+        fillers = sum(1 for k, _ in new_rows if k == FILLER)
+        if fill and old_members == new_members and len(fill) == fillers:
+            # the member block and its padding did not move: diff the pool alone, in place
+            head = len(old_members) + len(fill)
+            gone = [head + i for i, (_, w) in enumerate(self._rows[head:]) if w not in new_set]
+            for first, last in reversed(self._runs(gone)):
+                self.beginRemoveRows(QModelIndex(), first, last)
+                del self._rows[first:last + 1]
+                self.endRemoveRows()
+            new_pool = new_rows[head:]
+            came = [i for i, (_, w) in enumerate(new_pool) if w not in old_set]
+            for first, last in self._runs(came):
+                self.beginInsertRows(QModelIndex(), head + first, head + last)
+                self._rows[head + first:head + first] = new_pool[first:last + 1]
+                self.endInsertRows()
+        else:
+            if fill:  # the padding is re-cut below, around the member block's new end
+                self.beginRemoveRows(QModelIndex(), fill[0], fill[-1])
+                self._rows = [r for r in self._rows if r[0] != FILLER]
+                self.endRemoveRows()
+            gone = [i for i, (_, w) in enumerate(self._rows) if w not in new_set]
+            for first, last in reversed(self._runs(gone)):  # from the end: earlier rows keep their index
+                self.beginRemoveRows(QModelIndex(), first, last)
+                del self._rows[first:last + 1]
+                self.endRemoveRows()
+            came = [i for i, (_, w) in enumerate(new) if w not in old_set]
+            for first, last in self._runs(came):  # forward: the rows before `first` are already placed
+                self.beginInsertRows(QModelIndex(), first, last)
+                self._rows[first:first] = new[first:last + 1]
+                self.endInsertRows()
+            if fillers:
+                at = len(new_members)
+                self.beginInsertRows(QModelIndex(), at, at + fillers - 1)
+                self._rows[at:at] = [(FILLER, "")] * fillers
+                self.endInsertRows()
+        if self._rows != new_rows:  # the diff did not land: a reset is always correct
+            self._reset_fallbacks += 1
+            self.beginResetModel()
+            self._rows = new_rows
+            self.endResetModel()
+        self.memberCountChanged.emit()
+
+    @staticmethod
+    def _runs(indices: list[int]) -> list[tuple[int, int]]:
+        """Ascending indices grouped into (first, last) contiguous runs."""
+        runs: list[tuple[int, int]] = []
+        for i in indices:
+            if runs and i == runs[-1][1] + 1:
+                runs[-1] = (runs[-1][0], i)
+            else:
+                runs.append((i, i))
+        return runs
+
     def _apply(self, new_rows: list[tuple[str, str]]) -> None:
         """Move one card and re-pad the fillers when that is all that changed; else reset."""
         if new_rows == self._rows:
@@ -190,6 +326,7 @@ class LibraryOrderModel(QAbstractListModel):
         new_ids = [w for k, w in new_rows if k != FILLER]
         move = self._moved_one(old_ids, new_ids)
         if move is None:
+            self._reset_fallbacks += 1
             self.beginResetModel()
             self._rows = new_rows
             self.endResetModel()
@@ -223,6 +360,7 @@ class LibraryOrderModel(QAbstractListModel):
             self._rows[at:at] = [(FILLER, "")] * fillers
             self.endInsertRows()
         if self._rows != new_rows:  # the diff did not land: a reset is always correct
+            self._reset_fallbacks += 1
             self.beginResetModel()
             self._rows = new_rows
             self.endResetModel()
@@ -251,6 +389,7 @@ class LibraryOrderModel(QAbstractListModel):
     # --- drag (provisional order; the owner writes storage on drop) ---------------------------
     @Slot(str, result=bool)
     def beginDrag(self, wid: str) -> bool:
+        self._flush()
         row = self.rowOf(wid)
         if self._drag is not None or row < 0:
             return False
@@ -283,6 +422,7 @@ class LibraryOrderModel(QAbstractListModel):
     def dragOver(self, row: int) -> None:
         """Pointer over grid row `row` (-1: outside the grid; -2: the hairline band between the
         blocks). Rows are the filtered view; the provisional order is kept in full."""
+        self._flush()
         if self._drag is None:
             return
         d = self._drag

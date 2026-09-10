@@ -183,6 +183,8 @@ Item {
         // rounding pixel (which would clip the last row's bottom border)
         cellHeight: Math.floor(thumbH) + 34 + gap
         model: backend.orderModel
+        // row removals do not re-lay the view: a viewport left below the content returns by hand
+        onContentHeightChanged: if (root.dragId === "" && contentY > Math.max(0, contentHeight - height)) returnToBounds()
         // every delegate stays alive while a card is lifted: the drag's handler lives on the
         // lifted delegate, and the view would otherwise recycle it as the grid scrolls
         cacheBuffer: root.dragId !== "" ? Math.max(contentHeight, cellHeight * 4) : cellHeight * 4
