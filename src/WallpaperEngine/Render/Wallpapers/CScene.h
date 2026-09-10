@@ -16,6 +16,9 @@ class CObject;
 namespace WallpaperEngine::Render::Wallpapers {
 using namespace WallpaperEngine::Data::Model;
 
+// "WxH" to a size, {0,0} for anything else; the LWE_CLAMPOUTPUT test override reads through it
+[[nodiscard]] glm::ivec2 parseOutputSize (const char* text);
+
 class CScene final : public CWallpaper {
 public:
     CScene (
@@ -47,8 +50,10 @@ public:
     [[nodiscard]] glm::vec2 clampToCap (glm::vec2 size) const override;
 
     /**
-     * Dimensions of the LARGEST SINGLE OUTPUT. Output::getFullWidth/getFullHeight give
-     * the multi-output SPAN instead, so anything sized per-screen must come through here.
+     * Dimensions of the LARGEST SINGLE SCREEN the wallpaper plays on: the largest live output
+     * on the desktop, the largest monitor for a window (Output::largestScreenSize), so a bench
+     * window clamps the way the desktop does. Output::getFullWidth/getFullHeight give the
+     * multi-output SPAN instead. LWE_CLAMPOUTPUT=WxH overrides it for measurement.
      */
     [[nodiscard]] glm::ivec2 largestOutputSize () const;
     [[nodiscard]] bool isCompositeShared (int id) const { return m_sharedCompositeIds.contains (id); }

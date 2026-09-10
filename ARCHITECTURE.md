@@ -255,7 +255,8 @@ Stop means release the outputs entirely.
 The shipped answer to VRAM cost is steady-state, not pause-time: composite FBOs are
 leased from a per-scene ping-pong pool instead of dedicated per layer (`LWE_FBOPOOL=0`
 disables), sized to on-screen coverage and clamped to output size x `LWE_SSFACTOR`
-(canvas/view split, `CScene.cpp::largestOutputSize`; `LWE_CLAMPCOMPOSITES=0` exempts the
+(canvas/view split, `CScene.cpp::largestOutputSize`, which is the largest screen the wallpaper
+plays on, the largest monitor even for a bench window; `LWE_CLAMPCOMPOSITES=0` exempts the
 composites so effect chains keep their authored texel size), and mip residency can cap uploads to the
 largest live output dimension with per-frame demand expansion (on by default,
 `LWE_TEXDETAIL=full` opts out;

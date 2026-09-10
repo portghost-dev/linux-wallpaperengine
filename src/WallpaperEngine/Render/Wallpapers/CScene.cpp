@@ -1458,13 +1458,25 @@ void CScene::updateMouse (const glm::ivec4& viewport) {
 
 const Scene& CScene::getScene () const { return *this->getWallpaperData ().as<Scene> (); }
 
-glm::ivec2 CScene::largestOutputSize () const {
-    int outW = 0, outH = 0;
-
-    for (const auto& vp : this->getContext ().getOutput ().getViewports () | std::views::values) {
-	outW = std::max (outW, vp->viewport.z);
-	outH = std::max (outH, vp->viewport.w);
+glm::ivec2 WallpaperEngine::Render::Wallpapers::parseOutputSize (const char* text) {
+    if (text == nullptr) {
+	return { 0, 0 };
     }
+    int w = 0, h = 0;
+    char tail = 0;
+    if (sscanf (text, "%dx%d%c", &w, &h, &tail) != 2 || w < 1 || h < 1) {
+	return { 0, 0 };
+    }
+    return { w, h };
+}
+
+glm::ivec2 CScene::largestOutputSize () const {
+    static const glm::ivec2 override_ = parseOutputSize (getenv ("LWE_CLAMPOUTPUT"));
+    if (override_.x > 0) {
+	return override_;
+    }
+    const glm::ivec2 screen = this->getContext ().getOutput ().largestScreenSize ();
+    int outW = screen.x, outH = screen.y;
 
     if (outW <= 0 || outH <= 0) {
 	outW = this->getContext ().getOutput ().getFullWidth ();

@@ -1,4 +1,7 @@
 #include "Output.h"
+#include "OutputViewport.h"
+
+#include <algorithm>
 
 using namespace WallpaperEngine::Render::Drivers::Output;
 
@@ -9,3 +12,12 @@ const std::map<std::string, OutputViewport*>& Output::getViewports () const { re
 int Output::getFullWidth () const { return this->m_fullWidth; }
 
 int Output::getFullHeight () const { return this->m_fullHeight; }
+
+glm::ivec2 Output::largestScreenSize () const {
+    glm::ivec2 best { 0, 0 };
+    for (const auto& [name, viewport] : this->m_viewports) {
+	best.x = std::max (best.x, viewport->viewport.z);
+	best.y = std::max (best.y, viewport->viewport.w);
+    }
+    return best;
+}

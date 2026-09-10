@@ -4,6 +4,7 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <unistd.h>
 
 using namespace WallpaperEngine::Render::Drivers::Output;
@@ -52,6 +53,22 @@ bool GLFWWindowOutput::haveImageBuffer () const { return false; }
 void* GLFWWindowOutput::getImageBuffer () const { return nullptr; }
 
 uint32_t GLFWWindowOutput::getImageBufferSize () const { return 0; }
+
+glm::ivec2 GLFWWindowOutput::largestScreenSize () const {
+    // the monitors, not the window: a windowed run clamps to the screen it will play on
+    int count = 0;
+    GLFWmonitor** monitors = glfwGetMonitors (&count);
+    glm::ivec2 best { 0, 0 };
+    for (int i = 0; monitors != nullptr && i < count; i++) {
+	const GLFWvidmode* mode = glfwGetVideoMode (monitors [i]);
+	if (mode == nullptr) {
+	    continue;
+	}
+	best.x = std::max (best.x, mode->width);
+	best.y = std::max (best.y, mode->height);
+    }
+    return best.x > 0 && best.y > 0 ? best : Output::largestScreenSize ();
+}
 
 void GLFWWindowOutput::updateRender () const {
     // Track the current framebuffer dimensions regardless of window mode so
