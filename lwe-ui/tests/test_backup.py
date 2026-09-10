@@ -5,6 +5,7 @@ that does not exist here is re-resolved, a newer format is refused, the export i
 and the importer keeps a pre-seeded override's user keys at first arrival only."""
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket and the host probes before any lwe_ui import)
 import json
 import os
 import shutil
@@ -57,7 +58,8 @@ def main() -> None:
         conf111 = tier_a.parse(z.read("wp/111.conf").decode())
         assert conf111 == {"BG": "111", "SPEED": "2.5", "PROP_hue": "0.3"}, \
             "only the keys the file carried travel, the library folder as the id"
-    assert r["counts"] == {"playlists": 1, "overrides": 2, "tags": 2, "favourites": 1, "rules": 1}, r["counts"]
+    assert r["counts"] == {"theme": 1, "overlays": 0, "discovery": 0, "playlists": 1, "overrides": 2,
+                           "tags": 2, "favourites": 1, "rules": 1}, r["counts"]
 
     # --- a fresh machine: the old library is gone, a different one has one wallpaper, and
     # the file carries a retired key, a renamed key, an unknown key and a bad value
@@ -121,8 +123,9 @@ def main() -> None:
     assert {r["id"] for r in tags.load()} == {"111"}, "no tag row for a wallpaper with no folder"
     assert meta.get("111").get("favorite") is True
     assert (paths.config_dir() / "pause-blacklist.txt").read_text() == "game.exe\n"
-    from lwe_ui.storage import theme_cfg
-    assert "glow" not in theme_cfg.load()
+    from lwe_ui.storage import themes
+    import json as _json
+    assert "glow" not in _json.loads(paths.theme_file().read_text(encoding="utf-8")), "the file carries no unknown key"
     line = backup.receipt_line(r2)
     assert line.startswith("Restored 1 playlist, 2 overrides, 1 tag · 2 waiting for wallpapers · "), line
     assert line.endswith("dropped"), line

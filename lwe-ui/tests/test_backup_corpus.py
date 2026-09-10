@@ -1,0 +1,349 @@
+"""The corpus invariant: every archive under tests/fixtures/backups/ still restores whole.
+
+For each archive, restored into a fresh sandbox whose library holds only some of its
+wallpapers: no receipt error, no Python warning, no dropped entry the RETIRED table does not
+name, every value the generator wrote back verbatim (or under its new name through RENAMES),
+every override's set-ness kept key for key, and the newest generation carrying every key the
+current schemas define, so adding a key without regenerating the corpus fails by its name.
+
+The expected values are the generator's own record (tests/corpus/make_corpus.py), never a
+hand-written list. EXPECTED below names the cases the shipped code cannot satisfy yet; a
+case that starts passing fails this suite, so the entry is deleted with the fix.
+"""
+from __future__ import annotations
+
+import _sandbox  # noqa: F401  (must stay the first project import)
+import csv
+import io
+import json
+import os
+import shutil
+import sys
+import tempfile
+import warnings
+import zipfile
+from pathlib import Path
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
+
+FIXTURES = Path(__file__).resolve().parent / "fixtures" / "backups"
+
+#: Findings, not licences: the case, and why the shipped code loses it.
+EXPECTED = {
+    ("rules", "tab"): "preflight drops a rule line that is not isprintable (a tab) and "
+                      "does not name it in the receipt",
+}
+
+#: receipt "kind" -> the store whose RETIRED/RENAMES table governs it
+STORE_OF_KIND = {"setting": "settings", "theme": "theme", "override": "wp",
+                 "override-key": "wp", "playlist": "playlists", "playlist-members": "playlists",
+                 "tag": "tags"}
+
+
+def _retired(store: str, key: str) -> bool:
+    from lwe_ui import constants as C
+    return key in C.RETIRED.get(store, {})
+
+
+def _renamed(store: str, key: str):
+    """The key's current name and the function that carries its value, from RENAMES."""
+    from lwe_ui import constants as C
+    entry = C.RENAMES.get(store, {}).get(key)
+    if entry is None:
+        return key, None
+    if isinstance(entry, (tuple, list)):
+        return entry[0], (entry[1] if len(entry) > 1 else None)
+    return entry, None
+
+
+def _expected(store: str, key: str, want):
+    """(current name, expected value) for a stored key, or None when it is retired."""
+    if _retired(store, key):
+        return None
+    new, fn = _renamed(store, key)
+    return new, (fn(want) if fn else want)
+
+
+class Run:
+    """One archive's restore and the failures it produced."""
+
+    def __init__(self, archive: Path, record: dict):
+        self.archive, self.record = archive, record
+        self.receipt: dict = {}
+        self.failures: list[str] = []
+        self.expected_hit: set[tuple[str, str]] = set()
+
+    def fail(self, case: tuple[str, str] | None, msg: str) -> None:
+        if case is not None and case in EXPECTED:
+            self.expected_hit.add(case)
+            return
+        self.failures.append(msg)
+
+    def passes(self, case: tuple[str, str]) -> None:
+        """A case EXPECTED to fail that did not: the entry has to go."""
+        if case in EXPECTED:
+            self.failures.append(
+                f"expected failure {case[0]}:{case[1]} no longer reproduces - delete its "
+                f"EXPECTED entry ({EXPECTED[case]})")
+
+
+def _sandbox(home: str, present: list[str]) -> str:
+    os.environ["XDG_CONFIG_HOME"] = os.path.join(home, "config")
+    os.environ["XDG_STATE_HOME"] = os.path.join(home, "state")
+    os.environ["XDG_DATA_HOME"] = os.path.join(home, "data")
+    lib = os.path.join(home, "wallpapers")
+    for wid in present:
+        os.makedirs(os.path.join(lib, wid), exist_ok=True)
+    from lwe_ui.storage import themes, paths, settings
+    paths.ensure_dirs()
+    settings.ensure_exists()
+    settings.save({**settings.load(), "WALLPAPERS_DIR": lib})
+    return lib
+
+
+def _check_settings(run: Run) -> None:
+    from lwe_ui import constants as C
+    from lwe_ui.storage import settings
+    got = settings.load()
+    machine = {k for k, s in C.SETTINGS_SCHEMA.items() if s["type"] == "path"}
+    reresolved = {x["key"] for x in run.receipt.get("reresolved", [])}
+    for key, want in run.record["settings"].items():
+        exp = _expected("settings", key, want)
+        if exp is None:
+            continue
+        name, value = exp
+        if key in machine:
+            if got.get(name) != value and name not in reresolved:
+                run.fail(None, f"settings {name}: this machine's value {got.get(name)!r} "
+                               f"replaced {value!r} without saying so in reresolved")
+            continue
+        if name not in got:
+            run.fail(("setting", key), f"settings {name}: gone after the restore (wrote {value!r})")
+        elif got[name] != value:
+            run.fail(("setting", key),
+                     f"settings {name}: wrote {value!r}, restored {got[name]!r}")
+
+
+def _check_theme(run: Run) -> None:
+    from lwe_ui.storage import themes
+    got = {k: v for k, v in themes.load_config().items() if k in themes.CONFIG_KEYS}
+    for key, want in run.record["theme"].items():
+        exp = _expected("theme", key, want)
+        if exp is None:
+            continue
+        name, value = exp
+        if name not in got:
+            run.fail(("theme", key), f"theme {name}: gone after the restore (wrote {value!r})")
+        elif got[name] != value:
+            run.fail(("theme", key), f"theme {name}: wrote {value!r}, restored {got[name]!r}")
+        else:
+            run.passes(("theme", key))
+
+
+def _check_discovery(run: Run) -> None:
+    from lwe_ui.storage import discover_cfg
+    got = discover_cfg.load()
+    for key, want in run.record.get("discovery", {}).items():
+        exp = _expected("discovery", key, want)
+        if exp is None:
+            continue
+        name, value = exp
+        if got.get(name) != value:
+            run.fail(("discovery", key), f"discovery {name}: wrote {value!r}, restored {got.get(name)!r}")
+        else:
+            run.passes(("discovery", key))
+
+
+def _check_playlists(run: Run) -> None:
+    from lwe_ui.storage import playlists
+    for slug, want in run.record["playlists"].items():
+        got = playlists.load(slug)
+        for key, value in want.items():
+            exp = _expected("playlists", key, value)
+            if exp is None:
+                continue
+            name, expect = exp
+            if got.get(name) != expect:
+                run.fail(("playlist", slug),
+                         f"playlist {slug} {name}: wrote {expect!r}, restored {got.get(name)!r}")
+
+
+def _check_overrides(run: Run) -> None:
+    from lwe_ui.storage import paths, tier_a
+    for wid, entry in run.record["overrides"].items():
+        want = {}
+        for key, value in entry["keys"].items():
+            exp = _expected("wp", key, value)
+            if exp is not None:
+                want[exp[0]] = exp[1]
+        path = paths.wp_file(wid)
+        if not path.exists():
+            run.fail(("override", wid), f"override {wid} ({entry['kind']}): no file after the "
+                                        f"restore, {len(want)} keys lost")
+            continue
+        got = tier_a.parse(path.read_text(encoding="utf-8"))
+        for key in sorted(set(want) - set(got)):
+            run.fail(("override-key", f"{wid}:{key}"),
+                     f"override {wid} ({entry['kind']}) {key}: gone, wrote {want[key]!r}")
+        for key in sorted(set(got) - set(want)):
+            run.fail(("override-key", f"{wid}:{key}"),
+                     f"override {wid} ({entry['kind']}) {key}: appeared as {got[key]!r}, the "
+                     f"file never carried it (set-ness broken)")
+        for key in sorted(set(got) & set(want)):
+            if got[key] != want[key]:
+                run.fail(("override-key", f"{wid}:{key}"),
+                         f"override {wid} ({entry['kind']}) {key}: wrote {want[key]!r}, "
+                         f"restored {got[key]!r}")
+
+
+def _check_tags(run: Run) -> None:
+    from lwe_ui.storage import tags
+    got = {r["id"]: r for r in tags.load() if r.get("id")}
+    held = sum(h.get("count", 0) for h in run.receipt.get("held", []) if h["kind"] == "tags")
+    present = set(run.record["library_present"])
+    for row in run.record["tags"]:
+        wid = row["id"]
+        if wid not in got:
+            if wid in present or not held:
+                run.fail(("tag", wid), f"tag {wid} ({row['state']}): gone after the restore and "
+                                       f"not held")
+            continue
+        for field in ("title", "state"):
+            if got[wid].get(field) != row[field]:
+                run.fail(("tag", wid), f"tag {wid} {field}: wrote {row[field]!r}, restored "
+                                       f"{got[wid].get(field)!r}")
+
+
+def _check_meta(run: Run) -> None:
+    from lwe_ui.storage import meta
+    got = meta.load()
+    for wid, entry in run.record["meta"].items():
+        for key, value in entry.items():
+            if got.get(wid, {}).get(key) != value:
+                run.fail(("meta", wid), f"meta {wid} {key}: wrote {value!r}, restored "
+                                        f"{got.get(wid, {}).get(key)!r}")
+
+
+def _check_rules(run: Run) -> None:
+    from lwe_ui.storage import paths
+    for name, lines in run.record["rules"].items():
+        path = paths.config_dir() / name
+        got = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        for line in lines:
+            case = ("rules", "tab") if "\t" in line else ("rules", name)
+            if line in got:
+                run.passes(case)
+            else:
+                run.fail(case, f"rule {name}: line {line!r} did not survive the restore")
+
+
+def _check_dropped(run: Run) -> None:
+    for d in run.receipt.get("dropped", []):
+        kind, ident = d.get("kind", "?"), str(d.get("id", "?"))
+        store = STORE_OF_KIND.get(kind, kind)
+        key = ident.split(":", 1)[1] if kind == "override-key" and ":" in ident else ident
+        if _retired(store, key):
+            continue
+        run.fail((kind, ident), f"dropped {kind} {ident}: {d.get('reason')} - a drop is legal "
+                                f"only where constants.RETIRED[{store!r}] names the key")
+
+
+def _check_newest_covers_schema(records: dict[Path, dict], failures: list[str]) -> None:
+    """The newest generation must carry every key the current schemas define."""
+    from lwe_ui import constants as C
+    from lwe_ui.storage import tags, tier_a
+    newest = max(r["generated"] for r in records.values())
+    for archive, record in sorted(records.items()):
+        if record["generated"] != newest:
+            continue
+        with zipfile.ZipFile(archive) as z:
+            names = set(z.namelist())
+            have = {"settings": set(tier_a.parse(z.read("settings.conf").decode("utf-8"))),
+                    "wp": set(), "playlists": set(), "theme": set(), "discovery": set(),
+                    "tag_states": set()}
+            for n in names:
+                if n.startswith("wp/"):
+                    have["wp"] |= set(tier_a.parse(z.read(n).decode("utf-8")))
+                elif n.startswith("playlists/"):
+                    have["playlists"] |= set(tier_a.parse(z.read(n).decode("utf-8")))
+            if "theme.json" in names:
+                have["theme"] = set(json.loads(z.read("theme.json").decode("utf-8")))
+            if "discover.json" in names:
+                have["discovery"] = set(json.loads(z.read("discover.json").decode("utf-8")))
+            if "tags.csv" in names:
+                rows = csv.DictReader(io.StringIO(z.read("tags.csv").decode("utf-8")))
+                have["tag_states"] = {str(r.get("state") or "").strip() for r in rows}
+        from lwe_ui.storage import themes
+        wanted = {"settings": set(C.SETTINGS_SCHEMA), "wp": set(C.WP_SCHEMA),
+                  "playlists": set(C.PLAYLIST_SCHEMA), "theme": set(themes.CONFIG_KEYS),
+                  "discovery": set(C.DISCOVER_DEFAULTS), "tag_states": set(tags._VALID_STATES)}
+        for store, keys in wanted.items():
+            missing = sorted(k for k in keys - have[store] if not _retired(store, k))
+            if missing:
+                failures.append(f"{archive.name}: the newest corpus does not carry "
+                                f"{store} {', '.join(missing)} - regenerate it with "
+                                f"PYTHONPATH=src python3 tests/corpus/make_corpus.py")
+
+
+def main() -> None:
+    archives = sorted(FIXTURES.glob("*.lwebackup"))
+    if not archives:
+        raise SystemExit(f"no corpus archives under {FIXTURES}; generate them with "
+                         f"PYTHONPATH=src python3 tests/corpus/make_corpus.py")
+    from lwe_ui.storage import backup
+
+    failures: list[str] = []
+    expected_hit: set[tuple[str, str]] = set()
+    records: dict[Path, dict] = {}
+    for archive in archives:
+        side = archive.with_suffix(".json")
+        if not side.exists():
+            failures.append(f"{archive.name}: no {side.name} beside it; every archive carries "
+                            f"the generator's record of what was written")
+            continue
+        record = json.loads(side.read_text(encoding="utf-8"))
+        records[archive] = record
+        run = Run(archive, record)
+        home = tempfile.mkdtemp(prefix="lwe-corpus-restore-")
+        _sandbox(home, record["library_present"])
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            pre = backup.preflight(str(archive))
+            run.receipt = backup.apply(pre)
+        for w in caught:
+            run.fail(None, f"warning during the restore: {w.category.__name__}: {w.message}")
+        for e in run.receipt.get("errors", []):
+            run.fail(None, f"receipt error on {e.get('file')}: {e.get('reason')}")
+        if not run.receipt.get("held"):
+            run.fail(None, "nothing was held: this archive no longer exercises the path where "
+                           "the library is missing wallpapers the backup carries")
+        _check_dropped(run)
+        _check_settings(run)
+        _check_theme(run)
+        _check_discovery(run)
+        _check_playlists(run)
+        _check_overrides(run)
+        _check_tags(run)
+        _check_meta(run)
+        _check_rules(run)
+        expected_hit |= run.expected_hit
+        failures += [f"{archive.name}: {f}" for f in run.failures]
+        shutil.rmtree(home, ignore_errors=True)
+
+    if records:
+        _check_newest_covers_schema(records, failures)
+    for case in sorted(set(EXPECTED) - expected_hit):
+        failures.append(f"expected failure {case[0]}:{case[1]} never reproduced - delete its "
+                        f"EXPECTED entry ({EXPECTED[case]})")
+    if failures:
+        print(f"corpus invariant broken, {len(failures)} finding(s):")
+        for f in failures:
+            print("  " + f)
+        raise SystemExit(1)
+    known = ", ".join(f"{a}:{b}" for a, b in sorted(EXPECTED))
+    print(f"OK backup corpus: {len(archives)} archive(s) restored whole; "
+          f"known losses still pinned: {known}")
+
+
+if __name__ == "__main__":
+    main()

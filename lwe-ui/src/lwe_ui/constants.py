@@ -140,6 +140,18 @@ SETTINGS_SCHEMA: dict[str, dict] = {
     "OVERRIDE_MOUSE_OFF": {"type": "bool", "default": False},
 }
 
+# Reach classes: how far a settings key's new value travels and when it lands. Read by the
+# Settings surface for the row's reach word and by the backup importer, which decides the
+# engine-restart follow-up here so that a restore runs without Qt.
+REACH_NEXT_SHOW = ("ENGINE_SCALING", "ENGINE_CLAMP", "AUTOMUTE_DEFAULT")
+REACH_SERVICE_RESTART = ("ENGINE_LAYER", "ENGINE_HWDEC", "ENGINE_TEXCOMP", "TEXTURE_DETAIL",
+                         "RENDER_RESOLUTION", "ASSETS_DIR")
+REACH_PANEL = ("CLOSE_TO_TRAY", "STEAM_DIR", "INTERFACE_SCALE")
+REACH_BOUNDARY = ("SCHEDULE_ENABLED", "SCHEDULE")
+REACH_NEXT_SCAN = ("WORKSHOP_DIR", "WALLPAPERS_DIR")
+REACH_RE_ARM = ("DETECT_MODE", "DETECT_INTERVAL_SEC")
+REACH_NEXT_IMPORT = ("REVIEW_REQUIRED", "STORAGE_POLICY")
+
 # --------------------------------------------------------------------------------------
 # wp/<id>.conf schema (Tier A). PROP_<name> keys are dynamic (not listed here).
 # The config key CLAMPING is kept as the spec names it; it maps to the engine flag --clamp.
@@ -188,6 +200,19 @@ PLAYLIST_SCHEMA: dict[str, dict] = {
     "MEMBERS": {"type": "str", "default": ""},
 }
 DEFAULT_PLAYLIST_NAME = "All wallpapers"
+
+# Keys a store has stopped carrying: {store: {key: reason}}. Dropping a key is legal only
+# where this names it; stage 2 populates it and applies it at both doors (load and import).
+RETIRED: dict[str, dict[str, str]] = {
+    "theme": {
+        "preset": "the theme moved to the live store (active + overlays) and this key no longer exists",
+        "accent": "the theme moved to the live store (active + overlays) and this key no longer exists",
+        "followSystem": "the theme moved to the live store (active + overlays) and this key no longer exists",
+    },
+}
+# Keys that changed name: {store: {old: (new, value_fn or None)}}. A meaning change is a
+# rename by rule. Stage 2 populates it and applies it at both doors.
+RENAMES: dict[str, dict[str, tuple]] = {}
 
 DISCOVER_DEFAULTS = {"apiKey": "", "acquireMethod": "client", "steamcmdPath": ""}
 THEME_DEFAULTS = {"preset": "True Black", "accent": "", "followSystem": False}

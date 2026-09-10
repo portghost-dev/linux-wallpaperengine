@@ -3,6 +3,7 @@ moves the panel's files into place and names the dead ones without deleting them
 log written in real time, and a Developer slot's log appended as its lines arrive."""
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket and the host probes before any lwe_ui import)
 import os
 import sys
 import tempfile

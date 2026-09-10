@@ -1,21 +1,22 @@
 """Configuration backup: one `.lwebackup` file, a zip with a manifest.
 
 What travels is what the user authored and the app cannot regenerate: settings, theme,
-playlists, per-wallpaper overrides, tags, favourites and the app rules. Nothing generated
-travels (the engine env file, caches, state, logs).
+discovery, playlists, per-wallpaper overrides, tags, favourites and the app rules. Nothing
+generated travels (the engine env file, caches, state, logs).
+
+This module owns the archive, not the list of what goes in it: every store declares its own
+Store record and `registry.STORES` collects them, so a store added later reaches the backup
+by declaring itself and is caught by test_store_ownership when it does not. Settings are
+first in that order because every other store's plan is decided against the settings the
+import would leave.
 
 Durability across builds comes from the schemas, not from the files. Import never extracts
-a file: settings go through the same migrations and coercion a normal load applies,
-playlists through their validator, overrides key by key against the override schema with
-their set-ness kept (a key the file does not carry stays absent, so it keeps inheriting the
-global), theme keys against the theme's defaults, tags against the tag states. Unknown
-keys are dropped and named. The rule files are line lists with no schema and travel as
-lines. The manifest carries a format version so a future breaking change is refused with a
-plain reason instead of mangled.
+a file: each store reads its member through the same validators a normal load applies, and
+unknown keys are dropped and named. The manifest carries a format version so a future
+breaking change is refused with a plain reason instead of mangled.
 """
 from __future__ import annotations
 
-import csv
 import datetime
 import io
 import json
@@ -25,15 +26,11 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from .. import constants as C
-from . import atomic, meta, paths, playlists, settings, tags, theme_cfg, tier_a, wp
+from . import paths, registry, settings
 
 FORMAT = 1
 EXTENSION = ".lwebackup"
 MANIFEST = "manifest.json"
-RULE_FILES = ("app-condition.txt", "pause-blacklist.txt", "pause-whitelist.txt")
-#: settings keys that name this machine's folders and binary: kept only when they resolve here
-MACHINE_KEYS = ("ENGINE_BIN", "ASSETS_DIR", "WALLPAPERS_DIR", "WORKSHOP_DIR", "STEAM_DIR")
 
 
 def default_name() -> str:
@@ -45,87 +42,22 @@ def _receipt(kind: str) -> dict[str, Any]:
             "reresolved": [], "followups": [], "errors": []}
 
 
-def _override_header(wid: str) -> str:
-    return f"lwe wallpaper override {wid} (Tier A)"
-
-
 # --- export ---------------------------------------------------------------------------
-
-def _portable_bg(wid: str, bg: str) -> str:
-    """A folder that is this library's own copy travels as the bare id, which the app
-    resolves against the library folder; a referenced folder travels as it is."""
-    if bg and os.path.isabs(bg) and os.path.basename(bg.rstrip("/")) == wid:
-        return wid
-    return bg
-
-
-def _override_text(wid: str, text: str) -> str:
-    """An override as it travels: the keys the file carries and nothing more, so set-ness
-    (a present key overrides, an absent key inherits) survives the round trip."""
-    raw = tier_a.parse(text)
-    kept = {k: v for k, v in raw.items()
-            if k in C.WP_SCHEMA or (k.startswith(C.WP_PROP_PREFIX) and len(k) > len(C.WP_PROP_PREFIX))}
-    if "BG" in kept:
-        kept["BG"] = _portable_bg(wid, kept["BG"])
-    return tier_a.serialize(kept, header=_override_header(wid))
-
 
 def export_to(path: str | Path) -> dict[str, Any]:
     r = _receipt("export")
     r["path"] = str(path)
     buf = io.BytesIO()
-    counts: dict[str, int] = {"playlists": 0, "overrides": 0, "tags": 0, "favourites": 0, "rules": 0}
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        s = settings.load()
-        z.writestr("settings.conf", tier_a.serialize(settings._to_text(s), header="lwe settings backup"))
-        try:
-            z.writestr("theme.json", json.dumps(theme_cfg.load(), indent=1))
-        except Exception as exc:  # a theme that will not load is not the backup's fault
-            r["errors"].append({"file": "theme.json", "reason": str(exc)})
-        for pl in playlists.list_playlists():
-            slug = str(pl.get("slug") or "")
-            if not slug:
-                continue
-            d = playlists.load(slug)
-            z.writestr(f"playlists/{slug}.conf",
-                       tier_a.serialize({k: str(d[k]) for k in C.PLAYLIST_SCHEMA}, header="lwe playlist"))
-            counts["playlists"] += 1
-        for conf in sorted(paths.wp_dir().glob("*.conf")):
-            wid = conf.stem
-            if not paths.is_safe_wid(wid):
-                continue
-            try:
-                z.writestr(f"wp/{wid}.conf", _override_text(wid, conf.read_text(encoding="utf-8")))
-            except (OSError, ValueError) as exc:
-                r["errors"].append({"file": conf.name, "reason": str(exc)})
-                continue
-            counts["overrides"] += 1
-        rows = tags.load()
-        out = io.StringIO()
-        w = csv.writer(out)
-        w.writerow(tags.HEADER)
-        for row in rows:
-            w.writerow([row.get("id", ""), row.get("title", ""), row.get("state", "")])
-        z.writestr("tags.csv", out.getvalue())
-        counts["tags"] = len(rows)
-        m = meta.load()
-        z.writestr("meta.json", json.dumps(m, indent=1))
-        counts["favourites"] = sum(1 for v in m.values() if isinstance(v, dict) and v.get("favorite"))
-        for name in RULE_FILES:
-            p = paths.config_dir() / name
-            if p.is_file():
-                try:
-                    z.writestr(f"rules/{name}", p.read_text(encoding="utf-8"))
-                    counts["rules"] += 1
-                except OSError as exc:
-                    r["errors"].append({"file": name, "reason": str(exc)})
+        for st in registry.STORES:
+            st.export(z, r)
         manifest = {
             "format": FORMAT,
             "app": "lwe-ui",
             "created": datetime.datetime.now().isoformat(timespec="seconds"),
             "host": socket.gethostname(),
-            "counts": counts,
-            "machine_keys": list(MACHINE_KEYS),
+            "counts": r["counts"],
+            "machine_keys": list(settings.MACHINE_KEYS),
         }
         z.writestr(MANIFEST, json.dumps(manifest, indent=1))
     # temp beside the target then rename: a failure mid-write never leaves a truncated
@@ -134,7 +66,6 @@ def export_to(path: str | Path) -> dict[str, Any]:
     tmp = target.with_name(target.name + ".part")
     tmp.write_bytes(buf.getvalue())
     os.replace(tmp, target)
-    r["counts"] = counts
     return r
 
 
@@ -158,180 +89,33 @@ def _read_manifest(z: zipfile.ZipFile) -> dict[str, Any]:
     return m
 
 
-def _wallpaper_present(wid: str, cfg: dict[str, Any]) -> bool:
-    root = str(cfg.get("WALLPAPERS_DIR") or "")
-    return bool(root) and os.path.isdir(os.path.join(root, wid))
-
-
-def _override_value_ok(spec: dict, raw: str) -> bool:
-    """Whether a stored override value is one this build can hold for that key."""
-    t = spec["type"]
-    s = str(raw).strip()
-    try:
-        if t == "int":
-            int(s)
-        elif t == "int_or_empty":
-            if s:
-                int(s)
-        elif t == "float":
-            v = float(s)
-            lo, hi = spec.get("min"), spec.get("max")
-            if (lo is not None and v < lo) or (hi is not None and v > hi):
-                return False
-        elif t == "enum":
-            return s in spec.get("choices", ())
-        elif t == "enum_or_empty":
-            return s == "" or s in spec.get("choices", ())
-    except (ValueError, TypeError):
-        return False
-    return True
-
-
 def preflight(path: str | Path) -> dict[str, Any]:
     """Everything the import will do, decided before anything is written."""
     r = _receipt("import")
     r["path"] = str(path)
-    plan: dict[str, Any] = {"settings": {}, "theme": None, "playlists": {}, "overrides": {},
-                            "tags": [], "meta": {}, "rules": {}}
+    plan: dict[str, Any] = {}
     r["plan"] = plan
     try:
         z = zipfile.ZipFile(str(path))
     except (OSError, zipfile.BadZipFile):
         r["errors"].append({"file": os.path.basename(str(path)), "reason": "That file is not an LWE backup."})
+        r["refused"] = True
         return r
     with z:
         try:
             r["manifest"] = _read_manifest(z)
         except ValueError as exc:
             r["errors"].append({"file": MANIFEST, "reason": str(exc)})
+            r["refused"] = True
             return r
-        names = set(z.namelist())
         current = settings.load()
-
-        # settings: the same migrations and coercion a normal load applies; unknown keys
-        # are dropped and named
-        if "settings.conf" in names:
-            raw = settings.migrate_raw(tier_a.parse(z.read("settings.conf").decode("utf-8", "replace")))
-            known = {k: v for k, v in raw.items() if k in C.SETTINGS_SCHEMA}
-            for k in raw:
-                if k not in C.SETTINGS_SCHEMA:
-                    r["dropped"].append({"kind": "setting", "id": k, "reason": "unknown to this version"})
-            coerced = settings._validate({k: settings._coerce(k, v, C.SETTINGS_SCHEMA[k]) for k, v in known.items()})
-            for key in MACHINE_KEYS:
-                if key not in coerced:
-                    continue
-                want = str(coerced[key])
-                have = str(current.get(key, ""))
-                if want and want != have and not os.path.exists(want):
-                    r["reresolved"].append({"key": key, "from": want, "to": have})
-                    coerced[key] = current.get(key, "")
-            plan["settings"] = coerced
-        else:
-            r["errors"].append({"file": "settings.conf", "reason": "The backup carries no settings."})
-            return r
-
-        if "theme.json" in names:
-            try:
-                t = json.loads(z.read("theme.json").decode("utf-8"))
-            except ValueError:
-                t = None
-                r["errors"].append({"file": "theme.json", "reason": "not readable, skipped"})
-            if isinstance(t, dict):
-                plan["theme"] = {k: v for k, v in t.items() if k in C.THEME_DEFAULTS}
-                for k in t:
-                    if k not in C.THEME_DEFAULTS:
-                        r["dropped"].append({"kind": "theme", "id": k, "reason": "unknown to this version"})
-
-        cfg_after = {**current, **plan["settings"]}
-        for n in sorted(names):
-            if n.startswith("playlists/") and n.endswith(".conf"):
-                slug = n[len("playlists/"):-5]
-                if not slug or playlists.slugify(slug) != slug:
-                    r["dropped"].append({"kind": "playlist", "id": slug, "reason": "bad name"})
-                    continue
-                raw = tier_a.parse(z.read(n).decode("utf-8", "replace"))
-                d = playlists._validate({k: playlists._coerce(k, raw[k], s) if k in raw else s["default"]
-                                         for k, s in C.PLAYLIST_SCHEMA.items()})
-                missing = [m for m in str(d["MEMBERS"]).split() if not _wallpaper_present(m, cfg_after)]
-                if missing:
-                    r["held"].append({"kind": "playlist-members", "id": slug, "count": len(missing)})
-                plan["playlists"][slug] = d
-            elif n.startswith("wp/") and n.endswith(".conf"):
-                wid = n[3:-5]
-                if not paths.is_safe_wid(wid):
-                    r["dropped"].append({"kind": "override", "id": wid, "reason": "bad id"})
-                    continue
-                raw = tier_a.parse(z.read(n).decode("utf-8", "replace"))
-                kept: dict[str, str] = {}
-                for k, v in raw.items():
-                    if k in C.WP_SCHEMA:
-                        if _override_value_ok(C.WP_SCHEMA[k], v):
-                            kept[k] = str(v)
-                        else:
-                            r["dropped"].append({"kind": "override-key", "id": f"{wid}:{k}", "reason": "not a value this version holds"})
-                    elif k.startswith(C.WP_PROP_PREFIX) and tier_a.is_valid_key(k):
-                        kept[k] = str(v)
-                    else:
-                        r["dropped"].append({"kind": "override-key", "id": f"{wid}:{k}", "reason": "unknown to this version"})
-                bg = kept.get("BG", "")
-                if bg and os.path.isabs(bg) and not os.path.isdir(bg):
-                    r["reresolved"].append({"key": f"override {wid} folder", "from": bg, "to": wid})
-                    kept["BG"] = wid
-                if not kept.get("BG"):
-                    kept["BG"] = wid
-                if not _wallpaper_present(wid, cfg_after):
-                    r["held"].append({"kind": "override", "id": wid})
-                plan["overrides"][wid] = kept
-            elif n.startswith("rules/"):
-                name = n[len("rules/"):]
-                if name in RULE_FILES:
-                    lines = [ln.rstrip("\r") for ln in z.read(n).decode("utf-8", "replace").splitlines()]
-                    plan["rules"][name] = "".join(ln + "\n" for ln in lines if ln.strip() and ln.isprintable())
-
-        # tags: a row for a wallpaper not in the library would put a card with no folder in
-        # the grid, so those rows wait; importing the backup again after the wallpapers
-        # arrive restores them
-        held_tags = 0
-        if "tags.csv" in names:
-            reader = csv.DictReader(io.StringIO(z.read("tags.csv").decode("utf-8", "replace")))
-            for row in reader:
-                wid = str(row.get("id") or "").strip()
-                state = str(row.get("state") or "").strip()
-                if not paths.is_safe_wid(wid) or state not in tags._VALID_STATES:
-                    r["dropped"].append({"kind": "tag", "id": wid or "?", "reason": "bad row"})
-                    continue
-                if not _wallpaper_present(wid, cfg_after):
-                    held_tags += 1
-                    continue
-                plan["tags"].append({"id": wid, "title": str(row.get("title") or ""), "state": state})
-        if held_tags:
-            r["held"].append({"kind": "tags", "count": held_tags})
-        if "meta.json" in names:
-            try:
-                m = json.loads(z.read("meta.json").decode("utf-8"))
-                plan["meta"] = {k: v for k, v in m.items() if isinstance(v, dict) and paths.is_safe_wid(str(k))}
-            except ValueError:
-                r["errors"].append({"file": "meta.json", "reason": "not readable, skipped"})
-
-        held_over = sum(1 for h in r["held"] if h["kind"] == "override")
-        r["counts"] = {
-            "playlists": len(plan["playlists"]),
-            "overrides": len(plan["overrides"]),
-            "overrides_held": held_over,
-            "tags": len(plan["tags"]),
-            "tags_held": held_tags,
-            "favourites": sum(1 for v in plan["meta"].values() if v.get("favorite")),
-            "rules": len(plan["rules"]),
-        }
-        # follow-ups: what a changed setting implies, decided from the diff
-        s_after = plan["settings"]
-        if "INTERFACE_SCALE" in s_after and int(s_after["INTERFACE_SCALE"]) != int(current.get("INTERFACE_SCALE", 100)):
-            r["followups"].append({"kind": "relaunch", "state": "pending"})
-        from ..settings_bridge import _CLASS_SERVICE_RESTART
-        if any(k in s_after and s_after[k] != current.get(k) for k in _CLASS_SERVICE_RESTART):
-            r["followups"].append({"kind": "engine-restart", "state": "pending"})
-        if any(k in s_after and s_after[k] != current.get(k) for k in ("WALLPAPERS_DIR", "WORKSHOP_DIR")):
-            r["followups"].append({"kind": "rescan", "state": "pending"})
+        for st in registry.STORES:
+            # what this build's settings would be after the import: the library every later
+            # store holds its members against
+            cfg_after = {**current, **(plan.get("settings") or {})}
+            if not st.preflight(z, r, plan, cfg_after):
+                r["refused"] = True
+                return r
     return r
 
 
@@ -343,47 +127,9 @@ def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
     if r["errors"] and not plan.get("settings"):
         return r
     paths.ensure_dirs()
-    try:
-        settings.save({**settings.load(), **plan["settings"]})
-    except Exception as exc:
-        r["errors"].append({"file": "settings.conf", "reason": str(exc)})
-        return r
-    if plan.get("theme"):
-        try:
-            theme_cfg.save({**theme_cfg.load(), **plan["theme"]})
-        except Exception as exc:
-            r["errors"].append({"file": "theme.json", "reason": str(exc)})
-    for slug, d in plan["playlists"].items():
-        try:
-            playlists.save(slug, d)
-        except Exception as exc:
-            r["errors"].append({"file": f"playlists/{slug}.conf", "reason": str(exc)})
-    for wid, kept in plan["overrides"].items():
-        try:
-            atomic.atomic_write_text(paths.wp_file(wid), tier_a.serialize(kept, header=_override_header(wid)))
-        except Exception as exc:
-            r["errors"].append({"file": f"wp/{wid}.conf", "reason": str(exc)})
-    if plan["tags"]:
-        try:
-            current = {row["id"]: row for row in tags.load() if row.get("id")}
-            for row in plan["tags"]:
-                current[row["id"]] = row
-            tags.save(list(current.values()))
-        except Exception as exc:
-            r["errors"].append({"file": "tags.csv", "reason": str(exc)})
-    if plan["meta"]:
-        try:
-            m = meta.load()
-            for wid, patch in plan["meta"].items():
-                m[wid] = {**m.get(wid, {}), **patch}
-            meta.save(m)
-        except Exception as exc:
-            r["errors"].append({"file": "meta.json", "reason": str(exc)})
-    for name, text in plan["rules"].items():
-        try:
-            atomic.atomic_write_text(paths.config_dir() / name, text)
-        except Exception as exc:
-            r["errors"].append({"file": name, "reason": str(exc)})
+    for st in registry.STORES:
+        if not st.apply(plan, r):
+            return r
     return r
 
 
@@ -410,3 +156,43 @@ def receipt_line(r: dict[str, Any]) -> str:
     if r.get("dropped"):
         line += f" · {len(r['dropped'])} dropped"
     return line
+
+
+# --- command line -----------------------------------------------------------------------
+
+_RECEIPT_LISTS = ("reresolved", "held", "dropped", "followups", "errors")
+
+
+def _print_receipt(r: dict[str, Any]) -> int:
+    """Print a receipt as plain lines; returns the exit code (1 when anything failed)."""
+    if r.get("kind") == "export":
+        print(f"Exported {r['path']}")
+    else:
+        print(receipt_line(r) or f"Refused {r['path']}")
+    counts = r.get("counts") or {}
+    if counts:
+        print("counts: " + ", ".join(f"{k}={v}" for k, v in counts.items()))
+    for name in _RECEIPT_LISTS:
+        for item in r.get(name) or []:
+            body = ", ".join(f"{k}={v}" for k, v in item.items()) if isinstance(item, dict) else str(item)
+            print(f"{name}: {body}")
+    return 1 if r.get("errors") else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python3 -m lwe_ui.storage.backup export|restore <file>`: the panel's backup without
+    the panel, for the night it will not start. Imports no Qt."""
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="python3 -m lwe_ui.storage.backup",
+                                 description="Export or restore the LWE configuration.")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("export", help="write the current configuration to <file>").add_argument("file")
+    sub.add_parser("restore", help="write <file>'s configuration over the current one").add_argument("file")
+    args = ap.parse_args(argv)
+    paths.ensure_dirs()
+    return _print_receipt(export_to(args.file) if args.cmd == "export" else import_from(args.file))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -331,7 +331,10 @@ is to be the daemon API's reference client and the system's owner:
 - It **backs up through its schemas**: a `.lwebackup` is one zip with a manifest, and a
   restore loads every entry through the current schema and the same migrations a normal
   load applies, rather than copying files, so a backup survives keys added, removed or
-  renamed between builds.
+  renamed between builds. Which stores travel is declared by the stores themselves and
+  collected in one registry, with every remaining config file named alongside the reason it
+  stays behind, so a store that forgets a file its writers produce, or a storage module
+  that writes and declares nothing, fails the ownership test instead of shipping.
 - It **logs to files as it runs**: the state dir is a tree with one real-time log per
   subsystem under `logs/` (panel, developer exhibits, bench; the engine and CEF logs join
   from the engine side), so a crash leaves a full trail on disk without the panel's console.

@@ -102,6 +102,11 @@ def main() -> None:
             backend.statusChanged.emit()
             assert "marker" not in dict(window.property("engineStatus") or {}), \
                 "statusChanged must replace the deck's status immediately"
+            # the sandbox covers the host, not just the socket: the header must never show
+            # the machine's live daemon (LWE_SANDBOX, tests/_sandbox.py)
+            live = dict(window.property("engineStatus") or {})
+            assert live.get("state") != "up", f"sandboxed status read the live engine: {live}"
+            assert not live.get("engine_mb"), f"sandboxed status read live engine memory: {live}"
             # the root layout: header and deck span the window, the rail sits in the band between
             rail = next(o for o in window.findChildren(QObject) if o.metaObject().className().startswith("Rail"))
             hdr = window.findChild(QObject, "headerBar")

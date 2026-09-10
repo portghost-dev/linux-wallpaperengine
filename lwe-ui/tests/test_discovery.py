@@ -114,8 +114,8 @@ class TestDiscoveryAgainstLibrary(unittest.TestCase):
                 self.assertTrue({"name", "kind", "label", "value"} <= set(entry.keys()))
                 self.assertIn(entry["kind"], {"bool", "slider", "combo", "color", "text"})
                 self.assertNotIn("<", entry["label"])
-            self.assertTrue((Path(tmp) / "lwe" / "objindex" / f"{self.wid}.json").is_file())
-            self.assertTrue((Path(tmp) / "lwe" / "propindex" / f"{self.wid}.json").is_file())
+            self.assertTrue((Path(tmp) / "lwe" / "panel" / "objindex" / f"{self.wid}.json").is_file())
+            self.assertTrue((Path(tmp) / "lwe" / "panel" / "propindex" / f"{self.wid}.json").is_file())
         finally:
             if prev is None:
                 os.environ.pop("XDG_STATE_HOME", None)

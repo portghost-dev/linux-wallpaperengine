@@ -15,9 +15,13 @@ constant black-alpha regardless of theme.
 """
 from __future__ import annotations
 
+import json
+import zipfile
 from typing import Any
 
+from .. import constants as C
 from . import atomic, paths
+from .store import Store
 
 ROLES = ("background", "surface", "text", "textMuted", "accent", "border")
 
@@ -340,3 +344,63 @@ def resolve_active() -> dict[str, str]:
     """The full token set for the persisted active theme (app startup path)."""
     cfg = load_config()
     return resolve(effective_roles(cfg["active"], cfg["overlays"]))
+
+
+# --- backup ---------------------------------------------------------------------------
+MEMBER = "theme.json"
+#: the keys this store persists; a backup carries these and names anything else as dropped
+CONFIG_KEYS = ("active", "overlays")
+
+
+def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
+    r["counts"]["theme"] = 0
+    try:
+        cfg = load_config()
+        z.writestr(MEMBER, json.dumps({k: cfg[k] for k in CONFIG_KEYS}, indent=1))
+    except Exception as exc:  # a theme that will not load is not the backup's fault
+        r["errors"].append({"file": MEMBER, "reason": str(exc)})
+        return
+    r["counts"]["theme"] = 1
+    r["counts"]["overlays"] = len(cfg["overlays"])
+
+
+def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any],
+                      cfg_after: dict[str, Any]) -> bool:
+    plan["theme"] = None
+    r["counts"]["theme"] = 0
+    if MEMBER not in z.namelist():
+        return True
+    try:
+        t = json.loads(z.read(MEMBER).decode("utf-8"))
+    except ValueError:
+        r["errors"].append({"file": MEMBER, "reason": "not readable, skipped"})
+        return True
+    if not isinstance(t, dict):
+        return True
+    kept = {k: v for k, v in t.items() if k in CONFIG_KEYS}
+    for k in t:
+        if k not in CONFIG_KEYS:
+            retired = C.RETIRED.get("theme", {}).get(k)
+            r["dropped"].append({"kind": "theme", "id": k,
+                                 "reason": "retired: " + retired if retired else "unknown to this version"})
+    if "overlays" in kept and not isinstance(kept["overlays"], dict):
+        kept.pop("overlays")
+        r["dropped"].append({"kind": "theme", "id": "overlays", "reason": "not a value this version holds"})
+    plan["theme"] = kept
+    r["counts"]["theme"] = 1
+    r["counts"]["overlays"] = len(kept.get("overlays") or {})
+    return True
+
+
+def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
+    t = plan.get("theme")
+    if not t:
+        return True
+    try:
+        save_config({**load_config(), **t})
+    except Exception as exc:
+        r["errors"].append({"file": MEMBER, "reason": str(exc)})
+    return True
+
+
+BACKUP = Store("theme", (MEMBER,), _backup_export, _backup_preflight, _backup_apply)

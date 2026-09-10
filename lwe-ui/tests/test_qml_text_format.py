@@ -38,7 +38,7 @@ SINKS = {
     "ObjectsPanel.qml": ["text: modelData.label", "text: rowItem.modelData.label"],
     "DevSlotCard.qml": ["text: card.st.sceneTitle"],
     "DevIsolator.qml": ["text: rowItem.modelData.label", "text: rowItem.modelData.o ? rowItem.modelData.o.name"],
-    "DevConsole.qml": ["text: line.text"],
+    "DevConsole.qml": ['+ "<span style=\\"color:" + body + "\\">" + escapeHtml(e.text)'],
     "DevRawEnv.qml": ["text: (door.rev, door.visible ? dev.launchPreview"],
 }
 WINDOW = 3  # lines on either side that still belong to the same element

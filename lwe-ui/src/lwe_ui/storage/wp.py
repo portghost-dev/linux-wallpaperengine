@@ -6,12 +6,15 @@ on save so the file stays minimal and consumers can distinguish "unset" from "se
 """
 from __future__ import annotations
 
+import os
 import warnings
+import zipfile
 from pathlib import Path
 from typing import Any
 
 from .. import constants as C
 from . import atomic, paths, tier_a
+from .store import Store
 
 # Keys whose empty value means "unset / inherit" and must NOT be written.
 _OMIT_IF_EMPTY = ("FPS", "CLAMPING", "FULLSCREEN_PAUSE", "SKIP", "CC_MODE")
@@ -302,3 +305,116 @@ def exists(wid: str) -> bool:
     time, so treating this as membership would put un-approved items in the grid.
     """
     return paths.wp_file(wid).exists()
+
+
+# --- backup ---------------------------------------------------------------------------
+PREFIX = "wp/"
+
+
+def _portable_bg(wid: str, bg: str) -> str:
+    """A folder that is this library's own copy travels as the bare id, which the app
+    resolves against the library folder; a referenced folder travels as it is."""
+    if bg and os.path.isabs(bg) and os.path.basename(bg.rstrip("/")) == wid:
+        return wid
+    return bg
+
+
+def _backup_text(wid: str, text: str) -> str:
+    """An override as it travels: the keys the file carries and nothing more, so set-ness
+    (a present key overrides, an absent key inherits) survives the round trip."""
+    raw = tier_a.parse(text)
+    kept = {k: v for k, v in raw.items()
+            if k in C.WP_SCHEMA or (k.startswith(C.WP_PROP_PREFIX) and len(k) > len(C.WP_PROP_PREFIX))}
+    if "BG" in kept:
+        kept["BG"] = _portable_bg(wid, kept["BG"])
+    return tier_a.serialize(kept, header=f"lwe wallpaper override {wid} (Tier A)")
+
+
+def _backup_value_ok(spec: dict, raw: str) -> bool:
+    """Whether a stored override value is one this build can hold for that key."""
+    t = spec["type"]
+    s = str(raw).strip()
+    try:
+        if t == "int":
+            int(s)
+        elif t == "int_or_empty":
+            if s:
+                int(s)
+        elif t == "float":
+            v = float(s)
+            lo, hi = spec.get("min"), spec.get("max")
+            if (lo is not None and v < lo) or (hi is not None and v > hi):
+                return False
+        elif t == "enum":
+            return s in spec.get("choices", ())
+        elif t == "enum_or_empty":
+            return s == "" or s in spec.get("choices", ())
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
+    n = 0
+    for conf in sorted(paths.wp_dir().glob("*.conf")):
+        wid = conf.stem
+        if not paths.is_safe_wid(wid):
+            continue
+        try:
+            z.writestr(f"{PREFIX}{wid}.conf", _backup_text(wid, conf.read_text(encoding="utf-8")))
+        except (OSError, ValueError) as exc:
+            r["errors"].append({"file": conf.name, "reason": str(exc)})
+            continue
+        n += 1
+    r["counts"]["overrides"] = n
+
+
+def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any],
+                      cfg_after: dict[str, Any]) -> bool:
+    out: dict[str, Any] = {}
+    held = 0
+    for n in sorted(z.namelist()):
+        if not (n.startswith(PREFIX) and n.endswith(".conf")):
+            continue
+        wid = n[len(PREFIX):-5]
+        if not paths.is_safe_wid(wid):
+            r["dropped"].append({"kind": "override", "id": wid, "reason": "bad id"})
+            continue
+        raw = tier_a.parse(z.read(n).decode("utf-8", "replace"))
+        kept: dict[str, str] = {}
+        for k, v in raw.items():
+            if k in C.WP_SCHEMA:
+                if _backup_value_ok(C.WP_SCHEMA[k], v):
+                    kept[k] = str(v)
+                else:
+                    r["dropped"].append({"kind": "override-key", "id": f"{wid}:{k}", "reason": "not a value this version holds"})
+            elif k.startswith(C.WP_PROP_PREFIX) and tier_a.is_valid_key(k):
+                kept[k] = str(v)
+            else:
+                r["dropped"].append({"kind": "override-key", "id": f"{wid}:{k}", "reason": "unknown to this version"})
+        bg = kept.get("BG", "")
+        if bg and os.path.isabs(bg) and not os.path.isdir(bg):
+            r["reresolved"].append({"key": f"override {wid} folder", "from": bg, "to": wid})
+            kept["BG"] = wid
+        if not kept.get("BG"):
+            kept["BG"] = wid
+        if not paths.wallpaper_present(wid, cfg_after):
+            r["held"].append({"kind": "override", "id": wid})
+            held += 1
+        out[wid] = kept
+    plan["overrides"] = out
+    r["counts"]["overrides"] = len(out)
+    r["counts"]["overrides_held"] = held
+    return True
+
+
+def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
+    for wid, kept in (plan.get("overrides") or {}).items():
+        try:
+            write_keys(wid, kept)
+        except Exception as exc:
+            r["errors"].append({"file": f"{PREFIX}{wid}.conf", "reason": str(exc)})
+    return True
+
+
+BACKUP = Store("overrides", (f"{PREFIX}*.conf",), _backup_export, _backup_preflight, _backup_apply)

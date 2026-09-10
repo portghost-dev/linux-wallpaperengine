@@ -56,6 +56,13 @@ _ROLE_REFUSED = Qt.ItemDataRole.UserRole + 9  # folder name outside the id allow
 REFUSED_REASON = "Rename this folder: letters, digits, dot, underscore and hyphen only"
 
 
+def _sandboxed() -> bool:
+    """True when LWE_SANDBOX=1 (tests/_sandbox.py). Host-wide probes - the /proc engine
+    scan, pgrep, systemd, nvidia-smi - then report nothing found, so a test can never read
+    the machine's live daemon. Absent in production, where every probe runs."""
+    return os.environ.get("LWE_SANDBOX") == "1"
+
+
 def _wallpapers_dir() -> str:
     """Current WALLPAPERS_DIR from settings (falls back to the resolved default)."""
     try:
@@ -1002,6 +1009,8 @@ class Backend(QObject):
     @Slot(result=str)
     def masterState(self) -> str:
         """systemd unit state for the master service: active/inactive/failed/masked/absent."""
+        if _sandboxed():
+            return "inactive"
         try:
             proc = subprocess.run(
                 ["systemctl", "--user", "is-active", self._master_service()],
@@ -1849,6 +1858,8 @@ class Backend(QObject):
         cached = getattr(self, "_mem_high_cache", None)
         if cached is not None:
             return cached
+        if _sandboxed():
+            return -1
         val = -1
         try:
             r = subprocess.run(["systemctl", "--user", "show", "lwe-engine.service",
@@ -1872,6 +1883,8 @@ class Backend(QObject):
         the actual usage.
         """
         pids: list[int] = []
+        if _sandboxed():
+            return pids
         for comm in ("linux-wallpaper", "lwe-web-helper"):
             try:
                 r = subprocess.run(["pgrep", "-x", comm],
@@ -1893,6 +1906,8 @@ class Backend(QObject):
         hover; do not relabel it as engine load.
         """
         util, total = -1, -1
+        if _sandboxed():
+            return util, total
         try:
             q = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu,memory.total",
                                 "--format=csv,noheader,nounits"],
@@ -2613,6 +2628,8 @@ def _first_int(line: str) -> int:
 
 def _find_engine_pid() -> int | None:
     """Scan /proc for the engine process by its (15-char-truncated) comm; stdlib only."""
+    if _sandboxed():
+        return None
     try:
         names = os.listdir("/proc")
     except OSError:

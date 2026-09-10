@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import csv
 import io
+import zipfile
+from typing import Any
 
 from . import atomic, paths
+from .store import Store
 
 HEADER = ("id", "title", "state")
 _VALID_STATES = ("good", "bad", "review")   # review = imported, awaiting the card verdict
@@ -124,3 +127,62 @@ def _set_state_locked(id: str, title: str, state: str) -> None:
     if not found:
         rows.append({"id": id, "title": title, "state": state})
     save(rows)
+
+
+# --- backup ---------------------------------------------------------------------------
+MEMBER = "tags.csv"
+
+
+def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
+    rows = load()
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(HEADER)
+    for row in rows:
+        w.writerow([row.get("id", ""), row.get("title", ""), row.get("state", "")])
+    z.writestr(MEMBER, out.getvalue())
+    r["counts"]["tags"] = len(rows)
+
+
+def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any],
+                      cfg_after: dict[str, Any]) -> bool:
+    """A row for a wallpaper not in the library would put a card with no folder in the grid,
+    so those rows wait; importing the backup again after the wallpapers arrive restores
+    them."""
+    out: list[dict] = []
+    held = 0
+    if MEMBER in z.namelist():
+        reader = csv.DictReader(io.StringIO(z.read(MEMBER).decode("utf-8", "replace")))
+        for row in reader:
+            wid = str(row.get("id") or "").strip()
+            state = str(row.get("state") or "").strip()
+            if not paths.is_safe_wid(wid) or state not in _VALID_STATES:
+                r["dropped"].append({"kind": "tag", "id": wid or "?", "reason": "bad row"})
+                continue
+            if not paths.wallpaper_present(wid, cfg_after):
+                held += 1
+                continue
+            out.append({"id": wid, "title": str(row.get("title") or ""), "state": state})
+    if held:
+        r["held"].append({"kind": "tags", "count": held})
+    plan["tags"] = out
+    r["counts"]["tags"] = len(out)
+    r["counts"]["tags_held"] = held
+    return True
+
+
+def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
+    rows = plan.get("tags") or []
+    if not rows:
+        return True
+    try:
+        current = {row["id"]: row for row in load() if row.get("id")}
+        for row in rows:
+            current[row["id"]] = row
+        save(list(current.values()))
+    except Exception as exc:
+        r["errors"].append({"file": MEMBER, "reason": str(exc)})
+    return True
+
+
+BACKUP = Store("tags", (MEMBER,), _backup_export, _backup_preflight, _backup_apply)

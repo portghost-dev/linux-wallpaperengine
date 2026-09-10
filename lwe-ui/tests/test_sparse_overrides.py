@@ -3,6 +3,7 @@ writes facts, never defaults; the one-time clean-up strips materialised defaults
 file after a snapshot, keeps real choices and properties, and runs once."""
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket and the host probes before any lwe_ui import)
 import os
 import sys
 import tempfile

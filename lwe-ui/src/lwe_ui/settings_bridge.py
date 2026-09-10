@@ -39,16 +39,7 @@ from . import constants as C
 from .engine import daemon_unit
 from .storage import atomic, backup, paths, settings, tags
 
-_CLASS_NEXT_SHOW = ("ENGINE_SCALING", "ENGINE_CLAMP", "AUTOMUTE_DEFAULT")
-_CLASS_SERVICE_RESTART = ("ENGINE_LAYER", "ENGINE_HWDEC", "ENGINE_TEXCOMP", "TEXTURE_DETAIL",
-                          "RENDER_RESOLUTION", "ASSETS_DIR")
-_CLASS_PANEL = ("CLOSE_TO_TRAY", "STEAM_DIR", "INTERFACE_SCALE")
-_CLASS_BOUNDARY = ("SCHEDULE_ENABLED", "SCHEDULE")
-_CLASS_NEXT_SCAN = ("WORKSHOP_DIR", "WALLPAPERS_DIR")
-_CLASS_RE_ARM = ("DETECT_MODE", "DETECT_INTERVAL_SEC")
-_CLASS_NEXT_IMPORT = ("REVIEW_REQUIRED", "STORAGE_POLICY")
-
-_REGENERATE_KEYS = _CLASS_SERVICE_RESTART
+_REGENERATE_KEYS = C.REACH_SERVICE_RESTART
 
 _TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
 
@@ -158,17 +149,17 @@ class SettingsBridge(QObject):
     @Slot(str, result=str)
     def reach(self, key: str) -> str:
         key = str(key)
-        if key in _CLASS_SERVICE_RESTART:
+        if key in C.REACH_SERVICE_RESTART:
             return "SERVICE-RESTART"
-        if key in _CLASS_PANEL:
+        if key in C.REACH_PANEL:
             return "PANEL"
-        if key in _CLASS_BOUNDARY:
+        if key in C.REACH_BOUNDARY:
             return "BOUNDARY"
-        if key in _CLASS_NEXT_SCAN:
+        if key in C.REACH_NEXT_SCAN:
             return "NEXT-SCAN"
-        if key in _CLASS_RE_ARM:
+        if key in C.REACH_RE_ARM:
             return "RE-ARM"
-        if key in _CLASS_NEXT_IMPORT:
+        if key in C.REACH_NEXT_IMPORT:
             return "NEXT-IMPORT"
         if key in C.AUDIO_DIAL_ENV:
             return "LIVE"
@@ -179,7 +170,7 @@ class SettingsBridge(QObject):
                 return "LIVE"
         except Exception:
             pass
-        if key in _CLASS_NEXT_SHOW:
+        if key in C.REACH_NEXT_SHOW:
             return "NEXT-SHOW"
         return "NEXT-SHOW"
 
@@ -403,7 +394,7 @@ class SettingsBridge(QObject):
         except Exception:
             return self._fail("Configuration", "That backup could not be restored.")
         log = logging.getLogger("lwe_ui.backup")
-        if r["errors"] and not r.get("counts"):
+        if r.get("refused") or (r["errors"] and not r.get("counts")):
             return self._fail("Configuration", r["errors"][0]["reason"])
         log.info("restored %s: %s", local, json.dumps(r["counts"]))
         for key in ("dropped", "held", "reresolved", "followups", "errors"):

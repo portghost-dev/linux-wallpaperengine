@@ -5,11 +5,14 @@ back as shell-safe KEY=value via tier_a. Validation clamps + warns; it never cra
 """
 from __future__ import annotations
 
+import os
 import warnings
+import zipfile
 from typing import Any
 
 from .. import constants as C
 from . import atomic, paths, tier_a
+from .store import Store
 
 
 def _coerce(key: str, raw: str, spec: dict) -> Any:
@@ -170,3 +173,63 @@ def ensure_exists() -> None:
     """Write defaults if the file is absent (does not overwrite an existing file)."""
     if not paths.settings_file().exists():
         save(paths.default_settings())
+
+
+# --- backup ---------------------------------------------------------------------------
+MEMBER = "settings.conf"
+#: every path-typed setting names this machine: kept on import only when it resolves here
+MACHINE_KEYS = tuple(k for k, s in C.SETTINGS_SCHEMA.items() if s["type"] == "path")
+
+
+def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
+    z.writestr(MEMBER, tier_a.serialize(_to_text(load()), header="lwe settings backup"))
+
+
+def _followups(r: dict[str, Any], after: dict[str, Any], current: dict[str, Any]) -> None:
+    """What a changed setting implies, decided from the diff."""
+    if "INTERFACE_SCALE" in after and int(after["INTERFACE_SCALE"]) != int(current.get("INTERFACE_SCALE", 100)):
+        r["followups"].append({"kind": "relaunch", "state": "pending"})
+    if any(k in after and after[k] != current.get(k) for k in C.REACH_SERVICE_RESTART):
+        r["followups"].append({"kind": "engine-restart", "state": "pending"})
+    if any(k in after and after[k] != current.get(k) for k in ("WALLPAPERS_DIR", "WORKSHOP_DIR")):
+        r["followups"].append({"kind": "rescan", "state": "pending"})
+
+
+def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any],
+                      cfg_after: dict[str, Any]) -> bool:
+    """The same migrations and coercion a normal load applies; unknown keys are dropped and
+    named. Without settings there is nothing to decide the rest of the plan against, so this
+    is the one store whose absence abandons the import."""
+    if MEMBER not in z.namelist():
+        r["errors"].append({"file": MEMBER, "reason": "The backup carries no settings."})
+        return False
+    current = load()
+    raw = migrate_raw(tier_a.parse(z.read(MEMBER).decode("utf-8", "replace")))
+    known = {k: v for k, v in raw.items() if k in C.SETTINGS_SCHEMA}
+    for k in raw:
+        if k not in C.SETTINGS_SCHEMA:
+            r["dropped"].append({"kind": "setting", "id": k, "reason": "unknown to this version"})
+    coerced = _validate({k: _coerce(k, v, C.SETTINGS_SCHEMA[k]) for k, v in known.items()})
+    for key in MACHINE_KEYS:
+        if key not in coerced:
+            continue
+        want = str(coerced[key])
+        have = str(current.get(key, ""))
+        if want and want != have and not os.path.exists(want):
+            r["reresolved"].append({"key": key, "from": want, "to": have})
+            coerced[key] = current.get(key, "")
+    plan["settings"] = coerced
+    _followups(r, coerced, current)
+    return True
+
+
+def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
+    try:
+        save({**load(), **(plan.get("settings") or {})})
+    except Exception as exc:
+        r["errors"].append({"file": MEMBER, "reason": str(exc)})
+        return False
+    return True
+
+
+BACKUP = Store("settings", (MEMBER,), _backup_export, _backup_preflight, _backup_apply)

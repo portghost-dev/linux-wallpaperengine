@@ -2,6 +2,7 @@
 QApplication exists, 100 sets nothing, and a hand-set QT_SCALE_FACTOR wins over the store."""
 from __future__ import annotations
 
+import _sandbox  # noqa: F401  (pins the engine socket and the host probes before any lwe_ui import)
 import os
 import sys
 

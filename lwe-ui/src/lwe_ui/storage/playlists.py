@@ -15,10 +15,12 @@ from __future__ import annotations
 import re
 import time
 import warnings
+import zipfile
 from typing import Any
 
 from .. import constants as C
 from . import atomic, paths, settings, tier_a
+from .store import Store
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -231,3 +233,54 @@ def ensure_default() -> str:
                   mode=mode, interval=int(s.get("INTERVAL") or 900), unit="min")
     set_active(slug)
     return slug
+
+
+# --- backup ---------------------------------------------------------------------------
+PREFIX = "playlists/"
+
+
+def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
+    n = 0
+    for pl in list_playlists():
+        slug = str(pl.get("slug") or "")
+        if not slug:
+            continue
+        d = load(slug)
+        z.writestr(f"{PREFIX}{slug}.conf",
+                   tier_a.serialize({k: str(d[k]) for k in C.PLAYLIST_SCHEMA}, header="lwe playlist"))
+        n += 1
+    r["counts"]["playlists"] = n
+
+
+def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any],
+                      cfg_after: dict[str, Any]) -> bool:
+    out: dict[str, Any] = {}
+    for n in sorted(z.namelist()):
+        if not (n.startswith(PREFIX) and n.endswith(".conf")):
+            continue
+        slug = n[len(PREFIX):-5]
+        if not slug or slugify(slug) != slug:
+            r["dropped"].append({"kind": "playlist", "id": slug, "reason": "bad name"})
+            continue
+        raw = tier_a.parse(z.read(n).decode("utf-8", "replace"))
+        d = _validate({k: _coerce(k, raw[k], s) if k in raw else s["default"]
+                       for k, s in C.PLAYLIST_SCHEMA.items()})
+        missing = [m for m in str(d["MEMBERS"]).split() if not paths.wallpaper_present(m, cfg_after)]
+        if missing:
+            r["held"].append({"kind": "playlist-members", "id": slug, "count": len(missing)})
+        out[slug] = d
+    plan["playlists"] = out
+    r["counts"]["playlists"] = len(out)
+    return True
+
+
+def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
+    for slug, d in (plan.get("playlists") or {}).items():
+        try:
+            save(slug, d)
+        except Exception as exc:
+            r["errors"].append({"file": f"{PREFIX}{slug}.conf", "reason": str(exc)})
+    return True
+
+
+BACKUP = Store("playlists", (f"{PREFIX}*.conf",), _backup_export, _backup_preflight, _backup_apply)

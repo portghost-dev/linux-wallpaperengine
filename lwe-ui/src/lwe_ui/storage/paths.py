@@ -27,6 +27,13 @@ def is_safe_wid(wid: str) -> bool:
     return _SAFE_WID.match(w) is not None
 
 
+def wallpaper_present(wid: str, cfg: dict) -> bool:
+    """Does this wallpaper have a folder in the library the given settings name? The gate
+    every restore holds an override, a tag row or a playlist member behind."""
+    root = str(cfg.get("WALLPAPERS_DIR") or "")
+    return bool(root) and os.path.isdir(os.path.join(root, wid))
+
+
 def _home() -> Path:
     return Path(os.path.expanduser("~"))
 
