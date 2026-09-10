@@ -51,15 +51,15 @@ def data_dir() -> Path:
 
 
 # --- the state tree: logs/<subsystem>/, panel/, engine/, probes/ under the state dir.
-# The engine's own files (engine-state.json, boot-history.json, texcache, cef.log) stay at
-# the top level until the engine moves them; this module never moves an engine file.
+# The engine moves its own files (engine-state.json, boot-history.json, texcache, cef.log,
+# its dumps) at boot; this module never moves an engine file.
 LOG_SUBSYSTEMS = ("engine", "cef", "panel", "bench", "developer")
 
 #: top-level files with no writer left in either tree: named by the migration, never deleted
 DEAD_STATE_FILES = ("engine-api.log", "engine-api.log.old", "engine-manual.log", "wallpaper.log",
                     "panel.log", "rotation-state", "last-shown", "next-up",
                     "dev-verdicts.log", "dev-palette.json", "tombstones.json.migrated",
-                    "passprobe-post.ppm")
+                    "show-request")
 
 
 def logs_dir() -> Path:

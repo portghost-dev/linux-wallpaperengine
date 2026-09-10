@@ -1,6 +1,7 @@
 #include "CTexture.h"
 #include "WallpaperEngine/Data/Utils/Sha256.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Logging/StatePaths.h"
 #include <set>
 
 #include <lz4.h>
@@ -240,11 +241,7 @@ bool uploadFromTexcache (const WallpaperEngine::Data::Assets::Texture& h, const 
 	return false;
     }
     const std::string key = WallpaperEngine::Data::Utils::sha256_hex (pixels.data, (size_t)pixels.size);
-    const char* home = getenv ("HOME");
-    if (home == nullptr) {
-	return false;
-    }
-    std::filesystem::path base = std::filesystem::path (home) / ".local/state/lwe/texcache" / key;
+    std::filesystem::path base = WallpaperEngine::State::engineDir () / "texcache" / key;
     std::filesystem::path bc = base;
     bc += ".bc";
     std::filesystem::path mp = base;

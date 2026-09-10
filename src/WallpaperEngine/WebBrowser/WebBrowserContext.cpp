@@ -1,6 +1,7 @@
 #include "WebBrowserContext.h"
 #include "CEF/BrowserApp.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Logging/StatePaths.h"
 #include "WallpaperEngine/WebBrowser/CEF/SubprocessApp.h"
 #include "include/cef_app.h"
 #include "include/cef_render_handler.h"
@@ -72,29 +73,18 @@ WebBrowserContext::WebBrowserContext (
     CefString (&settings.locales_dir_path) = localesDir;
 
     {
-	const char* home = getenv ("HOME");
-	const std::string cefLog = std::string (home != nullptr ? home : "/tmp") + "/.local/state/lwe/cef.log";
+	// the daemon's log rotates; a windowed exhibit's service writes its own file and
+	// never rotates the daemon's (LWE_DAEMON is set by the daemon for its children)
+	const bool daemon = getenv ("LWE_DAEMON") != nullptr;
+	const std::filesystem::path logPath
+	    = WallpaperEngine::State::logDir ("cef") / (daemon ? "cef.log" : "cef-window.log");
+	const std::string cefLog = logPath.string ();
 
-	{
+	if (daemon) {
+	    WallpaperEngine::State::rotate (logPath, 3);
+	} else {
 	    std::error_code ec;
-	    const std::filesystem::path logPath (cefLog);
 	    std::filesystem::create_directories (logPath.parent_path (), ec);
-
-	    // walk oldest-first so each rename lands on a slot that has already been vacated
-	    for (int generation = 3; generation > 0; --generation) {
-		std::filesystem::path older = logPath;
-		older += "." + std::to_string (generation);
-		std::filesystem::path newer = logPath;
-
-		if (generation > 1) {
-		    newer += "." + std::to_string (generation - 1);
-		}
-
-		if (std::filesystem::exists (newer, ec)) {
-		    // rename replaces the destination on POSIX, so generation 3 falls off the end
-		    std::filesystem::rename (newer, older, ec);
-		}
-	    }
 	}
 
 	CefString (&settings.log_file) = cefLog;

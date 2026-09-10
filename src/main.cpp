@@ -1,6 +1,7 @@
 #include <atomic>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <execinfo.h>
 #include <iostream>
@@ -13,6 +14,7 @@
 #include "WallpaperEngine/Application/ApplicationContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Logging/Log.h"
+#include "WallpaperEngine/Logging/StatePaths.h"
 #include "WallpaperEngine/WebHelper/SpawnGate.h"
 
 std::atomic<WallpaperEngine::Application::WallpaperApplication*> app { nullptr };
@@ -59,6 +61,21 @@ void initLogging () {
     sLog.addError (new std::ostream (std::cerr.rdbuf ()));
 }
 
+// logs/engine/engine.log: the daemon's own log, timestamped and flushed per line, rotated at
+// boot. The journal keeps stdout; the file is complete on its own.
+void attachFileLog () {
+    // heap, never freed: the logger outlives every static and may write during teardown
+    auto* fileBuf = new WallpaperEngine::State::TimestampedFileBuf ();
+    const auto path = WallpaperEngine::State::logDir ("engine") / "engine.log";
+    WallpaperEngine::State::rotate (path, 5);
+
+    if (fileBuf->open (path)) {
+	auto* file = new std::ostream (fileBuf);
+	sLog.addOutput (file);
+	sLog.addError (file);
+    }
+}
+
 int main (int argc, char* argv[]) {
 #ifdef __GLIBC__
     // few arenas + fixed mmap threshold: a freed scene returns its memory to the OS
@@ -79,6 +96,15 @@ int main (int argc, char* argv[]) {
 	WallpaperEngine::Application::ApplicationContext appContext (argc, argv);
 
 	appContext.loadSettingsFromArgv ();
+
+	// the state tree: a flat layout from an older build moves into place before anything
+	// reads it; only the daemon gets the file log, so a windowed run never rotates it
+	WallpaperEngine::State::migrateEngineFiles ();
+	if (appContext.settings.general.daemonMode) {
+	    // the web service inherits this and rotates the CEF log only for the daemon
+	    setenv ("LWE_DAEMON", "1", 1);
+	    attachFileLog ();
+	}
 
 	auto* application = new WallpaperEngine::Application::WallpaperApplication (appContext);
 

@@ -1,4 +1,6 @@
 #include "ShaderUnit.h"
+#include "WallpaperEngine/Logging/StatePaths.h"
+#include <filesystem>
 #include <fstream>
 
 #include "WallpaperEngine/Logging/Log.h"
@@ -1020,8 +1022,14 @@ const std::string& ShaderUnit::compile () {
 	    for (const char c : this->m_file) {
 		safeName += (isalnum (c) != 0 ? c : '_');
 	    }
-	    const std::string path = std::string (home) + "/.local/state/lwe/shaderdump-" + safeName
-		+ (this->m_type == GLSLContext::UnitType_Vertex ? ".vert" : ".frag") + ".glsl";
+	    const auto dir = WallpaperEngine::State::probesDir ();
+	    std::error_code ec;
+	    std::filesystem::create_directories (dir, ec);
+	    const std::string path
+		= (dir
+		   / ("shaderdump-" + safeName + (this->m_type == GLSLContext::UnitType_Vertex ? ".vert" : ".frag")
+		      + ".glsl"))
+		      .string ();
 	    std::ofstream out (path, std::ios::trunc);
 	    out << this->m_final;
 	    sLog.out ("LWE-SHADERDUMP wrote ", path);

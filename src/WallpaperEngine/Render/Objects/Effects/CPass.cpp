@@ -1,6 +1,8 @@
 #include "CPass.h"
+#include "WallpaperEngine/Logging/StatePaths.h"
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <unordered_map>
@@ -871,9 +873,11 @@ void CPass::render () {
 	    static bool s_ppmDone = false;
 	    if (s_ppmDump && !s_ppmDone && std::string (tag) == "post") {
 		s_ppmDone = true;
-		const char* home = getenv ("HOME");
-		if (home != nullptr) {
-		    std::ofstream out (std::string (home) + "/.local/state/lwe/passprobe-post.ppm", std::ios::binary);
+		{
+		    const auto dir = WallpaperEngine::State::probesDir ();
+		    std::error_code ec;
+		    std::filesystem::create_directories (dir, ec);
+		    std::ofstream out (dir / "passprobe-post.ppm", std::ios::binary);
 		    out << "P6\n" << fw << " " << fh << "\n255\n";
 		    for (int y = 0; y < fh; y++) {
 			for (int x = 0; x < fw; x++) {

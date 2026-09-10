@@ -28,6 +28,7 @@ header's) skips a lying mip rather than caching it.
 """
 from __future__ import annotations
 
+from .storage import paths
 import ctypes
 import glob
 import hashlib
@@ -40,7 +41,7 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from typing import Any, Callable
 
-CACHE = os.path.expanduser("~/.local/state/lwe/texcache")
+CACHE = str(paths.engine_state_dir() / "texcache")
 SHIM = os.path.expanduser("~/.local/bin/lwe_bc7enc")
 
 #: source format -> (shim fmt code, source channels, GL name)

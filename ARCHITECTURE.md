@@ -174,7 +174,7 @@ path** (`--screen-root` with no wallpaper), so outputs exist and the loop runs.
 The daemon then restores its own state. Every mutating verb - and every successful
 scheduled rotation advance - persists the durable state (current show with args,
 the rotation set, pause, fps, volume, toggles, policies) to
-`$XDG_STATE_HOME/lwe/engine-state.json` via temp+rename, and an idle daemon boot
+`$XDG_STATE_HOME/lwe/engine/engine-state.json` via temp+rename, and an idle daemon boot
 replays it through the same core paths a client `show` takes
 (`persistRuntimeState` WallpaperApplication.cpp::persistRuntimeState, `restoreRuntimeState` WallpaperApplication.cpp::restoreRuntimeState). A crash or restart
 therefore comes back on the wallpaper that was actually on screen. A restart is invisible

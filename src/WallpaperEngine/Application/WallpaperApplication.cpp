@@ -1,6 +1,7 @@
 #include "WallpaperApplication.h"
 
 #include "WallpaperEngine/Logging/InstrumentRegistry.h"
+#include "WallpaperEngine/Logging/StatePaths.h"
 
 #include "Steam/FileSystem/FileSystem.h"
 #include "WallpaperEngine/Application/ApplicationState.h"
@@ -1490,7 +1491,9 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	    } else if (!this->makeAnyViewportCurrent ()) {
 		error = "no active viewport to switch on";
 	    } else if (this->applyShowCore (*path, entry.args, false, error)) {
-		Api::restartCountdown (this->lane (), this->playlistOf (this->lane ()), std::chrono::steady_clock::now ());
+		Api::restartCountdown (
+		    this->lane (), this->playlistOf (this->lane ()), std::chrono::steady_clock::now ()
+		);
 
 		if (command.cmd == "next") {
 		    Api::commitForward (this->lane (), before, entry);
@@ -1954,13 +1957,14 @@ nlohmann::json WallpaperApplication::apiStatus () const {
 	    entries.push_back ({ { "at", at }, { "playlist", entry.slug } });
 	}
 
-	result["schedule"] = { { "enabled", this->m_schedule.enabled },
-			       { "entries", entries },
-			       { "active", Api::scheduleSlugAt (this->m_schedule, minute) },
-			       { "is_day", Api::scheduleIsDay (this->m_schedule, minute) },
-			       { "next_boundary_s", std::max (-1, Api::scheduleMinutesToBoundary (this->m_schedule, minute) * 60) },
-			       { "held", this->m_schedule.held },
-			       { "pending", this->m_schedule.pending } };
+	result["schedule"]
+	    = { { "enabled", this->m_schedule.enabled },
+		{ "entries", entries },
+		{ "active", Api::scheduleSlugAt (this->m_schedule, minute) },
+		{ "is_day", Api::scheduleIsDay (this->m_schedule, minute) },
+		{ "next_boundary_s", std::max (-1, Api::scheduleMinutesToBoundary (this->m_schedule, minute) * 60) },
+		{ "held", this->m_schedule.held },
+		{ "pending", this->m_schedule.pending } };
     }
     nlohmann::json groups = nlohmann::json::array ();
     for (const auto& [key, group] : this->m_groups) {
@@ -2602,8 +2606,9 @@ void WallpaperApplication::tickSchedule () {
     if (Api::scheduleTick (this->m_schedule, this->lane ().playlistSlug, localMinute ())) {
 	sLog.out (
 	    "API: schedule boundary at minute ", this->m_schedule.lastMinute,
-	    this->m_schedule.pending.empty () ? std::string (", nothing to switch")
-					      : ", switching to " + this->m_schedule.pending + " when the countdown expires"
+	    this->m_schedule.pending.empty ()
+		? std::string (", nothing to switch")
+		: ", switching to " + this->m_schedule.pending + " when the countdown expires"
 	);
 	this->persistRuntimeState ();
     }
@@ -2950,15 +2955,7 @@ std::optional<nlohmann::json> readJsonFile (const std::filesystem::path& path) {
 
 std::filesystem::path WallpaperApplication::runtimeStateDir () {
     // state, not config: the panel owns ~/.config/lwe and the engine must never write it
-    const char* xdgState = std::getenv ("XDG_STATE_HOME");
-
-    if (xdgState != nullptr && xdgState[0] != '\0') {
-	return std::filesystem::path (xdgState) / "lwe";
-    }
-
-    const char* home = std::getenv ("HOME");
-
-    return std::filesystem::path (home != nullptr ? home : "") / ".local" / "state" / "lwe";
+    return WallpaperEngine::State::engineDir ();
 }
 
 void WallpaperApplication::persistRuntimeState () const {
@@ -2971,13 +2968,14 @@ void WallpaperApplication::persistRuntimeState () const {
     for (const auto& entry : playlist.entries) {
 	entries.push_back (entry.args);
     }
-    state["rotation"] = { { "entries", entries },
-			  { "interval_s", playlist.intervalSeconds },
-			  { "order", playlist.order },
-			  { "avoid_repeat", playlist.avoidRepeat },
-			  { "enabled", lane.enabled },
-			  { "label", playlist.label },
-			  { "frozen_remaining_s", lane.frozenRemainingMs < 0 ? int64_t (-1) : lane.frozenRemainingMs / 1000 } };
+    state["rotation"]
+	= { { "entries", entries },
+	    { "interval_s", playlist.intervalSeconds },
+	    { "order", playlist.order },
+	    { "avoid_repeat", playlist.avoidRepeat },
+	    { "enabled", lane.enabled },
+	    { "label", playlist.label },
+	    { "frozen_remaining_s", lane.frozenRemainingMs < 0 ? int64_t (-1) : lane.frozenRemainingMs / 1000 } };
     const auto now = std::chrono::steady_clock::now ();
     nlohmann::json lanes = nlohmann::json::array ();
     for (const auto& [key, item] : this->m_lanes) {
@@ -2986,10 +2984,9 @@ void WallpaperApplication::persistRuntimeState () const {
 	entry["remaining_ms"] = Api::nextInMs (item, this->playlistOf (item), now);
 	lanes.push_back (entry);
     }
-    state["saved_at"] = std::chrono::duration_cast<std::chrono::seconds> (
-			    std::chrono::system_clock::now ().time_since_epoch ()
-    )
-			    .count ();
+    state["saved_at"]
+	= std::chrono::duration_cast<std::chrono::seconds> (std::chrono::system_clock::now ().time_since_epoch ())
+	      .count ();
     nlohmann::json playlists = nlohmann::json::array ();
     for (const auto& [key, item] : this->m_playlists) {
 	playlists.push_back (Api::toJson (item));
@@ -3236,9 +3233,9 @@ void WallpaperApplication::restoreRuntimeState () {
 			lane, this->playlistOf (lane),
 			item.contains ("remaining_ms") && item["remaining_ms"].is_number_integer ()
 			    ? item["remaining_ms"].get<int64_t> ()
-			    : (item.value ("remaining_s", -1) < 0 ? int64_t (-1) : int64_t (item.value ("remaining_s", -1)) * 1000),
-			int64_t (downtime) * 1000,
-			std::chrono::steady_clock::now ()
+			    : (item.value ("remaining_s", -1) < 0 ? int64_t (-1)
+								  : int64_t (item.value ("remaining_s", -1)) * 1000),
+			int64_t (downtime) * 1000, std::chrono::steady_clock::now ()
 		    );
 		    this->m_lanes[lane.id] = lane;
 		}
