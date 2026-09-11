@@ -334,7 +334,11 @@ is to be the daemon API's reference client and the system's owner:
   renamed between builds. Which stores travel is declared by the stores themselves and
   collected in one registry, with every remaining config file named alongside the reason it
   stays behind, so a store that forgets a file its writers produce, or a storage module
-  that writes and declares nothing, fails the ownership test instead of shipping.
+  that writes and declares nothing, fails the ownership test instead of shipping. The
+  manifest carries each store's schema, so a later build can read what this one held, and
+  the first act of a restore is an export of the configuration as this build reads it,
+  kept under the state dir with the newest five, refused with the file named if any store
+  cannot be read.
 - It **logs to files as it runs**: the state dir is a tree with one real-time log per
   subsystem under `logs/` (panel, developer exhibits, bench; the engine and CEF logs join
   from the engine side), so a crash leaves a full trail on disk without the panel's console.

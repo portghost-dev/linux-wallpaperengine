@@ -11,70 +11,80 @@ import zipfile
 from typing import Any
 
 from .. import constants as C
-from . import atomic, paths, tier_a
+from . import atomic, foreign, migrate, paths, tier_a
 from .store import Store
 
 
-def _coerce(key: str, raw: str, spec: dict) -> Any:
+_TRUE = ("true", "1", "yes", "on")
+_FALSE = ("false", "0", "no", "off", "")
+
+
+def _coerce(key: str, raw: str, spec: dict, report: list | None = None) -> Any:
     """Coerce a raw string from the file to the schema python type. Tolerant of bad input."""
     t = spec["type"]
-    if t == "bool":
-        return str(raw).strip().lower() in ("true", "1", "yes", "on")
-    if t == "bool_or_empty":
-        s = str(raw).strip()
-        return "" if s == "" else s.lower() in ("true", "1", "yes", "on")
+    s = str(raw).strip()
+    if t in ("bool", "bool_or_empty"):
+        if s == "" and t == "bool_or_empty":
+            return ""
+        if s.lower() in _TRUE:
+            return True
+        if s.lower() in _FALSE:
+            return False
+        _say(report, "snap", key, raw, spec["default"], f"settings: {key}={raw!r} not a bool; using default")
+        return spec["default"]
     if t == "int":
         try:
-            return int(str(raw).strip())
+            return int(s)
         except (ValueError, TypeError):
+            _say(report, "snap", key, raw, spec["default"], f"settings: {key}={raw!r} not an int; using default")
             return spec["default"]
     if t == "int_or_empty":
-        s = str(raw).strip()
         if s == "":
             return ""
         try:
             return int(s)
         except (ValueError, TypeError):
+            _say(report, "snap", key, raw, "", f"settings: {key}={raw!r} not an int; leaving empty")
             return ""
     if t == "float":
         try:
-            return float(str(raw).strip())
+            return float(s)
         except (ValueError, TypeError):
+            _say(report, "snap", key, raw, spec["default"], f"settings: {key}={raw!r} not a number; using default")
             return spec["default"]
     # enum / enum_or_empty / path / str / packed all carry through as plain strings.
     return str(raw)
 
 
-def _clamp_int(key: str, val: int, spec: dict) -> int:
-    """Clamp an int to the schema [min,max], warning on each clamp."""
+def _say(report: list | None, kind: str, key: str, frm: Any, to: Any, text: str) -> None:
+    """One channel for a clamp or a snap: the caller's list when it asked for one, the
+    warning a normal load has always emitted otherwise."""
+    if report is None:
+        warnings.warn(text)
+    else:
+        report.append({"kind": kind, "key": key, "from": frm, "to": to})
+
+
+def _clamp_int(key: str, val: int, spec: dict, report: list | None = None) -> int:
+    """Clamp an int to the schema [min,max], naming each clamp through _say."""
     lo, hi = spec.get("min"), spec.get("max")
     if lo is not None and val < lo:
-        warnings.warn(f"settings: {key}={val} < min {lo}; clamping")
+        _say(report, "clamp", key, val, lo, f"settings: {key}={val} < min {lo}; clamping")
         val = lo
     if hi is not None and val > hi:
-        warnings.warn(f"settings: {key}={val} > max {hi}; clamping")
+        _say(report, "clamp", key, val, hi, f"settings: {key}={val} > max {hi}; clamping")
         val = hi
     return val
 
 
-def migrate_raw(raw: dict[str, str]) -> dict[str, str]:
-    """The renames and retirements a stored settings text goes through before coercion.
-    One function, so a normal load and a backup import apply exactly the same migrations."""
-    # MIGRATION (ledger S-12.5): vendor-specific decoder tokens collapse to auto. The
-    # schema choices are (no, auto) now; without this a stored nvdec would coerce to the
-    # DEFAULT (no) and silently flip a hardware-decode user to software.
-    if str(raw.get("ENGINE_HWDEC", "")).strip() in ("nvdec", "vaapi", "vulkan"):
-        raw["ENGINE_HWDEC"] = "auto"
-    # MIGRATION: DETECT_INTERVAL_MIN (minutes) became DETECT_INTERVAL_SEC (seconds).
-    # Without this a stored minutes value would be dropped and the user's period reset.
-    if "DETECT_INTERVAL_MIN" in raw:
-        if "DETECT_INTERVAL_SEC" not in raw:
-            try:
-                raw["DETECT_INTERVAL_SEC"] = str(int(str(raw["DETECT_INTERVAL_MIN"]).strip()) * 60)
-            except (ValueError, TypeError):
-                pass
-        raw.pop("DETECT_INTERVAL_MIN", None)
-    return raw
+def migrate_raw(raw: dict[str, str], actions: list | None = None) -> dict[str, str]:
+    """The renames, retirements and value aliases a stored settings text goes through before
+    coercion. One call, so a normal load and a backup import apply exactly the same tables;
+    `actions` collects what they did for a caller that reports it."""
+    out, did = migrate.apply_tables("settings", raw)
+    if actions is not None:
+        actions.extend(did)
+    return out
 
 
 def load() -> dict[str, Any]:
@@ -99,8 +109,9 @@ def load() -> dict[str, Any]:
     return _validate(out)
 
 
-def _validate(d: dict[str, Any]) -> dict[str, Any]:
-    """Clamp ints to [min,max], snap unknown enum values to default. Warn, never raise."""
+def _validate(d: dict[str, Any], report: list | None = None) -> dict[str, Any]:
+    """Clamp ints to [min,max], snap unknown enum values to default. Never raises. Each
+    adjustment reaches `report` when the caller passes one and a warning when it does not."""
     out: dict[str, Any] = {}
     for key, spec in C.SETTINGS_SCHEMA.items():
         if key not in d:
@@ -111,30 +122,33 @@ def _validate(d: dict[str, Any]) -> dict[str, Any]:
             try:
                 val = int(val)
             except (ValueError, TypeError):
-                warnings.warn(f"settings: {key}={val!r} not an int; using default")
+                _say(report, "snap", key, val, spec["default"],
+                     f"settings: {key}={val!r} not an int; using default")
                 val = spec["default"]
-            val = _clamp_int(key, val, spec)
+            val = _clamp_int(key, val, spec, report)
         elif t == "int_or_empty":
             # "" means "let the engine decide"; a present value must be a clamped int.
             if val is None or str(val).strip() == "":
                 val = ""
             else:
                 try:
-                    val = _clamp_int(key, int(val), spec)
+                    val = _clamp_int(key, int(val), spec, report)
                 except (ValueError, TypeError):
-                    warnings.warn(f"settings: {key}={val!r} not an int; leaving empty")
+                    _say(report, "snap", key, val, "",
+                         f"settings: {key}={val!r} not an int; leaving empty")
                     val = ""
         elif t == "enum":
             choices = spec.get("choices", ())
-            if key == "ORDER" and val == "random":
-                val = "shuffle"  # retired mode, see PLAYLIST_MODES
+            val = C.VALUE_ALIASES.get("settings", {}).get(key, {}).get(str(val), val)
             if val not in choices:
-                warnings.warn(f"settings: {key}={val!r} not in {choices}; using default")
+                _say(report, "snap", key, val, spec["default"],
+                     f"settings: {key}={val!r} not in {choices}; using default")
                 val = spec["default"]
         elif t == "enum_or_empty":
             choices = spec.get("choices", ())
             if val != "" and val not in choices:
-                warnings.warn(f"settings: {key}={val!r} not in {choices}; leaving empty")
+                _say(report, "snap", key, val, "",
+                     f"settings: {key}={val!r} not in {choices}; leaving empty")
                 val = ""  # empty = engine default, never a wrong choice
         elif t == "bool":
             val = bool(val)
@@ -182,7 +196,16 @@ MACHINE_KEYS = tuple(k for k, s in C.SETTINGS_SCHEMA.items() if s["type"] == "pa
 
 
 def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
-    z.writestr(MEMBER, tier_a.serialize(_to_text(load()), header="lwe settings backup"))
+    flat = dict(_to_text(load()))
+    for key, val in foreign.extras("settings", MEMBER).items():
+        if key in flat:
+            continue
+        if tier_a.is_valid_key(key):
+            flat[key] = str(val)
+            foreign.emitted(r, 1)
+        else:
+            r["dropped"].append({"kind": "preserved-key", "id": key, "reason": "not a key this format can hold"})
+    z.writestr(MEMBER, tier_a.serialize(flat, header="lwe settings backup"))
 
 
 def _followups(r: dict[str, Any], after: dict[str, Any], current: dict[str, Any]) -> None:
@@ -197,19 +220,28 @@ def _followups(r: dict[str, Any], after: dict[str, Any], current: dict[str, Any]
 
 def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any],
                       cfg_after: dict[str, Any]) -> bool:
-    """The same migrations and coercion a normal load applies; unknown keys are dropped and
-    named. Without settings there is nothing to decide the rest of the plan against, so this
-    is the one store whose absence abandons the import."""
-    if MEMBER not in z.namelist():
-        r["errors"].append({"file": MEMBER, "reason": "The backup carries no settings."})
-        return False
+    """The same tables, coercion and validation a normal load applies; a key this build does
+    not know is preserved, every clamp, snap and alias is named. A backup with no settings
+    member leaves the current settings to decide the rest of the plan."""
     current = load()
-    raw = migrate_raw(tier_a.parse(z.read(MEMBER).decode("utf-8", "replace")))
-    known = {k: v for k, v in raw.items() if k in C.SETTINGS_SCHEMA}
-    for k in raw:
-        if k not in C.SETTINGS_SCHEMA:
-            r["dropped"].append({"kind": "setting", "id": k, "reason": "unknown to this version"})
-    coerced = _validate({k: _coerce(k, v, C.SETTINGS_SCHEMA[k]) for k, v in known.items()})
+    if MEMBER not in z.namelist():
+        r["notes"].append({"kind": "no-settings", "member": MEMBER})
+        plan["settings"] = {}
+        return True
+    actions: list = []
+    raw = migrate_raw(tier_a.parse(z.read(MEMBER).decode("utf-8", "replace")), actions)
+    migrate.report("settings", actions, r, MEMBER, "setting")
+    known: dict[str, str] = {}
+    for k, v in raw.items():
+        if k in C.SETTINGS_SCHEMA:
+            known[k] = v
+        else:
+            foreign.record(plan, "settings", MEMBER, k, v, r)
+    report: list = []
+    coerced = _validate({k: _coerce(k, v, C.SETTINGS_SCHEMA[k], report) for k, v in known.items()}, report)
+    for a in report:
+        r["adjusted"].append({"kind": a["kind"], "store": "settings", "id": MEMBER,
+                              "key": a["key"], "from": a["from"], "to": a["to"]})
     for key in MACHINE_KEYS:
         if key not in coerced:
             continue

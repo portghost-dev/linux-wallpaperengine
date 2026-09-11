@@ -26,10 +26,20 @@ def save(name: str, text: str) -> None:
     atomic.atomic_write_text(file_for(name), text)
 
 
-def _entries(text: str) -> str:
-    """A rule file as it is stored: one printable, non-empty entry per line."""
-    lines = [ln.rstrip("\r") for ln in text.splitlines()]
-    return "".join(ln + "\n" for ln in lines if ln.strip() and ln.isprintable())
+def _entries(text: str, name: str = "", r: dict[str, Any] | None = None) -> str:
+    """A rule file as it is stored: one printable, non-empty entry per line. A line the file
+    cannot hold is named in the receipt rather than vanishing."""
+    out = []
+    for raw in text.splitlines():
+        ln = raw.rstrip("\r")
+        if not ln.strip():
+            continue
+        if ln.isprintable():
+            out.append(ln + "\n")
+        elif r is not None:
+            r["dropped"].append({"kind": "rule-line", "id": f"{name}:{ln!r}",
+                                 "reason": "a rule file holds printable lines only"})
+    return "".join(out)
 
 
 def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
@@ -53,7 +63,7 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
     for name in FILES:
         member = f"rules/{name}"
         if member in z.namelist():
-            out[name] = _entries(z.read(member).decode("utf-8", "replace"))
+            out[name] = _entries(z.read(member).decode("utf-8", "replace"), name, r)
     plan["rules"] = out
     r["counts"]["rules"] = len(out)
     return True

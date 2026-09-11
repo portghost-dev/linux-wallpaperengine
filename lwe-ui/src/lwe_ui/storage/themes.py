@@ -19,8 +19,7 @@ import json
 import zipfile
 from typing import Any
 
-from .. import constants as C
-from . import atomic, paths
+from . import atomic, foreign, migrate, paths
 from .store import Store
 
 ROLES = ("background", "surface", "text", "textMuted", "accent", "border")
@@ -173,13 +172,19 @@ def load_config() -> dict[str, Any]:
     data = atomic.read_json(paths.theme_file(), default={})
     if not isinstance(data, dict):
         data = {}
+    data, _ = migrate.apply_tables("theme", data)
     out = {
         "active": data.get("active") or DEFAULT_ACTIVE,
         "overlays": data.get("overlays") if isinstance(data.get("overlays"), dict) else {},
     }
-    if out["active"] not in {t["key"] for t in FACTORY} | set(CUSTOM_KEYS):
+    if out["active"] not in active_keys():
         out["active"] = DEFAULT_ACTIVE
     return out
+
+
+def active_keys() -> set[str]:
+    """Every value `active` may hold: the factory themes and the custom slots."""
+    return {t["key"] for t in FACTORY} | set(CUSTOM_KEYS)
 
 
 def save_config(cfg: dict[str, Any]) -> None:
@@ -356,7 +361,11 @@ def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
     r["counts"]["theme"] = 0
     try:
         cfg = load_config()
-        z.writestr(MEMBER, json.dumps({k: cfg[k] for k in CONFIG_KEYS}, indent=1))
+        out = {k: cfg[k] for k in CONFIG_KEYS}
+        extra = {k: v for k, v in foreign.extras("theme", MEMBER).items() if k not in out}
+        out.update(extra)
+        foreign.emitted(r, len(extra))
+        z.writestr(MEMBER, json.dumps(out, indent=1))
     except Exception as exc:  # a theme that will not load is not the backup's fault
         r["errors"].append({"file": MEMBER, "reason": str(exc)})
         return
@@ -376,16 +385,25 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
         r["errors"].append({"file": MEMBER, "reason": "not readable, skipped"})
         return True
     if not isinstance(t, dict):
+        r["errors"].append({"file": MEMBER, "reason": "not readable, skipped"})
         return True
-    kept = {k: v for k, v in t.items() if k in CONFIG_KEYS}
-    for k in t:
+    named, actions = migrate.apply_tables("theme", t)
+    migrate.report("theme", actions, r, MEMBER, "theme")
+    kept = {k: v for k, v in named.items() if k in CONFIG_KEYS}
+    for k, v in named.items():
         if k not in CONFIG_KEYS:
-            retired = C.RETIRED.get("theme", {}).get(k)
-            r["dropped"].append({"kind": "theme", "id": k,
-                                 "reason": "retired: " + retired if retired else "unknown to this version"})
+            foreign.record(plan, "theme", MEMBER, k, v, r)
+    if "active" in kept and kept["active"] not in active_keys():
+        r["adjusted"].append({"kind": "snap", "store": "theme", "id": MEMBER, "key": "active",
+                              "from": kept["active"], "to": DEFAULT_ACTIVE})
+        kept["active"] = DEFAULT_ACTIVE
     if "overlays" in kept and not isinstance(kept["overlays"], dict):
         kept.pop("overlays")
         r["dropped"].append({"kind": "theme", "id": "overlays", "reason": "not a value this version holds"})
+    for name in list(kept.get("overlays") or {}):
+        if not isinstance(kept["overlays"][name], dict):
+            kept["overlays"].pop(name)
+            r["dropped"].append({"kind": "theme", "id": f"overlays:{name}", "reason": "not a value this version holds"})
     plan["theme"] = kept
     r["counts"]["theme"] = 1
     r["counts"]["overlays"] = len(kept.get("overlays") or {})

@@ -146,9 +146,11 @@ def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
 
 def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any],
                       cfg_after: dict[str, Any]) -> bool:
-    """A row for a wallpaper not in the library would put a card with no folder in the grid,
-    so those rows wait; importing the backup again after the wallpapers arrive restores
-    them."""
+    """A good or review row for a wallpaper not in the library would put a card with no
+    folder in the grid, so those rows wait; importing the backup again after the wallpapers
+    arrive restores them. A bad row is the opposite: it is the verdict that keeps a wallpaper
+    OUT, and it must land before the wallpaper does or the importer re-imports what the user
+    trashed."""
     out: list[dict] = []
     held = 0
     if MEMBER in z.namelist():
@@ -156,10 +158,15 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
         for row in reader:
             wid = str(row.get("id") or "").strip()
             state = str(row.get("state") or "").strip()
-            if not paths.is_safe_wid(wid) or state not in _VALID_STATES:
+            if not paths.is_safe_wid(wid):
                 r["dropped"].append({"kind": "tag", "id": wid or "?", "reason": "bad row"})
                 continue
-            if not paths.wallpaper_present(wid, cfg_after):
+            if state not in _VALID_STATES:
+                # a verdict this build does not know is a verdict still owed: review
+                r["adjusted"].append({"kind": "snap", "store": "tags", "id": wid, "key": "state",
+                                      "from": state, "to": "review"})
+                state = "review"
+            if state != "bad" and not paths.wallpaper_present(wid, cfg_after):
                 held += 1
                 continue
             out.append({"id": wid, "title": str(row.get("title") or ""), "state": state})

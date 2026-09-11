@@ -33,7 +33,7 @@ from PySide6.QtCore import QEvent, QMetaObject, QObject, Q_ARG
 
 from . import constants as C
 from .proctitle import set_process_name
-from .storage import paths, settings, theme_cfg, themes
+from .storage import foreign, paths, settings, theme_cfg, themes
 
 _QML_DIR = Path(__file__).resolve().parent / "qml"
 # URI the Python-side ThemeTokens singleton is registered under; Theme.qml imports this.
@@ -137,6 +137,10 @@ def _settle_state_tree(process: str) -> None:
                  len(report["dead"]), ", ".join(report["dead"]))
     if process == "window":
         _sparsify_overrides_once(log)
+        try:
+            foreign.promote(log)
+        except Exception:
+            log.exception("foreign: promotion failed")
 
 
 def _sparsify_overrides_once(log) -> None:

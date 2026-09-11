@@ -394,10 +394,12 @@ class SettingsBridge(QObject):
         except Exception:
             return self._fail("Configuration", "That backup could not be restored.")
         log = logging.getLogger("lwe_ui.backup")
-        if r.get("refused") or (r["errors"] and not r.get("counts")):
-            return self._fail("Configuration", r["errors"][0]["reason"])
+        if r.get("refused"):
+            why = (r.get("errors") or [{}])[0].get("reason") or "That backup could not be restored."
+            return self._fail("Configuration", why)
         log.info("restored %s: %s", local, json.dumps(r["counts"]))
-        for key in ("dropped", "held", "reresolved", "followups", "errors"):
+        for key in ("dropped", "held", "reresolved", "adjusted", "preserved", "notes",
+                    "followups", "errors"):
             for item in r.get(key, []):
                 log.info("restore %s: %s", key, json.dumps(item))
         self._receipt = r

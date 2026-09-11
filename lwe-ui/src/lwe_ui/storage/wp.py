@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import constants as C
-from . import atomic, paths, tier_a
+from . import atomic, foreign, migrate, paths, tier_a
 from .store import Store
 
 # Keys whose empty value means "unset / inherit" and must NOT be written.
@@ -77,7 +77,7 @@ def load_path(path) -> dict[str, Any]:
 
 def load_text(text: str) -> dict[str, Any]:
     """The conf TEXT into a typed dict + props: the one deserialization every reader uses."""
-    raw = tier_a.parse(text)
+    raw, _ = migrate.apply_tables("overrides", tier_a.parse(text))
     out: dict[str, Any] = {}
     for key, spec in C.WP_SCHEMA.items():
         out[key] = _coerce(spec, raw[key]) if key in raw else spec["default"]
@@ -108,7 +108,7 @@ def load_set_path(path) -> dict[str, Any]:
     second view over the same file for surfaces that must tell set from inherited.
     Raises when the file exists but cannot be read.
     """
-    raw = tier_a.parse(_read_raw(path))
+    raw, _ = migrate.apply_tables("overrides", tier_a.parse(_read_raw(path)))
     out: dict[str, Any] = {}
     for key, spec in C.WP_SCHEMA.items():
         if key in raw:
@@ -311,57 +311,75 @@ def exists(wid: str) -> bool:
 PREFIX = "wp/"
 
 
-def _portable_bg(wid: str, bg: str) -> str:
-    """A folder that is this library's own copy travels as the bare id, which the app
-    resolves against the library folder; a referenced folder travels as it is."""
-    if bg and os.path.isabs(bg) and os.path.basename(bg.rstrip("/")) == wid:
+def _portable_bg(wid: str, bg: str, cfg: dict[str, Any]) -> str:
+    """A folder inside the library this machine's settings name is this library's own copy
+    and travels as the bare id, which the app resolves against the library folder; a
+    referenced folder anywhere else travels as it is."""
+    root = str(cfg.get("WALLPAPERS_DIR") or "")
+    if bg and root and os.path.isabs(bg) and os.path.realpath(bg) == os.path.realpath(os.path.join(root, wid)):
         return wid
     return bg
 
 
-def _backup_text(wid: str, text: str) -> str:
+def _backup_text(wid: str, text: str, cfg: dict[str, Any], r: dict[str, Any] | None = None,
+                 kept_aside: dict | None = None) -> str:
     """An override as it travels: the keys the file carries and nothing more, so set-ness
-    (a present key overrides, an absent key inherits) survives the round trip."""
+    (a present key overrides, an absent key inherits) survives the round trip, plus the keys
+    an earlier import preserved for it."""
     raw = tier_a.parse(text)
     kept = {k: v for k, v in raw.items()
             if k in C.WP_SCHEMA or (k.startswith(C.WP_PROP_PREFIX) and len(k) > len(C.WP_PROP_PREFIX))}
     if "BG" in kept:
-        kept["BG"] = _portable_bg(wid, kept["BG"])
+        kept["BG"] = _portable_bg(wid, kept["BG"], cfg)
+    for key, val in foreign.extras("overrides", wid, kept_aside).items():
+        if key in kept:
+            continue
+        if tier_a.is_valid_key(key):
+            kept[key] = str(val)
+            if r is not None:
+                foreign.emitted(r, 1)
+        elif r is not None:
+            r["dropped"].append({"kind": "preserved-key", "id": f"{wid}:{key}", "reason": "not a key this format can hold"})
     return tier_a.serialize(kept, header=f"lwe wallpaper override {wid} (Tier A)")
 
 
-def _backup_value_ok(spec: dict, raw: str) -> bool:
-    """Whether a stored override value is one this build can hold for that key."""
+def _backup_value(spec: dict, raw: str) -> tuple[str, Any, str]:
+    """What this build can do with a stored override value: ("ok"|"clamp", value, "") when
+    it holds it, ("preserve", raw, reason) for a choice this build does not have, or
+    ("drop", raw, reason) for text that is not a value of that type at all."""
     t = spec["type"]
     s = str(raw).strip()
-    try:
-        if t == "int":
-            int(s)
-        elif t == "int_or_empty":
-            if s:
-                int(s)
-        elif t == "float":
-            v = float(s)
-            lo, hi = spec.get("min"), spec.get("max")
-            if (lo is not None and v < lo) or (hi is not None and v > hi):
-                return False
-        elif t == "enum":
-            return s in spec.get("choices", ())
-        elif t == "enum_or_empty":
-            return s == "" or s in spec.get("choices", ())
-    except (ValueError, TypeError):
-        return False
-    return True
+    lo, hi = spec.get("min"), spec.get("max")
+    if t in ("int", "int_or_empty", "float"):
+        if t == "int_or_empty" and s == "":
+            return "ok", s, ""
+        try:
+            v = int(s) if t.startswith("int") else float(s)
+        except (ValueError, TypeError):
+            return "drop", raw, "not a number"
+        if lo is not None and v < lo:
+            return "clamp", lo, ""
+        if hi is not None and v > hi:
+            return "clamp", hi, ""
+        return "ok", s, ""
+    if t == "enum" and s not in spec.get("choices", ()):
+        return "preserve", raw, "not a choice this version has"
+    if t == "enum_or_empty" and s != "" and s not in spec.get("choices", ()):
+        return "preserve", raw, "not a choice this version has"
+    return "ok", s, ""
 
 
 def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
+    from . import settings
+    cfg = settings.load()
+    kept_aside = foreign.load()
     n = 0
     for conf in sorted(paths.wp_dir().glob("*.conf")):
         wid = conf.stem
         if not paths.is_safe_wid(wid):
             continue
         try:
-            z.writestr(f"{PREFIX}{wid}.conf", _backup_text(wid, conf.read_text(encoding="utf-8")))
+            z.writestr(f"{PREFIX}{wid}.conf", _backup_text(wid, conf.read_text(encoding="utf-8"), cfg, r, kept_aside))
         except (OSError, ValueError) as exc:
             r["errors"].append({"file": conf.name, "reason": str(exc)})
             continue
@@ -380,18 +398,26 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
         if not paths.is_safe_wid(wid):
             r["dropped"].append({"kind": "override", "id": wid, "reason": "bad id"})
             continue
-        raw = tier_a.parse(z.read(n).decode("utf-8", "replace"))
+        raw, actions = migrate.apply_tables("overrides", tier_a.parse(z.read(n).decode("utf-8", "replace")))
+        migrate.report("overrides", actions, r, wid, "override-key", f"{wid}:")
         kept: dict[str, str] = {}
         for k, v in raw.items():
             if k in C.WP_SCHEMA:
-                if _backup_value_ok(C.WP_SCHEMA[k], v):
-                    kept[k] = str(v)
+                verdict, val, reason = _backup_value(C.WP_SCHEMA[k], v)
+                if verdict == "clamp":
+                    kept[k] = str(val)
+                    r["adjusted"].append({"kind": "clamp", "store": "overrides", "id": wid,
+                                          "key": k, "from": v, "to": val})
+                elif verdict == "preserve":
+                    foreign.record(plan, "overrides", wid, k, v, r)
+                elif verdict == "drop":
+                    r["dropped"].append({"kind": "override-key", "id": f"{wid}:{k}", "reason": reason})
                 else:
-                    r["dropped"].append({"kind": "override-key", "id": f"{wid}:{k}", "reason": "not a value this version holds"})
+                    kept[k] = str(val)
             elif k.startswith(C.WP_PROP_PREFIX) and tier_a.is_valid_key(k):
                 kept[k] = str(v)
             else:
-                r["dropped"].append({"kind": "override-key", "id": f"{wid}:{k}", "reason": "unknown to this version"})
+                foreign.record(plan, "overrides", wid, k, v, r)
         bg = kept.get("BG", "")
         if bg and os.path.isabs(bg) and not os.path.isdir(bg):
             r["reresolved"].append({"key": f"override {wid} folder", "from": bg, "to": wid})

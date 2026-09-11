@@ -10,7 +10,7 @@ import zipfile
 from typing import Any
 
 from .. import constants as C
-from . import atomic, paths
+from . import atomic, foreign, migrate, paths
 from .store import Store
 
 
@@ -19,6 +19,7 @@ def load() -> dict[str, Any]:
     out = dict(C.DISCOVER_DEFAULTS)
     data = atomic.read_json(paths.discover_file(), default={})
     if isinstance(data, dict):
+        data, _ = migrate.apply_tables("discovery", data)
         out.update(data)
     return out
 
@@ -39,10 +40,14 @@ def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
     # steamcmdPath is a path on the source machine and travels verbatim, unresolved;
     # a machine with no file has nothing to carry
     r["counts"]["discovery"] = 0
-    if not paths.discover_file().is_file():
+    extra = foreign.extras("discovery", MEMBER)
+    if not paths.discover_file().is_file() and not extra:
         return
     try:
-        z.writestr(MEMBER, json.dumps({k: v for k, v in load().items() if k in C.DISCOVER_DEFAULTS}, indent=1))
+        out = {k: v for k, v in load().items() if k in C.DISCOVER_DEFAULTS}
+        out.update({k: v for k, v in extra.items() if k not in out})
+        foreign.emitted(r, len([k for k in extra if k not in C.DISCOVER_DEFAULTS]))
+        z.writestr(MEMBER, json.dumps(out, indent=1))
     except Exception as exc:
         r["errors"].append({"file": MEMBER, "reason": str(exc)})
         return
@@ -61,11 +66,19 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
         r["errors"].append({"file": MEMBER, "reason": "not readable, skipped"})
         return True
     if not isinstance(d, dict):
+        r["errors"].append({"file": MEMBER, "reason": "not readable, skipped"})
         return True
-    for k in d:
+    named, actions = migrate.apply_tables("discovery", d)
+    migrate.report("discovery", actions, r, MEMBER, "discovery")
+    kept: dict[str, Any] = {}
+    for k, v in named.items():
         if k not in C.DISCOVER_DEFAULTS:
-            r["dropped"].append({"kind": "discovery", "id": k, "reason": "unknown to this version"})
-    plan["discovery"] = {k: v for k, v in d.items() if k in C.DISCOVER_DEFAULTS}
+            foreign.record(plan, "discovery", MEMBER, k, v, r)
+        elif isinstance(v, str):
+            kept[k] = v
+        else:
+            r["dropped"].append({"kind": "discovery", "id": k, "reason": "not a value this version holds"})
+    plan["discovery"] = kept
     r["counts"]["discovery"] = 1
     return True
 

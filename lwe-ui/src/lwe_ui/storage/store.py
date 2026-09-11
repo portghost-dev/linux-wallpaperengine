@@ -19,9 +19,11 @@ class Store:
 
     `owns` names the files the store writes under paths.config_dir(), relative, literal or
     a glob whose * stays within one path segment (registry.matches); test_store_ownership
-    asserts every config file is claimed by exactly one Store or one NOT_BACKED_UP entry. `preflight` fills `plan[name]` with what the
-    import would write and `apply` writes it; both return False to abandon the whole
-    import, which only a store the archive is meaningless without ever does.
+    asserts every config file is claimed by exactly one Store or one NOT_BACKED_UP entry.
+    `preflight` fills `plan[name]` with what the import would write; `apply` writes it and
+    reports a failure in the receipt's errors. Returning False from either abandons the
+    import, which only the settings store does, since every other plan is decided against
+    the settings the import leaves; the registry keeps settings first for that reason.
     """
     name: str
     owns: tuple[str, ...]

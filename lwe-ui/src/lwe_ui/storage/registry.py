@@ -4,13 +4,14 @@ Every file the panel writes under paths.config_dir() is either carried by a Stor
 named in NOT_BACKED_UP with the reason it stays behind; test_store_ownership runs the
 writers in a sandbox and fails on a file neither table claims, so a store added later
 cannot be forgotten by the backup. Order is the order the backup walks: settings first,
-since every other store's plan is decided against the settings the import would leave.
+since every other store's plan is decided against the settings the import would leave, and
+foreign last, because it writes what the stores before it chose to preserve.
 """
 from __future__ import annotations
 
 import fnmatch
 
-from . import discover_cfg, meta, playlists, rules, settings, tags, themes, wp
+from . import discover_cfg, foreign, meta, playlists, rules, settings, tags, themes, wp
 from .store import Store
 
 STORES: tuple[Store, ...] = (
@@ -22,6 +23,7 @@ STORES: tuple[Store, ...] = (
     tags.BACKUP,
     meta.BACKUP,
     rules.BACKUP,
+    foreign.BACKUP,
 )
 
 #: files under config_dir() that deliberately do not travel, each with its reason

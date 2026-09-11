@@ -201,8 +201,8 @@ PLAYLIST_SCHEMA: dict[str, dict] = {
 }
 DEFAULT_PLAYLIST_NAME = "All wallpapers"
 
-# Keys a store has stopped carrying: {store: {key: reason}}. Dropping a key is legal only
-# where this names it; stage 2 populates it and applies it at both doors (load and import).
+# Keys a store does not carry: {store: {key: reason}}. Dropping a key is legal only where
+# this names it; storage/migrate.py applies it at both doors (load and import).
 RETIRED: dict[str, dict[str, str]] = {
     "theme": {
         "preset": "the theme moved to the live store (active + overlays) and this key no longer exists",
@@ -210,9 +210,27 @@ RETIRED: dict[str, dict[str, str]] = {
         "followSystem": "the theme moved to the live store (active + overlays) and this key no longer exists",
     },
 }
-# Keys that changed name: {store: {old: (new, value_fn or None)}}. A meaning change is a
-# rename by rule. Stage 2 populates it and applies it at both doors.
-RENAMES: dict[str, dict[str, tuple]] = {}
+
+
+def _minutes_to_seconds(raw: str) -> str:
+    try:
+        return str(int(str(raw).strip()) * 60)
+    except (ValueError, TypeError):
+        return raw
+
+
+# Stored key -> the name this build reads it under: {store: {old: (new, value_fn or None)}}.
+# A meaning change is a rename by rule, so a unit change carries a value function.
+RENAMES: dict[str, dict[str, tuple]] = {
+    "settings": {"DETECT_INTERVAL_MIN": ("DETECT_INTERVAL_SEC", _minutes_to_seconds)},
+}
+# Stored value -> the value this build reads it as: {store: {key: {old: new}}}. A key whose
+# name is unchanged but whose choice set is narrower belongs here, not in RENAMES.
+VALUE_ALIASES: dict[str, dict[str, dict[str, str]]] = {
+    "settings": {"ENGINE_HWDEC": {"nvdec": "auto", "vaapi": "auto", "vulkan": "auto"},
+                 "ORDER": {"random": "shuffle"}},
+    "playlists": {"MODE": {"random": "shuffle"}},
+}
 
 DISCOVER_DEFAULTS = {"apiKey": "", "acquireMethod": "client", "steamcmdPath": ""}
 THEME_DEFAULTS = {"preset": "True Black", "accent": "", "followSystem": False}

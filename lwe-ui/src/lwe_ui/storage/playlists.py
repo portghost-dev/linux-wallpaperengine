@@ -19,7 +19,7 @@ import zipfile
 from typing import Any
 
 from .. import constants as C
-from . import atomic, paths, settings, tier_a
+from . import atomic, foreign, migrate, paths, settings, tier_a
 from .store import Store
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -70,8 +70,7 @@ def _validate(d: dict[str, Any]) -> dict[str, Any]:
             if hi is not None and val > hi:
                 val = hi
         elif spec["type"] == "enum":
-            if key == "MODE" and val == "random":
-                val = "shuffle"  # retired mode; the engine treats the word as shuffle for one release
+            val = C.VALUE_ALIASES.get("playlists", {}).get(key, {}).get(str(val), val)
             if val not in spec.get("choices", ()):
                 warnings.warn(f"playlist: {key}={val!r} not in {spec.get('choices')}; using default")
                 val = spec["default"]
@@ -97,7 +96,7 @@ def load(slug: str) -> dict[str, Any]:
             text = p.read_text(encoding="utf-8")
         except OSError:
             text = ""
-    raw = tier_a.parse(text)
+    raw, _ = migrate.apply_tables("playlists", tier_a.parse(text))
     return _validate({k: _coerce(k, raw[k], s) if k in raw else s["default"]
                       for k, s in C.PLAYLIST_SCHEMA.items()})
 
@@ -239,15 +238,45 @@ def ensure_default() -> str:
 PREFIX = "playlists/"
 
 
+def _backup_value(spec: dict, raw: Any) -> tuple[str, Any, str]:
+    """What this build can do with a stored playlist value: ("ok"|"clamp"|"snap", value, "").
+    A playlist file is dense, so a mode this build lacks and text where a number belongs
+    both snap to the default and are named."""
+    s = str(raw).strip()
+    if spec["type"] == "int":
+        try:
+            v = int(s)
+        except (ValueError, TypeError):
+            return "snap", spec["default"], ""
+        lo, hi = spec.get("min"), spec.get("max")
+        if lo is not None and v < lo:
+            return "clamp", lo, ""
+        if hi is not None and v > hi:
+            return "clamp", hi, ""
+        return "ok", v, ""
+    if spec["type"] == "enum" and s not in spec.get("choices", ()):
+        return "snap", spec["default"], ""
+    return "ok", s, ""
+
+
 def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
     n = 0
+    kept_aside = foreign.load()
     for pl in list_playlists():
         slug = str(pl.get("slug") or "")
         if not slug:
             continue
         d = load(slug)
-        z.writestr(f"{PREFIX}{slug}.conf",
-                   tier_a.serialize({k: str(d[k]) for k in C.PLAYLIST_SCHEMA}, header="lwe playlist"))
+        flat = {k: str(d[k]) for k in C.PLAYLIST_SCHEMA}
+        for key, val in foreign.extras("playlists", slug, kept_aside).items():
+            if key in flat:
+                continue
+            if tier_a.is_valid_key(key):
+                flat[key] = str(val)
+                foreign.emitted(r, 1)
+            else:
+                r["dropped"].append({"kind": "preserved-key", "id": f"{slug}:{key}", "reason": "not a key this format can hold"})
+        z.writestr(f"{PREFIX}{slug}.conf", tier_a.serialize(flat, header="lwe playlist"))
         n += 1
     r["counts"]["playlists"] = n
 
@@ -262,9 +291,26 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
         if not slug or slugify(slug) != slug:
             r["dropped"].append({"kind": "playlist", "id": slug, "reason": "bad name"})
             continue
-        raw = tier_a.parse(z.read(n).decode("utf-8", "replace"))
-        d = _validate({k: _coerce(k, raw[k], s) if k in raw else s["default"]
-                       for k, s in C.PLAYLIST_SCHEMA.items()})
+        raw, actions = migrate.apply_tables("playlists", tier_a.parse(z.read(n).decode("utf-8", "replace")))
+        migrate.report("playlists", actions, r, slug, "playlist-key", f"{slug}:")
+        kept: dict[str, Any] = {}
+        for key, spec in C.PLAYLIST_SCHEMA.items():
+            if key not in raw:
+                continue
+            verdict, val, reason = _backup_value(spec, raw[key])
+            if verdict in ("clamp", "snap"):
+                kept[key] = val
+                r["adjusted"].append({"kind": verdict, "store": "playlists", "id": slug,
+                                      "key": key, "from": raw[key], "to": val})
+            elif verdict == "drop":
+                r["dropped"].append({"kind": "playlist-key", "id": f"{slug}:{key}", "reason": reason})
+            else:
+                kept[key] = _coerce(key, raw[key], spec)
+        for key, val in raw.items():
+            if key in C.PLAYLIST_SCHEMA:
+                continue
+            foreign.record(plan, "playlists", slug, key, val, r)
+        d = _validate(kept)
         missing = [m for m in str(d["MEMBERS"]).split() if not paths.wallpaper_present(m, cfg_after)]
         if missing:
             r["held"].append({"kind": "playlist-members", "id": slug, "count": len(missing)})

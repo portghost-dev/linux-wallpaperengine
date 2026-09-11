@@ -25,14 +25,21 @@ def _claimed_by(rel: str, stores, not_backed_up) -> int:
     return n + sum(1 for p in not_backed_up if registry.matches(rel, p))
 
 
+def _reexport(backup, home: str, name: str) -> str:
+    out = os.path.join(home, f"{name}.lwebackup")
+    r = backup.export_to(out)
+    assert r["errors"] == [], r["errors"]
+    return out
+
+
 def main() -> None:
     home = tempfile.mkdtemp(prefix="lwe-ownership-")
     os.environ["XDG_CONFIG_HOME"] = os.path.join(home, "c")
     os.environ["XDG_STATE_HOME"] = os.path.join(home, "s")
     os.environ["XDG_DATA_HOME"] = os.path.join(home, "d")
     from lwe_ui.engine import daemon_unit
-    from lwe_ui.storage import (atomic, backup, discover_cfg, meta, paths, playlists, registry,
-                                rules, settings, tags, themes, wp)
+    from lwe_ui.storage import (atomic, backup, discover_cfg, foreign, meta, paths, playlists,
+                                registry, rules, settings, tags, themes, wp)
 
     lib = os.path.join(home, "walls")
     os.makedirs(os.path.join(lib, "111"))
@@ -53,6 +60,7 @@ def main() -> None:
                        "steamcmdPath": "/usr/bin/steamcmd"})
     for name in rules.FILES:
         rules.save(name, "game.exe\n")
+    foreign.save({"settings": {"settings.conf": {"FUTURE_KNOB": "1"}}})
     # the generated engine env, written without touching systemd
     atomic.atomic_write_text(paths.config_dir() / daemon_unit.ENV_FILE_NAME,
                              daemon_unit.build_env_content(["DP-1"], None))
@@ -79,6 +87,7 @@ def main() -> None:
     from lwe_ui import storage as storage_pkg
     from lwe_ui.storage.store import Store
     writer_names = ("save", "save_config", "save_rows", "write_keys", "update", "set_state", "ensure_exists")
+    # migrate has an apply_tables, not a writer; it is named below with the other helpers
     exempt = {
         "atomic": "primitive writers every store uses",
         "tier_a": "serialiser, writes nothing itself",
@@ -93,6 +102,7 @@ def main() -> None:
         "backup": "the archive, not a store",
         "registry": "the table itself",
         "store": "the record type",
+        "migrate": "applies the rename tables, writes nothing itself",
     }
     for info in pkgutil.iter_modules(storage_pkg.__path__):
         mod = importlib.import_module(f"lwe_ui.storage.{info.name}")
@@ -117,6 +127,8 @@ def main() -> None:
     stray.write_text("{}", encoding="utf-8")
     assert registry.claims("stray.json") == [], "an unclaimed file must fail the check"
     stray.unlink()
+    assert registry.STORES[0].name == "settings", "every later plan is decided against the settings"
+    assert registry.STORES[-1].name == "foreign", "foreign counts what the other stores kept aside"
     for st in registry.STORES:
         others = tuple(s for s in registry.STORES if s is not st)
         orphans = [rel for rel in files
@@ -157,11 +169,15 @@ def main() -> None:
                 data = json.dumps(d).encode()
             zout.writestr(n, data)
     pre = backup.preflight(doctored)
-    dropped = {(d["kind"], d["id"]) for d in pre["dropped"]}
-    assert ("theme", "glow") in dropped and ("discovery", "glow") in dropped, dropped
+    kept = {(d["store"], d["key"]) for d in pre["preserved"]}
+    assert ("theme", "glow") in kept and ("discovery", "glow") in kept, pre["preserved"]
     backup.apply(pre)
     assert "glow" not in json.loads(paths.theme_file().read_text(encoding="utf-8")), "the file itself carries no unknown key"
-    print("OK store ownership: every config file claimed once, theme and discovery travel")
+    assert foreign.load()["theme"]["theme.json"]["glow"] is True, foreign.load()
+    with zipfile.ZipFile(_reexport(backup, home, "again")) as z:
+        assert json.loads(z.read("theme.json"))["glow"] is True, "the preserved key is re-emitted"
+    print("OK store ownership: every config file claimed once, theme and discovery travel, "
+          "an unknown key is preserved and re-emitted")
 
 
 if __name__ == "__main__":

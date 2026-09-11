@@ -46,6 +46,23 @@ archive was taken:
     meta              wid -> {key: value}
     rules             file name -> the lines it held
 
+## What the receipt lists mean for the invariant
+
+An archive of the current generation was written by the current stores, so a restore of it
+must need no accommodation at all, and the suite reads the receipt that way. `dropped` may
+only name a key `constants.py::RETIRED` names, or the old name of a renamed key whose new
+name the same file carries (a rule LINE is the other exception: a line the file cannot
+hold is legal to drop precisely because the receipt says so). `adjusted` must be
+empty: a clamp, a snap or a value alias all mean a value this build wrote did not come
+back as it went. `preserved` must be empty
+too: a key of ours reading as foreign means a store stopped knowing its own key. `notes` may
+hold the pre-restore snapshot and nothing else, since a note is how a restore reports a
+newer format, a missing settings member or a playlist slug nothing will leave behind. An
+archive from an older or newer build is the opposite case and belongs in
+`test_backup.py::doors`, which builds one by editing an export in memory and asserts the
+restored state: the value under its new name, the clamp with both numbers in the receipt,
+the preserved key back in `config/foreign.json` and re-emitted on the next export.
+
 Anything the current build genuinely cannot carry is named in `test_backup_corpus.py`'s
 `EXPECTED` table with its reason. An entry there is a finding, not a licence: when the case
-starts passing the suite fails until the entry is deleted with the fix.
+starts passing the suite fails until the entry is deleted with the fix. The table is empty.

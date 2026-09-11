@@ -3,8 +3,9 @@
 For each archive, restored into a fresh sandbox whose library holds only some of its
 wallpapers: no receipt error, no Python warning, no dropped entry the RETIRED table does not
 name, every value the generator wrote back verbatim (or under its new name through RENAMES),
-every override's set-ness kept key for key, and the newest generation carrying every key the
-current schemas define, so adding a key without regenerating the corpus fails by its name.
+every override's set-ness kept key for key, no value clamped, snapped, aliased or preserved,
+and the newest generation carrying every key the current schemas define, so adding a key
+without regenerating the corpus fails by its name.
 
 The expected values are the generator's own record (tests/corpus/make_corpus.py), never a
 hand-written list. EXPECTED below names the cases the shipped code cannot satisfy yet; a
@@ -29,15 +30,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "backups"
 
 #: Findings, not licences: the case, and why the shipped code loses it.
-EXPECTED = {
-    ("rules", "tab"): "preflight drops a rule line that is not isprintable (a tab) and "
-                      "does not name it in the receipt",
-}
+EXPECTED: dict[tuple[str, str], str] = {}
 
-#: receipt "kind" -> the store whose RETIRED/RENAMES table governs it
-STORE_OF_KIND = {"setting": "settings", "theme": "theme", "override": "wp",
-                 "override-key": "wp", "playlist": "playlists", "playlist-members": "playlists",
-                 "tag": "tags"}
+#: receipt "kind" -> the store whose RETIRED/RENAMES table governs it, named as the Store
+#: record names it
+STORE_OF_KIND = {"setting": "settings", "theme": "theme", "override": "overrides",
+                 "override-key": "overrides", "playlist": "playlists",
+                 "playlist-key": "playlists", "playlist-members": "playlists",
+                 "tag": "tags", "meta": "meta", "discovery": "discovery",
+                 "rule-line": "rules", "preserved-key": "foreign"}
 
 
 def _retired(store: str, key: str) -> bool:
@@ -173,7 +174,7 @@ def _check_overrides(run: Run) -> None:
     for wid, entry in run.record["overrides"].items():
         want = {}
         for key, value in entry["keys"].items():
-            exp = _expected("wp", key, value)
+            exp = _expected("overrides", key, value)
             if exp is not None:
                 want[exp[0]] = exp[1]
         path = paths.wp_file(wid)
@@ -226,26 +227,53 @@ def _check_meta(run: Run) -> None:
 
 def _check_rules(run: Run) -> None:
     from lwe_ui.storage import paths
+    named = {str(d.get("id")) for d in run.receipt.get("dropped", []) if d.get("kind") == "rule-line"}
     for name, lines in run.record["rules"].items():
         path = paths.config_dir() / name
         got = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
         for line in lines:
-            case = ("rules", "tab") if "\t" in line else ("rules", name)
             if line in got:
-                run.passes(case)
-            else:
-                run.fail(case, f"rule {name}: line {line!r} did not survive the restore")
+                continue
+            if not line.isprintable() and f"{name}:{line!r}" in named:
+                continue   # a line the file cannot hold, named in the receipt
+            run.fail(("rules", name),
+                     f"rule {name}: line {line!r} did not survive the restore and the receipt "
+                     f"does not name it")
 
 
 def _check_dropped(run: Run) -> None:
+    """A KEY may be dropped only where RETIRED names it, or when it is the old name of a
+    renamed key whose new name the same file carries. A rule LINE has no key and no table:
+    it may be dropped only when the file cannot hold it, which _check_rules pairs with the
+    line the generator wrote."""
     for d in run.receipt.get("dropped", []):
         kind, ident = d.get("kind", "?"), str(d.get("id", "?"))
+        if kind == "rule-line":
+            continue
+        if str(d.get("reason", "")).startswith("retired: the file also carries"):
+            continue  # a stored key whose new name the file also carries: named, legal
         store = STORE_OF_KIND.get(kind, kind)
-        key = ident.split(":", 1)[1] if kind == "override-key" and ":" in ident else ident
+        key = ident.split(":", 1)[1] if ":" in ident and kind != "tag" else ident
         if _retired(store, key):
             continue
         run.fail((kind, ident), f"dropped {kind} {ident}: {d.get('reason')} - a drop is legal "
                                 f"only where constants.RETIRED[{store!r}] names the key")
+
+
+def _check_adjusted(run: Run) -> None:
+    """The generator wrote every value through the live stores, so nothing in an archive of
+    this generation can need a clamp, a snap, an alias or a preserving."""
+    for a in run.receipt.get("adjusted", []):
+        run.fail(None, f"adjusted {a.get('kind')} {a.get('store')} {a.get('id')} "
+                       f"{a.get('key')}: {a.get('from')!r} -> {a.get('to')!r} - a value this "
+                       f"build wrote must restore verbatim")
+    for a in run.receipt.get("preserved", []):
+        run.fail(None, f"preserved {a.get('store')} {a.get('id')} {a.get('key')} - this "
+                       f"build's own key reads as foreign")
+    for n in run.receipt.get("notes", []):
+        if n.get("kind") != "snapshot":
+            run.fail(None, f"note {n} - an archive of this generation needs no note but the "
+                           f"pre-restore snapshot")
 
 
 def _check_newest_covers_schema(records: dict[Path, dict], failures: list[str]) -> None:
@@ -259,11 +287,11 @@ def _check_newest_covers_schema(records: dict[Path, dict], failures: list[str]) 
         with zipfile.ZipFile(archive) as z:
             names = set(z.namelist())
             have = {"settings": set(tier_a.parse(z.read("settings.conf").decode("utf-8"))),
-                    "wp": set(), "playlists": set(), "theme": set(), "discovery": set(),
+                    "overrides": set(), "playlists": set(), "theme": set(), "discovery": set(),
                     "tag_states": set()}
             for n in names:
                 if n.startswith("wp/"):
-                    have["wp"] |= set(tier_a.parse(z.read(n).decode("utf-8")))
+                    have["overrides"] |= set(tier_a.parse(z.read(n).decode("utf-8")))
                 elif n.startswith("playlists/"):
                     have["playlists"] |= set(tier_a.parse(z.read(n).decode("utf-8")))
             if "theme.json" in names:
@@ -274,7 +302,7 @@ def _check_newest_covers_schema(records: dict[Path, dict], failures: list[str]) 
                 rows = csv.DictReader(io.StringIO(z.read("tags.csv").decode("utf-8")))
                 have["tag_states"] = {str(r.get("state") or "").strip() for r in rows}
         from lwe_ui.storage import themes
-        wanted = {"settings": set(C.SETTINGS_SCHEMA), "wp": set(C.WP_SCHEMA),
+        wanted = {"settings": set(C.SETTINGS_SCHEMA), "overrides": set(C.WP_SCHEMA),
                   "playlists": set(C.PLAYLIST_SCHEMA), "theme": set(themes.CONFIG_KEYS),
                   "discovery": set(C.DISCOVER_DEFAULTS), "tag_states": set(tags._VALID_STATES)}
         for store, keys in wanted.items():
@@ -318,6 +346,7 @@ def main() -> None:
             run.fail(None, "nothing was held: this archive no longer exercises the path where "
                            "the library is missing wallpapers the backup carries")
         _check_dropped(run)
+        _check_adjusted(run)
         _check_settings(run)
         _check_theme(run)
         _check_discovery(run)
@@ -340,9 +369,9 @@ def main() -> None:
         for f in failures:
             print("  " + f)
         raise SystemExit(1)
-    known = ", ".join(f"{a}:{b}" for a, b in sorted(EXPECTED))
-    print(f"OK backup corpus: {len(archives)} archive(s) restored whole; "
-          f"known losses still pinned: {known}")
+    known = ", ".join(f"{a}:{b}" for a, b in sorted(EXPECTED)) or "none"
+    print(f"OK backup corpus: {len(archives)} archive(s) restored whole, nothing adjusted, "
+          f"nothing preserved; known losses still pinned: {known}")
 
 
 if __name__ == "__main__":

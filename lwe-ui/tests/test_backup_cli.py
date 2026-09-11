@@ -86,6 +86,7 @@ def main() -> None:
         assert back.returncode == 0, f"restore failed: {back.returncode}\n{back.stdout}\n{back.stderr}"
         assert "Traceback" not in back.stderr, back.stderr
         assert back.stdout.startswith("Restored"), back.stdout
+        assert "notes: kind=snapshot" in back.stdout, "the CLI prints every receipt list"
         s = settings.load()
         assert s["ENGINE_LAYER"] == "top" and int(s["INTERFACE_SCALE"]) == 125, s
         assert "mine" in [p.get("slug") for p in playlists.list_playlists()], "the playlist came back"
