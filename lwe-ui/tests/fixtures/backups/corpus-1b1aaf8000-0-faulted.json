@@ -4,6 +4,44 @@
   "apiKey": "KEY-0-corpus",
   "steamcmdPath": "/tmp/lwe-corpus-jj2slszm/steamcmd"
  },
+ "faulted": true,
+ "faults": {
+  "adjusted": [
+   {
+    "from": 7201,
+    "key": "INTERVAL",
+    "kind": "clamp",
+    "store": "settings",
+    "to": 7200
+   },
+   {
+    "from": "DETECT_INTERVAL_MIN",
+    "key": "DETECT_INTERVAL_SEC",
+    "kind": "rename",
+    "store": "settings",
+    "to": "DETECT_INTERVAL_SEC"
+   },
+   {
+    "from": "11.0",
+    "key": "SPEED",
+    "kind": "clamp",
+    "store": "overrides",
+    "to": 10.0
+   }
+  ],
+  "preserved": [
+   {
+    "id": "settings.conf",
+    "key": "CORPUS_FUTURE",
+    "store": "settings"
+   },
+   {
+    "id": "corpus-cover",
+    "key": "CORPUS_FUTURE_WP",
+    "store": "overrides"
+   }
+  ]
+ },
  "generated": "2026-09-11T08:32:14",
  "library_present": [
   "corpus-dense",
@@ -44,7 +82,7 @@
     "PROP_label": "Ōsaka, night",
     "SCALING": "default",
     "SKIP": "obj-a obj-b",
-    "SPEED": "0.1",
+    "SPEED": "10.0",
     "TYPE": "scene",
     "VOLUME": "1"
    },
@@ -231,7 +269,7 @@
   "AUDIO_REACTIVE_DEFAULT": false,
   "AUTOMUTE_DEFAULT": false,
   "CLOSE_TO_TRAY": false,
-  "DETECT_INTERVAL_SEC": 15,
+  "DETECT_INTERVAL_SEC": 300,
   "DETECT_MODE": "manual",
   "ENGINE_AUDIO_GAIN": 4.0,
   "ENGINE_BIN": "/tmp/lwe-corpus-jj2slszm/lwe-engine",
@@ -247,7 +285,7 @@
   "ENGINE_VOLUME": 0,
   "FULLSCREEN_BEHAVIOR": "off",
   "INTERFACE_SCALE": 75,
-  "INTERVAL": 60,
+  "INTERVAL": 7200,
   "MOUSE_DEFAULT": false,
   "ORDER": "shuffle",
   "OVERRIDE_AUDIO_OFF": false,

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import fnmatch
 
-from . import discover_cfg, foreign, meta, playlists, rules, settings, tags, themes, wp
+from . import discover_cfg, meta, playlists, rules, settings, tags, themes, wp
 from .store import Store
 
 STORES: tuple[Store, ...] = (
@@ -23,9 +23,12 @@ STORES: tuple[Store, ...] = (
     tags.BACKUP,
     meta.BACKUP,
     rules.BACKUP,
-    foreign.BACKUP,
 )
 
+#: files whose content travels inside other stores' members rather than as a member
+CARRIED_INSIDE: dict[str, str] = {
+    "foreign.json": "keys kept aside by an import, re-emitted into the members they came from",
+}
 #: files under config_dir() that deliberately do not travel, each with its reason
 NOT_BACKED_UP: dict[str, str] = {
     "engine-env": "generated from settings at every panel start, for this machine's outputs",
@@ -41,8 +44,10 @@ def matches(rel: str, pattern: str) -> bool:
 
 
 def claims(rel: str) -> list[str]:
-    """Who claims this config-relative path: store names, plus NOT_BACKED_UP patterns as
-    'not backed up: <pattern>'. Exactly one claim is the law the ownership test asserts."""
+    """Who claims this config-relative path: store names, CARRIED_INSIDE patterns as
+    'carried inside: <pattern>', NOT_BACKED_UP ones as 'not backed up: <pattern>'. Exactly
+    one claim is the law the ownership test asserts."""
     out = [s.name for s in STORES if any(matches(rel, p) for p in s.owns)]
+    out += [f"carried inside: {p}" for p in CARRIED_INSIDE if matches(rel, p)]
     out += [f"not backed up: {p}" for p in NOT_BACKED_UP if matches(rel, p)]
     return out

@@ -60,7 +60,7 @@ class LibraryOrderModel(QAbstractListModel):
         source.rowsRemoved.connect(self._membership_changed)
         source.layoutChanged.connect(self._membership_changed)
         source.dataChanged.connect(self._source_changed)
-        # one invalidateFilter() emits a row signal per contiguous run; this marks the end of
+        # one invalidateRowsFilter() emits a row signal per contiguous run; this marks the end of
         # the batch, so a keystroke lands as one update in the same turn rather than N
         done = getattr(source, "filterInvalidated", None)
         if done is not None:

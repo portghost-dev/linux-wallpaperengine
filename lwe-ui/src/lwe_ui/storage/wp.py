@@ -343,32 +343,6 @@ def _backup_text(wid: str, text: str, cfg: dict[str, Any], r: dict[str, Any] | N
     return tier_a.serialize(kept, header=f"lwe wallpaper override {wid} (Tier A)")
 
 
-def _backup_value(spec: dict, raw: str) -> tuple[str, Any, str]:
-    """What this build can do with a stored override value: ("ok"|"clamp", value, "") when
-    it holds it, ("preserve", raw, reason) for a choice this build does not have, or
-    ("drop", raw, reason) for text that is not a value of that type at all."""
-    t = spec["type"]
-    s = str(raw).strip()
-    lo, hi = spec.get("min"), spec.get("max")
-    if t in ("int", "int_or_empty", "float"):
-        if t == "int_or_empty" and s == "":
-            return "ok", s, ""
-        try:
-            v = int(s) if t.startswith("int") else float(s)
-        except (ValueError, TypeError):
-            return "drop", raw, "not a number"
-        if lo is not None and v < lo:
-            return "clamp", lo, ""
-        if hi is not None and v > hi:
-            return "clamp", hi, ""
-        return "ok", s, ""
-    if t == "enum" and s not in spec.get("choices", ()):
-        return "preserve", raw, "not a choice this version has"
-    if t == "enum_or_empty" and s != "" and s not in spec.get("choices", ()):
-        return "preserve", raw, "not a choice this version has"
-    return "ok", s, ""
-
-
 def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
     from . import settings
     cfg = settings.load()
@@ -403,7 +377,7 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
         kept: dict[str, str] = {}
         for k, v in raw.items():
             if k in C.WP_SCHEMA:
-                verdict, val, reason = _backup_value(C.WP_SCHEMA[k], v)
+                verdict, val, reason = migrate.coerce(C.WP_SCHEMA[k], v, dense=False)
                 if verdict == "clamp":
                     kept[k] = str(val)
                     r["adjusted"].append({"kind": "clamp", "store": "overrides", "id": wid,

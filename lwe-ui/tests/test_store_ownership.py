@@ -19,10 +19,10 @@ import zipfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
 
-def _claimed_by(rel: str, stores, not_backed_up) -> int:
+def _claimed_by(rel: str, stores, tables) -> int:
     from lwe_ui.storage import registry
     n = sum(1 for s in stores if any(registry.matches(rel, p) for p in s.owns))
-    return n + sum(1 for p in not_backed_up if registry.matches(rel, p))
+    return n + sum(1 for p in tables if registry.matches(rel, p))
 
 
 def _reexport(backup, home: str, name: str) -> str:
@@ -89,6 +89,7 @@ def main() -> None:
     writer_names = ("save", "save_config", "save_rows", "write_keys", "update", "set_state", "ensure_exists")
     # migrate has an apply_tables, not a writer; it is named below with the other helpers
     exempt = {
+        "foreign": "no member of its own: what it holds travels inside the members it came from (registry.CARRIED_INSIDE)",
         "atomic": "primitive writers every store uses",
         "tier_a": "serialiser, writes nothing itself",
         "paths": "creates directories only",
@@ -128,11 +129,12 @@ def main() -> None:
     assert registry.claims("stray.json") == [], "an unclaimed file must fail the check"
     stray.unlink()
     assert registry.STORES[0].name == "settings", "every later plan is decided against the settings"
-    assert registry.STORES[-1].name == "foreign", "foreign counts what the other stores kept aside"
+    assert registry.claims("foreign.json") == ["carried inside: foreign.json"], registry.claims("foreign.json")
+    tables = {**registry.CARRIED_INSIDE, **registry.NOT_BACKED_UP}
     for st in registry.STORES:
         others = tuple(s for s in registry.STORES if s is not st)
         orphans = [rel for rel in files
-                   if _claimed_by(rel, others, registry.NOT_BACKED_UP) != 1]
+                   if _claimed_by(rel, others, tables) != 1]
         assert orphans, f"dropping the {st.name} store left every file claimed"
 
     # --- the two stores the hand list forgot travel and come back

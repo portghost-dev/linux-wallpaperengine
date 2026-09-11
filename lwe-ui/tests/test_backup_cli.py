@@ -87,6 +87,11 @@ def main() -> None:
         assert "Traceback" not in back.stderr, back.stderr
         assert back.stdout.startswith("Restored"), back.stdout
         assert "notes: kind=snapshot" in back.stdout, "the CLI prints every receipt list"
+        before_preview = settings.load()
+        pv = _cli(env, "preview", str(archive))
+        assert pv.returncode == 0 and pv.stdout.startswith("Would restore: Restored"), pv.stdout
+        assert "notes: kind=snapshot" not in pv.stdout and settings.load() == before_preview, \
+            "a preview writes nothing and takes no snapshot"
         s = settings.load()
         assert s["ENGINE_LAYER"] == "top" and int(s["INTERFACE_SCALE"]) == 125, s
         assert "mine" in [p.get("slug") for p in playlists.list_playlists()], "the playlist came back"

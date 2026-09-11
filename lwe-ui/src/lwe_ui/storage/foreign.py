@@ -6,18 +6,15 @@ playlist. Every store's export asks `extras` for the keys it must re-emit into i
 member, so a value written by a newer build survives a round trip through an older one.
 A key RETIRED names is never re-emitted and never kept.
 
-This store carries no archive member of its own: its content travels inside the members it
-came from. The Store record exists because foreign.json is a file under config_dir() and
-every such file is claimed by exactly one store (test_store_ownership).
+The file is no archive member and no store: its content travels inside the members it came
+from, which is what registry.CARRIED_INSIDE says of it for the ownership law.
 """
 from __future__ import annotations
 
-import zipfile
 from typing import Any
 
 from .. import constants as C
 from . import atomic, paths
-from .store import Store
 
 MEMBER = "foreign.json"
 
@@ -135,26 +132,17 @@ def record(plan: dict[str, Any], store: str, scope: str, key: str, value: Any,
     r["preserved"].append({"kind": "preserved", "store": store, "id": scope, "key": key})
 
 
-# --- backup ---------------------------------------------------------------------------
-
-def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
-    """Nothing of its own: each store re-emits its own extras and counts them (emitted)."""
-    r["counts"].setdefault("preserved", 0)
-
-
-def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any],
-                      cfg_after: dict[str, Any]) -> bool:
-    """The other stores fill plan["foreign"] as they read their members; this runs last and
-    only counts what they kept."""
+def count_plan(plan: dict[str, Any], r: dict[str, Any]) -> None:
+    """How many keys the import will keep aside, once every store has read its member."""
     r["counts"]["preserved"] = sum(len(k) for s in (plan.get("foreign") or {}).values()
                                    for k in s.values())
-    return True
 
 
-def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
+def apply_plan(plan: dict[str, Any], r: dict[str, Any]) -> None:
+    """Write what the stores kept aside, merged over what is already here."""
     kept = plan.get("foreign") or {}
     if not kept:
-        return True
+        return
     try:
         current = load()
         for store, scopes in kept.items():
@@ -164,7 +152,3 @@ def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
         save(current)
     except Exception as exc:
         r["errors"].append({"file": MEMBER, "reason": str(exc)})
-    return True
-
-
-BACKUP = Store("foreign", (MEMBER,), _backup_export, _backup_preflight, _backup_apply)

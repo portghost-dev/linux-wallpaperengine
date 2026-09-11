@@ -552,11 +552,11 @@ class LibraryFilterModel(QSortFilterProxyModel):
     Replaces the old QML DelegateModel `inShown`-group filter, which left the GridView with stale
     layout (gaps), dead scroll, and stale favorites because group-membership toggling does not give
     the view proper reset/insert/remove signals. A proxy model emits those signals on every
-    invalidateFilter() and forwards source dataChanged (so toggling a favorite updates the view
+    invalidateRowsFilter() and forwards source dataChanged (so toggling a favorite updates the view
     live in favorites mode). Matching is case-insensitive on title+id (lowercased BOTH sides).
     """
 
-    # one invalidateFilter() emits a rowsRemoved/rowsInserted per contiguous run; this fires
+    # one invalidateRowsFilter() emits a rowsRemoved/rowsInserted per contiguous run; this fires
     # once after the last of them, so a listener can apply the whole change as one update
     filterInvalidated = Signal()
 
@@ -574,7 +574,7 @@ class LibraryFilterModel(QSortFilterProxyModel):
         self._pl = "any"         # funnel: "any" | "in" | "out" (active playlist)
 
     def _invalidate(self) -> None:
-        self.invalidateFilter()
+        self.invalidateRowsFilter()
         self.filterInvalidated.emit()
 
     def _announce(self, *_args) -> None:

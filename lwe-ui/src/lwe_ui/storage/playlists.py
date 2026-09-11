@@ -238,27 +238,6 @@ def ensure_default() -> str:
 PREFIX = "playlists/"
 
 
-def _backup_value(spec: dict, raw: Any) -> tuple[str, Any, str]:
-    """What this build can do with a stored playlist value: ("ok"|"clamp"|"snap", value, "").
-    A playlist file is dense, so a mode this build lacks and text where a number belongs
-    both snap to the default and are named."""
-    s = str(raw).strip()
-    if spec["type"] == "int":
-        try:
-            v = int(s)
-        except (ValueError, TypeError):
-            return "snap", spec["default"], ""
-        lo, hi = spec.get("min"), spec.get("max")
-        if lo is not None and v < lo:
-            return "clamp", lo, ""
-        if hi is not None and v > hi:
-            return "clamp", hi, ""
-        return "ok", v, ""
-    if spec["type"] == "enum" and s not in spec.get("choices", ()):
-        return "snap", spec["default"], ""
-    return "ok", s, ""
-
-
 def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
     n = 0
     kept_aside = foreign.load()
@@ -297,7 +276,7 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
         for key, spec in C.PLAYLIST_SCHEMA.items():
             if key not in raw:
                 continue
-            verdict, val, reason = _backup_value(spec, raw[key])
+            verdict, val, reason = migrate.coerce(spec, raw[key], dense=True)
             if verdict in ("clamp", "snap"):
                 kept[key] = val
                 r["adjusted"].append({"kind": verdict, "store": "playlists", "id": slug,

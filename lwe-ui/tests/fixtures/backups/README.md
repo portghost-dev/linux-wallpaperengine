@@ -24,6 +24,16 @@ place. They must keep restoring. That is the whole point of the corpus, and it i
 `constants.py::RETIRED` and `constants.py::RENAMES` are for when a key legitimately goes
 away or changes name.
 
+## Faulted siblings (`corpus-<schema-hash>-<n>-faulted.lwebackup`)
+
+The same export edited in memory the way an older, careless build would have written it:
+one settings number above its range, the detect period under its retired name in minutes,
+an unknown settings key, one override number above its range, an unknown override key. The
+record beside it carries `faults`, naming exactly what the restore must adjust (clamp,
+rename) and keep aside; the suite fails on a fault not named on the receipt and on any
+adjustment beyond them. This is what makes the adjusted and preserved gates non-vacuous:
+a plain archive cannot need an adjustment by construction.
+
 ## Real archives from real builds
 
 Hand-made archives (an export taken off an actual install, older builds included) belong

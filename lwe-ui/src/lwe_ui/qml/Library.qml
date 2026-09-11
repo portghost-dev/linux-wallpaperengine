@@ -50,7 +50,8 @@ Item {
     }
     // the grid row under a point in the grid's own coordinates, -1 outside, -2 in the band
     function rowAt(px, py) {
-        if (px < 0 || px >= grid.width || py < 0 || py >= grid.height)
+        if (px < 0 || px >= grid.width || py < 0 || py >= grid.height
+                || grid.cols < 1 || grid.cellWidth <= 0 || grid.cellHeight <= 0)
             return -1;
         var cx = px + grid.contentX, cy = py + grid.contentY;
         var col = Math.min(grid.cols - 1, Math.floor(cx / grid.cellWidth));

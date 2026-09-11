@@ -2,9 +2,9 @@
  "discovery": {
   "acquireMethod": "steamcmd",
   "apiKey": "KEY-3-corpus",
-  "steamcmdPath": "/tmp/lwe-corpus-hsf54_qz/steamcmd"
+  "steamcmdPath": "/tmp/lwe-corpus-h405npog/steamcmd"
  },
- "generated": "2026-09-10T15:39:30",
+ "generated": "2026-09-11T08:32:14",
  "library_present": [
   "corpus-dense",
   "corpus-cover",
@@ -227,14 +227,14 @@
  "settings": {
   "ACTIVE_PLAYLIST": "corpus-cover",
   "APP_CONDITION_BEHAVIOR": "off",
-  "ASSETS_DIR": "/tmp/lwe-corpus-hsf54_qz/assets",
+  "ASSETS_DIR": "/tmp/lwe-corpus-h405npog/assets",
   "AUDIO_REACTIVE_DEFAULT": true,
   "AUTOMUTE_DEFAULT": true,
   "CLOSE_TO_TRAY": true,
   "DETECT_INTERVAL_SEC": 43207,
   "DETECT_MODE": "watch",
   "ENGINE_AUDIO_GAIN": 16.0,
-  "ENGINE_BIN": "/tmp/lwe-corpus-hsf54_qz/lwe-engine",
+  "ENGINE_BIN": "/tmp/lwe-corpus-h405npog/lwe-engine",
   "ENGINE_CLAMP": "",
   "ENGINE_CLASSIC_EXP": 15.6,
   "ENGINE_CLASSIC_K": 13.7,
@@ -265,11 +265,11 @@
   "ROTATION_ENABLED": true,
   "SCHEDULE": "06:00=corpus-cover;18:30=corpus-missing",
   "SCHEDULE_ENABLED": true,
-  "STEAM_DIR": "/tmp/lwe-corpus-hsf54_qz/steam",
+  "STEAM_DIR": "/tmp/lwe-corpus-h405npog/steam",
   "STORAGE_POLICY": "reference",
   "TEXTURE_DETAIL": "full",
-  "WALLPAPERS_DIR": "/tmp/lwe-corpus-hsf54_qz/wallpapers",
-  "WORKSHOP_DIR": "/tmp/lwe-corpus-hsf54_qz/workshop"
+  "WALLPAPERS_DIR": "/tmp/lwe-corpus-h405npog/wallpapers",
+  "WORKSHOP_DIR": "/tmp/lwe-corpus-h405npog/workshop"
  },
  "tags": [
   {

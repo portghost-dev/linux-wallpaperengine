@@ -54,6 +54,32 @@ def apply_tables(store: str, raw: dict[str, Any]) -> tuple[dict[str, Any], list[
     return out, actions
 
 
+def coerce(spec: dict, raw: Any, dense: bool) -> tuple[str, Any, str]:
+    """What this build can do with one stored value against its spec: ("ok", text, "")
+    verbatim, ("clamp", bound, "") for a number outside the range, ("snap", default, "")
+    where a dense file must hold something, ("preserve", raw, reason) for a choice a sparse
+    file can keep aside, ("drop", raw, reason) for text a sparse file cannot hold."""
+    t = spec["type"]
+    s = str(raw).strip()
+    lo, hi = spec.get("min"), spec.get("max")
+    if t in ("int", "int_or_empty", "float"):
+        if t == "int_or_empty" and s == "":
+            return "ok", s, ""
+        try:
+            v = int(s) if t.startswith("int") else float(s)
+        except (ValueError, TypeError):
+            return ("snap", spec["default"], "") if dense else ("drop", raw, "not a number")
+        if lo is not None and v < lo:
+            return "clamp", lo, ""
+        if hi is not None and v > hi:
+            return "clamp", hi, ""
+        return "ok", s, ""
+    if t in ("enum", "enum_or_empty") and not (t == "enum_or_empty" and s == ""):
+        if s not in spec.get("choices", ()):
+            return ("snap", spec["default"], "") if dense else ("preserve", raw, "not a choice this version has")
+    return "ok", s, ""
+
+
 def report(store: str, actions: list[Action], r: dict[str, Any], scope: str,
            dropped_kind: str, prefix: str = "") -> None:
     """Turn apply_tables' actions into receipt lines: a retirement is a named drop, a

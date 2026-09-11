@@ -11,16 +11,24 @@ archive cover the override and playlist schemas.
 
 Every archive keeps its schema hash in its name. A schema change means a new hash: the new
 corpus is generated and the old archives stay, because they must keep restoring.
+
+Beside each plain archive sits a `-faulted` sibling: the same export edited the way an
+older, careless build would have written it (a number above its range, a key under its
+retired name, keys this build has never heard of), with the record naming exactly what the
+restore must adjust or keep aside. That is what gives the adjusted and preserved invariants
+a non-empty expectation.
 """
 from __future__ import annotations
 
 import datetime
 import hashlib
+import io
 import json
 import os
 import shutil
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -257,6 +265,58 @@ def build_variant(i: int, home: str) -> tuple[str, dict[str, Any]]:
     return archive, record
 
 
+def _first(schema: dict, types: tuple, bounded: bool = True) -> tuple[str, dict]:
+    for key, spec in schema.items():
+        if spec["type"] in types and (not bounded or spec.get("max") is not None):
+            return key, spec
+    raise SystemExit(f"make_corpus: no key of type {types} with a max to fault")
+
+
+def fault_variant(archive: str, record: dict[str, Any]) -> tuple[bytes, dict[str, Any]]:
+    """The same archive as an older, careless build would have written it: one settings
+    number above its range, the detect period under its retired name in minutes, an
+    unknown settings key, an override number above its range and an unknown override
+    key. The record names exactly what the restore must adjust or keep aside; every
+    other value must come back as in the plain sibling."""
+    rec = json.loads(json.dumps(record))
+    skey, sspec = _first(C.SETTINGS_SCHEMA, ("int",))
+    wkey, wspec = _first(C.WP_SCHEMA, ("float", "int"))
+    faults = {"adjusted": [], "preserved": []}
+    src = zipfile.ZipFile(archive)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as out:
+        for n in src.namelist():
+            data = src.read(n)
+            if n == "settings.conf":
+                raw = tier_a.parse(data.decode("utf-8"))
+                raw[skey] = str(sspec["max"] + 1)
+                raw.pop("DETECT_INTERVAL_SEC", None)
+                raw["DETECT_INTERVAL_MIN"] = "5"
+                raw["CORPUS_FUTURE"] = "1"
+                data = tier_a.serialize(raw, header="lwe settings backup").encode("utf-8")
+                rec["settings"][skey] = sspec["max"]
+                rec["settings"]["DETECT_INTERVAL_SEC"] = 300
+                faults["adjusted"] += [
+                    {"kind": "clamp", "store": "settings", "key": skey, "from": sspec["max"] + 1, "to": sspec["max"]},
+                    {"kind": "rename", "store": "settings", "key": "DETECT_INTERVAL_SEC",
+                     "from": "DETECT_INTERVAL_MIN", "to": "DETECT_INTERVAL_SEC"}]
+                faults["preserved"].append({"store": "settings", "id": "settings.conf", "key": "CORPUS_FUTURE"})
+            elif n == f"wp/{COVER}.conf":
+                raw = tier_a.parse(data.decode("utf-8"))
+                raw[wkey] = str(wspec["max"] + 1)
+                raw["CORPUS_FUTURE_WP"] = "1"
+                data = tier_a.serialize(raw, header=f"lwe wallpaper override {COVER} (Tier A)").encode("utf-8")
+                rec["overrides"][COVER]["keys"][wkey] = str(wspec["max"])
+                faults["adjusted"].append({"kind": "clamp", "store": "overrides", "key": wkey,
+                                           "from": str(wspec["max"] + 1), "to": wspec["max"]})
+                faults["preserved"].append({"store": "overrides", "id": COVER, "key": "CORPUS_FUTURE_WP"})
+            out.writestr(n, data)
+    src.close()
+    rec["faulted"] = True
+    rec["faults"] = faults
+    return buf.getvalue(), rec
+
+
 def main(out_dir: str | Path | None = None) -> list[Path]:
     out = Path(out_dir) if out_dir else FIXTURES
     out.mkdir(parents=True, exist_ok=True)
@@ -273,6 +333,12 @@ def main(out_dir: str | Path | None = None) -> list[Path]:
                     json.dumps(record, indent=1, ensure_ascii=False, sort_keys=True) + "\n",
                     encoding="utf-8")
                 written += [out / f"{stem}{backup.EXTENSION}", out / f"{stem}.json"]
+                data, rec = fault_variant(archive, record)
+                (out / f"{stem}-faulted{backup.EXTENSION}").write_bytes(data)
+                (out / f"{stem}-faulted.json").write_text(
+                    json.dumps(rec, indent=1, ensure_ascii=False, sort_keys=True) + "\n",
+                    encoding="utf-8")
+                written += [out / f"{stem}-faulted{backup.EXTENSION}", out / f"{stem}-faulted.json"]
             finally:
                 shutil.rmtree(home, ignore_errors=True)
     finally:

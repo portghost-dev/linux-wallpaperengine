@@ -2,9 +2,9 @@
  "discovery": {
   "acquireMethod": "client",
   "apiKey": "KEY-2-corpus",
-  "steamcmdPath": "/tmp/lwe-corpus-y39lh86r/steamcmd"
+  "steamcmdPath": "/tmp/lwe-corpus-jd3cm65m/steamcmd"
  },
- "generated": "2026-09-10T15:39:30",
+ "generated": "2026-09-11T08:32:14",
  "library_present": [
   "corpus-dense",
   "corpus-cover",
@@ -227,14 +227,14 @@
  "settings": {
   "ACTIVE_PLAYLIST": "corpus-cover",
   "APP_CONDITION_BEHAVIOR": "stop",
-  "ASSETS_DIR": "/tmp/lwe-corpus-y39lh86r/assets",
+  "ASSETS_DIR": "/tmp/lwe-corpus-jd3cm65m/assets",
   "AUDIO_REACTIVE_DEFAULT": false,
   "AUTOMUTE_DEFAULT": false,
   "CLOSE_TO_TRAY": false,
   "DETECT_INTERVAL_SEC": 43207,
   "DETECT_MODE": "interval",
   "ENGINE_AUDIO_GAIN": 45.0,
-  "ENGINE_BIN": "/tmp/lwe-corpus-y39lh86r/lwe-engine",
+  "ENGINE_BIN": "/tmp/lwe-corpus-jd3cm65m/lwe-engine",
   "ENGINE_CLAMP": "repeat",
   "ENGINE_CLASSIC_EXP": 44.6,
   "ENGINE_CLASSIC_K": 42.7,
@@ -265,11 +265,11 @@
   "ROTATION_ENABLED": false,
   "SCHEDULE": "06:00=corpus-cover;18:30=corpus-missing",
   "SCHEDULE_ENABLED": false,
-  "STEAM_DIR": "/tmp/lwe-corpus-y39lh86r/steam",
+  "STEAM_DIR": "/tmp/lwe-corpus-jd3cm65m/steam",
   "STORAGE_POLICY": "copy",
   "TEXTURE_DETAIL": "auto",
-  "WALLPAPERS_DIR": "/tmp/lwe-corpus-y39lh86r/wallpapers",
-  "WORKSHOP_DIR": "/tmp/lwe-corpus-y39lh86r/workshop"
+  "WALLPAPERS_DIR": "/tmp/lwe-corpus-jd3cm65m/wallpapers",
+  "WORKSHOP_DIR": "/tmp/lwe-corpus-jd3cm65m/workshop"
  },
  "tags": [
   {

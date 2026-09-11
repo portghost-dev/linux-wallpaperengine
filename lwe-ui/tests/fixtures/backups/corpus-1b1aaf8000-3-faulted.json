@@ -1,8 +1,46 @@
 {
  "discovery": {
-  "acquireMethod": "client",
-  "apiKey": "KEY-0-corpus",
-  "steamcmdPath": "/tmp/lwe-corpus-jj2slszm/steamcmd"
+  "acquireMethod": "steamcmd",
+  "apiKey": "KEY-3-corpus",
+  "steamcmdPath": "/tmp/lwe-corpus-h405npog/steamcmd"
+ },
+ "faulted": true,
+ "faults": {
+  "adjusted": [
+   {
+    "from": 7201,
+    "key": "INTERVAL",
+    "kind": "clamp",
+    "store": "settings",
+    "to": 7200
+   },
+   {
+    "from": "DETECT_INTERVAL_MIN",
+    "key": "DETECT_INTERVAL_SEC",
+    "kind": "rename",
+    "store": "settings",
+    "to": "DETECT_INTERVAL_SEC"
+   },
+   {
+    "from": "11.0",
+    "key": "SPEED",
+    "kind": "clamp",
+    "store": "overrides",
+    "to": 10.0
+   }
+  ],
+  "preserved": [
+   {
+    "id": "settings.conf",
+    "key": "CORPUS_FUTURE",
+    "store": "settings"
+   },
+   {
+    "id": "corpus-cover",
+    "key": "CORPUS_FUTURE_WP",
+    "store": "overrides"
+   }
+  ]
  },
  "generated": "2026-09-11T08:32:14",
  "library_present": [
@@ -25,28 +63,28 @@
  "overrides": {
   "corpus-cover": {
    "keys": {
-    "AUDIO_GAIN": "4.0",
-    "AUDIO_REACTIVE": "false",
-    "AUTOMUTE": "false",
+    "AUDIO_GAIN": "16.0",
+    "AUDIO_REACTIVE": "true",
+    "AUTOMUTE": "true",
     "BG": "corpus-cover",
     "CC": "0.8 1.2 1.1 0.25",
-    "CC_MODE": "none",
-    "CLAMPING": "clamp",
-    "CLASSIC_EXP": "3.6",
-    "CLASSIC_K": "1.7",
-    "FIT_PAN_X": "-1.0",
-    "FIT_PAN_Y": "-1.0",
-    "FIT_ZOOM": "1.0",
-    "FPS": "2",
+    "CC_MODE": "",
+    "CLAMPING": "",
+    "CLASSIC_EXP": "15.6",
+    "CLASSIC_K": "13.7",
+    "FIT_PAN_X": "0.0",
+    "FIT_PAN_Y": "0.0",
+    "FIT_ZOOM": "1.5",
+    "FPS": "",
     "FULLSCREEN_PAUSE": "false",
-    "MOUSE": "false",
+    "MOUSE": "true",
     "PROP_hue": "0.35",
     "PROP_label": "Ōsaka, night",
-    "SCALING": "default",
+    "SCALING": "fill",
     "SKIP": "obj-a obj-b",
-    "SPEED": "0.1",
+    "SPEED": "10.0",
     "TYPE": "scene",
-    "VOLUME": "1"
+    "VOLUME": "13"
    },
    "kind": "cover"
   },
@@ -103,18 +141,18 @@
  },
  "playlists": {
   "corpus-cover": {
-   "INTERVAL": 1,
+   "INTERVAL": 299970,
    "MEMBERS": "corpus-dense corpus-cover corpus-sparse corpus-held",
    "MODE": "shuffle",
    "NAME": "Rain, Ōsaka night",
-   "UNIT": "min"
+   "UNIT": "s"
   },
   "corpus-missing": {
-   "INTERVAL": 1,
+   "INTERVAL": 299970,
    "MEMBERS": "corpus-dense corpus-absent",
    "MODE": "shuffle",
    "NAME": "Missing member",
-   "UNIT": "min"
+   "UNIT": "s"
   }
  },
  "rules": {
@@ -227,49 +265,49 @@
  "settings": {
   "ACTIVE_PLAYLIST": "corpus-cover",
   "APP_CONDITION_BEHAVIOR": "off",
-  "ASSETS_DIR": "/tmp/lwe-corpus-jj2slszm/assets",
-  "AUDIO_REACTIVE_DEFAULT": false,
-  "AUTOMUTE_DEFAULT": false,
-  "CLOSE_TO_TRAY": false,
-  "DETECT_INTERVAL_SEC": 15,
-  "DETECT_MODE": "manual",
-  "ENGINE_AUDIO_GAIN": 4.0,
-  "ENGINE_BIN": "/tmp/lwe-corpus-jj2slszm/lwe-engine",
-  "ENGINE_CLAMP": "clamp",
-  "ENGINE_CLASSIC_EXP": 3.6,
-  "ENGINE_CLASSIC_K": 1.7,
-  "ENGINE_FPS": 1,
-  "ENGINE_HWDEC": "no",
-  "ENGINE_LAYER": "background",
-  "ENGINE_SCALING": "default",
-  "ENGINE_TEXCOMP": false,
-  "ENGINE_TIMESCALE": 0.1,
-  "ENGINE_VOLUME": 0,
-  "FULLSCREEN_BEHAVIOR": "off",
-  "INTERFACE_SCALE": 75,
-  "INTERVAL": 60,
-  "MOUSE_DEFAULT": false,
-  "ORDER": "shuffle",
-  "OVERRIDE_AUDIO_OFF": false,
-  "OVERRIDE_MOUSE_OFF": false,
-  "OVERRIDE_MUTE": false,
-  "OVERRIDE_PARALLAX_OFF": false,
-  "PARALLAX_DEFAULT": false,
-  "PARTICLES_DEFAULT": false,
-  "PAUSE_ON_FULLSCREEN": false,
-  "PAUSE_ON_LOCK": false,
-  "PAUSE_RECOVERY_ACTION": "pause",
-  "PAUSE_RECOVERY_CONDITION": "off",
+  "ASSETS_DIR": "/tmp/lwe-corpus-h405npog/assets",
+  "AUDIO_REACTIVE_DEFAULT": true,
+  "AUTOMUTE_DEFAULT": true,
+  "CLOSE_TO_TRAY": true,
+  "DETECT_INTERVAL_SEC": 300,
+  "DETECT_MODE": "watch",
+  "ENGINE_AUDIO_GAIN": 16.0,
+  "ENGINE_BIN": "/tmp/lwe-corpus-h405npog/lwe-engine",
+  "ENGINE_CLAMP": "",
+  "ENGINE_CLASSIC_EXP": 15.6,
+  "ENGINE_CLASSIC_K": 13.7,
+  "ENGINE_FPS": 240,
+  "ENGINE_HWDEC": "auto",
+  "ENGINE_LAYER": "overlay",
+  "ENGINE_SCALING": "fill",
+  "ENGINE_TEXCOMP": true,
+  "ENGINE_TIMESCALE": 5.05,
+  "ENGINE_VOLUME": 50,
+  "FULLSCREEN_BEHAVIOR": "",
+  "INTERFACE_SCALE": 112,
+  "INTERVAL": 7200,
+  "MOUSE_DEFAULT": true,
+  "ORDER": "sequential",
+  "OVERRIDE_AUDIO_OFF": true,
+  "OVERRIDE_MOUSE_OFF": true,
+  "OVERRIDE_MUTE": true,
+  "OVERRIDE_PARALLAX_OFF": true,
+  "PARALLAX_DEFAULT": true,
+  "PARTICLES_DEFAULT": true,
+  "PAUSE_ON_FULLSCREEN": true,
+  "PAUSE_ON_LOCK": true,
+  "PAUSE_RECOVERY_ACTION": "close",
+  "PAUSE_RECOVERY_CONDITION": "both",
   "RENDER_RESOLUTION": "screen",
-  "REVIEW_REQUIRED": false,
-  "ROTATION_ENABLED": false,
+  "REVIEW_REQUIRED": true,
+  "ROTATION_ENABLED": true,
   "SCHEDULE": "06:00=corpus-cover;18:30=corpus-missing",
-  "SCHEDULE_ENABLED": false,
-  "STEAM_DIR": "/tmp/lwe-corpus-jj2slszm/steam",
-  "STORAGE_POLICY": "copy",
-  "TEXTURE_DETAIL": "auto",
-  "WALLPAPERS_DIR": "/tmp/lwe-corpus-jj2slszm/wallpapers",
-  "WORKSHOP_DIR": "/tmp/lwe-corpus-jj2slszm/workshop"
+  "SCHEDULE_ENABLED": true,
+  "STEAM_DIR": "/tmp/lwe-corpus-h405npog/steam",
+  "STORAGE_POLICY": "reference",
+  "TEXTURE_DETAIL": "full",
+  "WALLPAPERS_DIR": "/tmp/lwe-corpus-h405npog/wallpapers",
+  "WORKSHOP_DIR": "/tmp/lwe-corpus-h405npog/workshop"
  },
  "tags": [
   {
@@ -307,6 +345,6 @@
    }
   }
  },
- "variant": 0,
+ "variant": 3,
  "variants": 4
 }

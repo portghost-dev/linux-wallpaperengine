@@ -30,7 +30,7 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from . import paths, registry, settings, tags, themes
+from . import foreign, paths, registry, settings, tags, themes
 
 FORMAT = 1
 EXTENSION = ".lwebackup"
@@ -74,6 +74,7 @@ def export_to(path: str | Path) -> dict[str, Any]:
                 st.export(z, r)
             except Exception as exc:
                 r["errors"].append({"file": st.name, "reason": f"could not be read: {exc}"})
+        r["counts"].setdefault("preserved", 0)
         manifest = {
             "format": FORMAT,
             "app": "lwe-ui",
@@ -151,6 +152,7 @@ def preflight(path: str | Path) -> dict[str, Any]:
             if not ok:
                 r["refused"] = True
                 return r
+        foreign.count_plan(plan, r)
         _referential(r, plan, current)
     return r
 
@@ -245,6 +247,7 @@ def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
                     r["refused"] = True
                 return r
             written += 1
+        foreign.apply_plan(plan, r)
     finally:
         lock.close()
     return r
@@ -298,6 +301,8 @@ def _print_receipt(r: dict[str, Any]) -> int:
     """Print a receipt as plain lines; returns the exit code (1 when anything failed)."""
     if r.get("kind") == "export":
         print(f"Exported {r['path']}")
+    elif "notes" in r and not any(n.get("kind") == "snapshot" for n in r["notes"]) and not r.get("refused"):
+        print("Would restore: " + (receipt_line(r) or "nothing"))
     else:
         print(receipt_line(r) or f"Refused {r['path']}")
     counts = r.get("counts") or {}
@@ -311,8 +316,9 @@ def _print_receipt(r: dict[str, Any]) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """`python3 -m lwe_ui.storage.backup export|restore <file>`: the panel's backup without
-    the panel, for the night it will not start. Imports no Qt."""
+    """`python3 -m lwe_ui.storage.backup export|restore|preview <file>`: the panel's backup
+    without the panel, for the night it will not start; preview is the whole plan and its
+    receipt with nothing written. Imports no Qt."""
     import argparse
 
     ap = argparse.ArgumentParser(prog="python3 -m lwe_ui.storage.backup",
@@ -320,9 +326,16 @@ def main(argv: list[str] | None = None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("export", help="write the current configuration to <file>").add_argument("file")
     sub.add_parser("restore", help="write <file>'s configuration over the current one").add_argument("file")
+    sub.add_parser("preview", help="show what restoring <file> would do, writing nothing").add_argument("file")
     args = ap.parse_args(argv)
     paths.ensure_dirs()
-    return _print_receipt(export_to(args.file) if args.cmd == "export" else import_from(args.file))
+    if args.cmd == "export":
+        return _print_receipt(export_to(args.file))
+    if args.cmd == "preview":
+        r = preflight(args.file)
+        r.pop("plan", None)
+        return _print_receipt(r)
+    return _print_receipt(import_from(args.file))
 
 
 if __name__ == "__main__":

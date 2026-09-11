@@ -3,9 +3,10 @@
 For each archive, restored into a fresh sandbox whose library holds only some of its
 wallpapers: no receipt error, no Python warning, no dropped entry the RETIRED table does not
 name, every value the generator wrote back verbatim (or under its new name through RENAMES),
-every override's set-ness kept key for key, no value clamped, snapped, aliased or preserved,
-and the newest generation carrying every key the current schemas define, so adding a key
-without regenerating the corpus fails by its name.
+every override's set-ness kept key for key, and the newest generation carrying every key
+the current schemas define, so adding a key without regenerating the corpus fails by its
+name. A plain archive must need no adjustment at all; its faulted sibling must be adjusted
+and kept aside exactly as its record names, and nothing more.
 
 The expected values are the generator's own record (tests/corpus/make_corpus.py), never a
 hand-written list. EXPECTED below names the cases the shipped code cannot satisfy yet; a
@@ -260,9 +261,35 @@ def _check_dropped(run: Run) -> None:
                                 f"only where constants.RETIRED[{store!r}] names the key")
 
 
+def _check_faults(run: Run) -> None:
+    """A faulted archive must be adjusted and kept aside exactly as its record names: every
+    named fault appears on the receipt and nothing else does; the values then come back
+    as the record says (the other checks)."""
+    faults = run.record["faults"]
+    got_adj = {(a.get("kind"), a.get("store"), a.get("key")): a for a in run.receipt.get("adjusted", [])}
+    for f in faults["adjusted"]:
+        a = got_adj.pop((f["kind"], f["store"], f["key"]), None)
+        if a is None:
+            run.fail(None, f"faulted {f['store']} {f['key']}: expected a {f['kind']} on the receipt, none")
+        elif str(a.get("to")) != str(f["to"]) or str(a.get("from")) != str(f["from"]):
+            run.fail(None, f"faulted {f['store']} {f['key']}: {f['kind']} named {a.get('from')!r} -> "
+                           f"{a.get('to')!r}, the record says {f['from']!r} -> {f['to']!r}")
+    for a in got_adj.values():
+        run.fail(None, f"adjusted {a.get('kind')} {a.get('store')} {a.get('key')} beyond the faults the record names")
+    got_kept = {(p.get("store"), p.get("id"), p.get("key")) for p in run.receipt.get("preserved", [])}
+    want_kept = {(p["store"], p["id"], p["key"]) for p in faults["preserved"]}
+    for missing in sorted(want_kept - got_kept):
+        run.fail(None, f"faulted {missing}: expected kept aside, not on the receipt")
+    for extra in sorted(got_kept - want_kept):
+        run.fail(None, f"kept aside {extra} beyond the faults the record names")
+
+
 def _check_adjusted(run: Run) -> None:
     """The generator wrote every value through the live stores, so nothing in an archive of
     this generation can need a clamp, a snap, an alias or a preserving."""
+    if run.record.get("faulted"):
+        _check_faults(run)
+        return
     for a in run.receipt.get("adjusted", []):
         run.fail(None, f"adjusted {a.get('kind')} {a.get('store')} {a.get('id')} "
                        f"{a.get('key')}: {a.get('from')!r} -> {a.get('to')!r} - a value this "
@@ -359,8 +386,9 @@ def main() -> None:
         failures += [f"{archive.name}: {f}" for f in run.failures]
         shutil.rmtree(home, ignore_errors=True)
 
-    if records:
-        _check_newest_covers_schema(records, failures)
+    plain = {a: r for a, r in records.items() if not r.get("faulted")}
+    if plain:
+        _check_newest_covers_schema(plain, failures)
     for case in sorted(set(EXPECTED) - expected_hit):
         failures.append(f"expected failure {case[0]}:{case[1]} never reproduced - delete its "
                         f"EXPECTED entry ({EXPECTED[case]})")
@@ -370,8 +398,9 @@ def main() -> None:
             print("  " + f)
         raise SystemExit(1)
     known = ", ".join(f"{a}:{b}" for a, b in sorted(EXPECTED)) or "none"
-    print(f"OK backup corpus: {len(archives)} archive(s) restored whole, nothing adjusted, "
-          f"nothing preserved; known losses still pinned: {known}")
+    faulted = sum(1 for r in records.values() if r.get("faulted"))
+    print(f"OK backup corpus: {len(archives)} archive(s) restored whole ({faulted} faulted, adjusted "
+          f"exactly as recorded); known losses still pinned: {known}")
 
 
 if __name__ == "__main__":
