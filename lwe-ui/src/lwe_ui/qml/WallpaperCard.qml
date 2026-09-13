@@ -105,6 +105,14 @@ Rectangle {
             anchors.fill: parent
             visible: false
             layer.enabled: true
+            // re-attach the effect to its inputs after a resize; a column change otherwise
+            // leaves it drawing nothing. Never toggle layer.enabled here
+            function reattach() {
+                thumbEffect.maskSource = null; thumbEffect.source = null;
+                thumbEffect.source = rawThumb; thumbEffect.maskSource = thumbMask;
+            }
+            onWidthChanged: Qt.callLater(thumbMask.reattach)
+            onHeightChanged: Qt.callLater(thumbMask.reattach)
             // corner-bleed law: never ask a sampled mask texture to pixel-agree with the
             // vector border. Inset the mask 1px on the three card-edge sides and round it to
             // (border radius - 1) so the antialiased mask seam falls UNDER the 1px border
@@ -121,6 +129,7 @@ Rectangle {
             }
         }
         MultiEffect {
+            id: thumbEffect
             anchors.fill: parent
             source: rawThumb
             maskEnabled: true
