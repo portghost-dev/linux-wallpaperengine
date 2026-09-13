@@ -7,10 +7,11 @@ over from items and from handlers of another type). That is the thing a library 
 beneath an open popup, and the thing the popups must never let it do.
 
 #1 a drag that starts inside any of the three popups never lifts the target beneath, whether
-   it starts over a plain label or over a tap-handler row (a MouseArea in the popup's
-   background sees neither, since a tap handler above it accepts the press, and it cannot hold
-   the grab against a DragHandler anyway); a drag on the bare window still lifts it, so the
-   harness is shown to measure.
+   it starts over a plain label, over a tap-handler row, or in the padding ring between the
+   content and the popup's edge (the background outside the content, which no control covers;
+   a MouseArea there sees nothing, since a tap handler above it accepts the press, and it could
+   not hold the grab against a DragHandler anyway); a drag on the bare window still lifts it,
+   so the harness is shown to measure.
 #2 the playlist menu's per-row delete, by clicks: the trash arms, the same trash disarms,
    another trash or another row only cancels (the menu stays open, the active playlist does
    not change), No cancels, Yes is inert inside its first quarter second, a later Yes deletes
@@ -160,8 +161,14 @@ def test_popups_hold_the_pointer(app, win, deck, target) -> None:
         _settle(app)
         assert pop.property("opened"), f"{name} did not open"
         content = pop.property("contentItem")
-        # a row or label near the content's top-left corner, and the content's centre
-        for p in (content.mapToScene(QPointF(6, 6)).toPoint(), _scene(content)):
+        background = pop.property("background")
+        # a row or label near the content's top-left corner, the content's centre, and the
+        # padding ring: the background outside the content, which no control covers
+        points = [content.mapToScene(QPointF(6, 6)).toPoint(), _scene(content)]
+        bw, bh = background.width(), background.height()
+        points += [background.mapToScene(QPointF(x, y)).toPoint()
+                   for x, y in ((4, 4), (bw / 2, 4), (4, bh / 2), (bw / 2, bh - 4))]
+        for p in points:
             before = target.property("lifts")
             _drag(win, p)
             assert target.property("lifts") == before, f"a drag inside {name} at {p} lifted the target beneath"

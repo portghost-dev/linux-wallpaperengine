@@ -227,6 +227,8 @@ Item {
             radius: Theme.radiusMd
             border.width: 1
             border.color: Theme.borderStrong
+            // the padding ring around the content: holds the press so it cannot reach a tile beneath
+            TapHandler { gesturePolicy: TapHandler.ReleaseWithinBounds; grabPermissions: PointerHandler.TakeOverForbidden }
         }
         onOpened: {
             plRepeater.model = backend.playlistList();
