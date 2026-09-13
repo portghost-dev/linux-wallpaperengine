@@ -195,7 +195,7 @@ time). Asset discovery is unchanged from upstream, and so is the dependency list
 apart from ispc, which builds the BC7 texture-compression tool; see their
 README if you are setting up from nothing.
 
-Two notes for source builds:
+Three notes for source builds:
 
 - CEF's binary distribution ships a stripped `libvulkan.so.1` that can hijack the
   link when mpv pulls in a Vulkan-enabled libplacebo, surfacing as an undefined
@@ -203,6 +203,18 @@ Two notes for source builds:
   build resolves Vulkan against the system loader and needs no intervention.
 - CEF ships only Release binaries. For a RelWithDebInfo build, symlink
   `RelWithDebInfo -> Release` inside the extracted CEF directory.
+- The engine links ffmpeg by soname. When your distribution moves ffmpeg to a
+  new major (8 to 9 changes `libavcodec.so.62` to `.63`, and so on) the built
+  binary no longer starts, and a daemon that is already running hides that
+  until it is restarted. Rebuild after such an update, and re-run the configure
+  step first: CMake caches the full path of some libraries at configure time,
+  SDL2 among them, so a bare `make` can fail to link against a file that no
+  longer exists.
+
+  ```
+  cmake -B build
+  make -C build -j$(nproc)
+  ```
 
 ## Driving the engine from a shell
 
