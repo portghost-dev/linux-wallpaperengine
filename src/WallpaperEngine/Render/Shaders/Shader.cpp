@@ -19,15 +19,15 @@ namespace WallpaperEngine::Render::Shaders {
 Shader::Shader (
     const AssetLocator& assetLocator, std::string filename, const ComboMap& combos, const ComboMap& overrideCombos,
     const TextureMap& textures, const TextureMap& overrideTextures, const ShaderConstantMap& constants,
-    const ShaderConstantMap& materialConstants
+    const ShaderConstantMap& materialConstants, const std::map<int, uint32_t>& textureFlags
 ) :
     m_vertex (
 	GLSLContext::UnitType_Vertex, filename, assetLocator.vertexShader (filename), assetLocator, constants, textures,
-	overrideTextures, combos, overrideCombos, materialConstants
+	overrideTextures, combos, overrideCombos, materialConstants, textureFlags
     ),
     m_fragment (
 	GLSLContext::UnitType_Fragment, filename, assetLocator.fragmentShader (filename), assetLocator, constants,
-	textures, overrideTextures, combos, overrideCombos, materialConstants
+	textures, overrideTextures, combos, overrideCombos, materialConstants, textureFlags
     ),
     m_file (std::move (filename)), m_combos (combos), m_passTextures (textures) {
     // link shaders between them

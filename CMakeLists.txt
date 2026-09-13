@@ -609,6 +609,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/CurlNoise.cpp
         src/WallpaperEngine/Testing/Cases/CssHexColors.cpp
         src/WallpaperEngine/Testing/Cases/BinaryParserHardening.cpp
+        src/WallpaperEngine/Testing/Cases/TextureComponentFlags.cpp
         src/WallpaperEngine/Testing/Cases/InstrumentRegistry.cpp
         src/WallpaperEngine/Testing/Cases/CommandSocket.cpp
         src/WallpaperEngine/Testing/Cases/LaneState.cpp

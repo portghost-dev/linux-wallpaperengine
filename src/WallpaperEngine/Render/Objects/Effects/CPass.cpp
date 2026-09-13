@@ -1031,9 +1031,25 @@ void CPass::setupShaders () {
 	passTextures.insert_or_assign (index, texture);
     }
 
+    // component combos depend on the slot textures' header flags, so resolve those before the units are built
+    std::map<int, uint32_t> textureFlags;
+    auto collectFlags = [&] (const TextureMap& map) {
+	for (const auto& [index, textureName] : map) {
+	    if (textureName.empty () || textureName.find ("_rt_") == 0 || textureName.find ("_alias_") == 0) {
+		continue;
+	    }
+	    try {
+		textureFlags[index] = this->getContext ().resolveTexture (textureName)->getFlags ();
+	    } catch (const std::exception& ex) {
+		sLog.error ("Cannot resolve texture ", textureName, " for its component flags: ", ex.what ());
+	    }
+	}
+    };
+    collectFlags (passTextures);
+    collectFlags (this->m_override.textures);
     this->m_shader = new Render::Shaders::Shader (
 	this->m_renderable.getAssetLocator (), shaderName, this->m_combos, this->m_override.combos, passTextures,
-	this->m_override.textures, this->m_override.constants, this->m_pass.constants
+	this->m_override.textures, this->m_override.constants, this->m_pass.constants, textureFlags
     );
 
     const auto [vertex, fragment]

@@ -74,12 +74,13 @@ using namespace WallpaperEngine::Render::Shaders;
 ShaderUnit::ShaderUnit (
     const GLSLContext::UnitType type, std::string file, std::string content, const AssetLocator& assetLocator,
     const ShaderConstantMap& constants, const TextureMap& passTextures, const TextureMap& overrideTextures,
-    const ComboMap& combos, const ComboMap& overrideCombos, const ShaderConstantMap& materialConstants
+    const ComboMap& combos, const ComboMap& overrideCombos, const ShaderConstantMap& materialConstants,
+    std::map<int, uint32_t> textureFlags
 ) :
     m_type (type), m_file (std::move (file)), m_content (std::move (content)), m_combos (combos),
     m_overrideCombos (overrideCombos), m_constants (constants), m_materialConstants (materialConstants),
-    m_passTextures (passTextures), m_overrideTextures (overrideTextures), m_link (nullptr),
-    m_assetLocator (assetLocator) {
+    m_passTextures (passTextures), m_overrideTextures (overrideTextures), m_textureFlags (std::move (textureFlags)),
+    m_link (nullptr), m_assetLocator (assetLocator) {
     // pre-process the shader so the units are clear
     this->preprocess ();
 }
@@ -883,7 +884,9 @@ void ShaderUnit::parseParameterConfiguration (
 
 		const auto components = data.find ("components");
 		if (textureSlotUsed && components != data.end () && components->is_array ()) {
+		    int componentIndex = 0;
 		    for (const auto& component : *components) {
+			const int thisComponent = componentIndex++;
 			const auto componentCombo = component.find ("combo");
 			if (componentCombo == component.end () || !componentCombo->is_string ()) {
 			    continue;
@@ -893,20 +896,14 @@ void ShaderUnit::parseParameterConfiguration (
 			    continue;
 			}
 			const std::string comboName = *componentCombo;
-			bool enable = true;
-			if (comboName == "METALLIC_MAP") {
-			    enable = this->m_constants.find ("metallic") == this->m_constants.end ()
-				&& this->m_materialConstants.find ("metallic") == this->m_materialConstants.end ();
-			} else if (comboName == "ROUGHNESS_MAP") {
-			    enable = this->m_constants.find ("roughness") == this->m_constants.end ()
-				&& this->m_materialConstants.find ("roughness") == this->m_materialConstants.end ();
-			} else if (comboName == "REFLECTION_MAP") {
-			    const auto reflection = this->m_combos.find ("REFLECTION");
-			    enable = reflection != this->m_combos.end () && reflection->second != 0;
-			}
+			// a component combo is on only when the mask carries the painted bit for that channel
+			const auto flagsIt = this->m_textureFlags.find (index);
+			const uint32_t flags = flagsIt != this->m_textureFlags.end () ? flagsIt->second : 0;
+			const bool enable = (flags & (1u << (20 + thisComponent))) != 0;
 			if (getenv ("LWE_AUDIT") != nullptr) {
 			    sLog.out (
-				"LWE-AUDIT PBRMASKS component ", comboName, " enable=", enable, " shader=", this->m_file
+				"LWE-AUDIT PBRMASKS component ", comboName, " enable=", enable, " slot=", index, " flags=", flags,
+				" shader=", this->m_file
 			    );
 			}
 			if (!enable) {

@@ -25,7 +25,8 @@ public:
     ShaderUnit (
 	const GLSLContext::UnitType type, std::string file, std::string content, const AssetLocator& assetLocator,
 	const ShaderConstantMap& constants, const TextureMap& passTextures, const TextureMap& overrideTextures,
-	const ComboMap& combos, const ComboMap& overrideCombos, const ShaderConstantMap& materialConstants
+	const ComboMap& combos, const ComboMap& overrideCombos, const ShaderConstantMap& materialConstants,
+	std::map<int, uint32_t> textureFlags = {}
     );
     ~ShaderUnit ();
     // m_parameters is owned here and freed in the destructor; copying would double-free
@@ -184,6 +185,8 @@ private:
     const TextureMap& m_overrideTextures;
     /** The default textures to use when a texture is not applied in a given slot */
     TextureMap m_defaultTextures = {};
+    /** header flags of the pass and override textures by slot */
+    std::map<int, uint32_t> m_textureFlags = {};
     std::map<int, glm::vec4> m_paintDefaultColors = {};
     /**
      * The shader unit this unit is linked to

@@ -93,8 +93,16 @@ enum TextureFlags {
     TextureFlags_ClampUVsBorder = 8,
     TextureFlags_Video = 32,
     TextureFlags_AlphaChannelPriority = 524288, // Indicates RG88/R8 format where alpha is in G/R channel
+    /** painted-channel markers of a PBR component mask: bit 20 + component index */
+    TextureFlags_ComponentMetallic = 1u << 20,
+    TextureFlags_ComponentRoughness = 1u << 21,
+    TextureFlags_ComponentReflection = 1u << 22,
+    TextureFlags_ComponentEmissive = 1u << 23,
+    TextureFlags_ComponentMask = TextureFlags_ComponentMetallic | TextureFlags_ComponentRoughness
+	| TextureFlags_ComponentReflection | TextureFlags_ComponentEmissive,
     TextureFlags_All = TextureFlags_NoInterpolation | TextureFlags_ClampUVs | TextureFlags_IsGif
-	| TextureFlags_ClampUVsBorder | TextureFlags_Video | TextureFlags_AlphaChannelPriority,
+	| TextureFlags_ClampUVsBorder | TextureFlags_Video | TextureFlags_AlphaChannelPriority
+	| TextureFlags_ComponentMask,
 };
 
 struct Mipmap {
