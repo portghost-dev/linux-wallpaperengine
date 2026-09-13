@@ -11,7 +11,10 @@ globalThis.MediaPlaybackEvent = globalThis.MediaPlaybackEvent || {
 // returns a NEW vector. Required by e.g. the 3D-camera script (Gariam), which
 // chains subtract/divide/multiply/add on camera transforms.
 globalThis.Vec2 = globalThis.Vec2 || class Vec2 {
-  constructor(x, y) { this.x = +x || 0; this.y = y === undefined ? this.x : (+y || 0); }
+  constructor(x, y) {
+    if (x !== null && typeof x === 'object') { this.x = +x.x || 0; this.y = +x.y || 0; return; }
+    this.x = +x || 0; this.y = y === undefined ? this.x : (+y || 0);
+  }
   copy() { return new Vec2(this.x, this.y); }
   add(o) { return typeof o === 'number' ? new Vec2(this.x + o, this.y + o) : new Vec2(this.x + o.x, this.y + o.y); }
   subtract(o) { return typeof o === 'number' ? new Vec2(this.x - o, this.y - o) : new Vec2(this.x - o.x, this.y - o.y); }
@@ -22,6 +25,7 @@ globalThis.Vec2 = globalThis.Vec2 || class Vec2 {
 };
 globalThis.Vec3 = globalThis.Vec3 || class Vec3 {
   constructor(x, y, z) {
+    if (x !== null && typeof x === 'object') { this.x = +x.x || 0; this.y = +x.y || 0; this.z = +x.z || 0; return; }
     this.x = +x || 0;
     this.y = y === undefined ? this.x : (+y || 0);
     this.z = z === undefined ? this.x : (+z || 0);
@@ -35,7 +39,10 @@ globalThis.Vec3 = globalThis.Vec3 || class Vec3 {
   normalize() { const l = Math.hypot(this.x, this.y, this.z) || 1; return new Vec3(this.x / l, this.y / l, this.z / l); }
 };
 globalThis.Vec4 = globalThis.Vec4 || class Vec4 {
-  constructor(x, y, z, w) { this.x = +x || 0; this.y = +y || 0; this.z = +z || 0; this.w = +w || 0; }
+  constructor(x, y, z, w) {
+    if (x !== null && typeof x === 'object') { this.x = +x.x || 0; this.y = +x.y || 0; this.z = +x.z || 0; this.w = +x.w || 0; return; }
+    this.x = +x || 0; this.y = +y || 0; this.z = +z || 0; this.w = +w || 0;
+  }
   copy() { return new Vec4(this.x, this.y, this.z, this.w); }
 };
 
@@ -87,8 +94,26 @@ globalThis.Vec4 = globalThis.Vec4 || class Vec4 {
   };
 
   // ---- Vec2 -----------------------------------------------------------------
-  if (typeof Vec2 !== 'undefined' && Vec2.prototype) {
-    var P2 = Vec2.prototype;
+  // Each block runs for the builtins class AND for the engine's native vector prototype so both vector
+  // types carry the full WE method set; addMethod never overrides a native C++ implementation.
+  var nativeProtos = [globalThis.__lweNativeVec2Proto, globalThis.__lweNativeVec3Proto, globalThis.__lweNativeVec4Proto];
+  function eachProto(cls, native, fn) { if (cls && cls.prototype) fn(cls.prototype); if (native) fn(native); }
+
+  eachProto(typeof Vec2 !== 'undefined' ? Vec2 : null, nativeProtos[0], function (P2) {
+
+    // ---- WE reference methods the builtins class lacked (native C++ already has them; addMethod skips those)
+    addMethod(P2, 'equals', function (o) { return Math.abs(this.x - o.x) <= EPS && Math.abs(this.y - o.y) <= EPS; });
+    addMethod(P2, 'lengthSqr', function () { return this.x * this.x + this.y * this.y; });
+    addMethod(P2, 'dot', function (o) { return this.x * o.x + this.y * o.y; });
+    addMethod(P2, 'mix', function (o, t) { return new Vec2(this.x + (o.x - this.x) * t, this.y + (o.y - this.y) * t); });
+    addMethod(P2, 'min', function (o) { return new Vec2(Math.min(this.x, o.x), Math.min(this.y, o.y)); });
+    addMethod(P2, 'max', function (o) { return new Vec2(Math.max(this.x, o.x), Math.max(this.y, o.y)); });
+    addMethod(P2, 'abs', function () { return new Vec2(Math.abs(this.x), Math.abs(this.y)); });
+    addMethod(P2, 'sign', function () { return new Vec2(Math.sign(this.x), Math.sign(this.y)); });
+    addMethod(P2, 'round', function () { return new Vec2(Math.round(this.x), Math.round(this.y)); });
+    addMethod(P2, 'floor', function () { return new Vec2(Math.floor(this.x), Math.floor(this.y)); });
+    addMethod(P2, 'ceil', function () { return new Vec2(Math.ceil(this.x), Math.ceil(this.y)); });
+    addMethod(P2, 'toString', function () { return this.x + ' ' + this.y; });
 
     addMethod(P2, 'distance', function (other) {
       var dx = this.x - other.x, dy = this.y - other.y;
@@ -155,11 +180,27 @@ globalThis.Vec4 = globalThis.Vec4 || class Vec4 {
       if (typeof max === 'number') { maxX = max; maxY = max; } else { maxX = max.x; maxY = max.y; }
       return new Vec2(smoothStepNum(minX, maxX, this.x), smoothStepNum(minY, maxY, this.y));
     });
-  }
+
+
+  });
 
   // ---- Vec3 -----------------------------------------------------------------
-  if (typeof Vec3 !== 'undefined' && Vec3.prototype) {
-    var P3 = Vec3.prototype;
+  eachProto(typeof Vec3 !== 'undefined' ? Vec3 : null, nativeProtos[1], function (P3) {
+
+    // ---- WE reference methods the builtins class lacked (native C++ already has them; addMethod skips those)
+    addMethod(P3, 'equals', function (o) { return Math.abs(this.x - o.x) <= EPS && Math.abs(this.y - o.y) <= EPS && Math.abs(this.z - o.z) <= EPS; });
+    addMethod(P3, 'lengthSqr', function () { return this.x * this.x + this.y * this.y + this.z * this.z; });
+    addMethod(P3, 'dot', function (o) { return this.x * o.x + this.y * o.y + this.z * o.z; });
+    addMethod(P3, 'mix', function (o, t) { return new Vec3(this.x + (o.x - this.x) * t, this.y + (o.y - this.y) * t, this.z + (o.z - this.z) * t); });
+    addMethod(P3, 'min', function (o) { return new Vec3(Math.min(this.x, o.x), Math.min(this.y, o.y), Math.min(this.z, o.z)); });
+    addMethod(P3, 'max', function (o) { return new Vec3(Math.max(this.x, o.x), Math.max(this.y, o.y), Math.max(this.z, o.z)); });
+    addMethod(P3, 'abs', function () { return new Vec3(Math.abs(this.x), Math.abs(this.y), Math.abs(this.z)); });
+    addMethod(P3, 'sign', function () { return new Vec3(Math.sign(this.x), Math.sign(this.y), Math.sign(this.z)); });
+    addMethod(P3, 'round', function () { return new Vec3(Math.round(this.x), Math.round(this.y), Math.round(this.z)); });
+    addMethod(P3, 'floor', function () { return new Vec3(Math.floor(this.x), Math.floor(this.y), Math.floor(this.z)); });
+    addMethod(P3, 'ceil', function () { return new Vec3(Math.ceil(this.x), Math.ceil(this.y), Math.ceil(this.z)); });
+    addMethod(P3, 'toString', function () { return this.x + ' ' + this.y + ' ' + this.z; });
+    addMethod(P3, 'cross', function (o) { return new Vec3(this.y * o.z - this.z * o.y, this.z * o.x - this.x * o.z, this.x * o.y - this.y * o.x); });
 
     addMethod(P3, 'distance', function (other) {
       var dx = this.x - other.x, dy = this.y - other.y, dz = this.z - other.z;
@@ -256,11 +297,32 @@ globalThis.Vec4 = globalThis.Vec4 || class Vec4 {
         return new Vec3(r * st * Math.cos(p), r * Math.cos(t), r * st * Math.sin(p));
       };
     }
-  }
+
+
+  });
 
   // ---- Vec4 -----------------------------------------------------------------
-  if (typeof Vec4 !== 'undefined' && Vec4.prototype) {
-    var P4 = Vec4.prototype;
+  eachProto(typeof Vec4 !== 'undefined' ? Vec4 : null, nativeProtos[2], function (P4) {
+
+    // ---- WE reference methods the builtins class lacked (native C++ already has them; addMethod skips those)
+    addMethod(P4, 'equals', function (o) { return Math.abs(this.x - o.x) <= EPS && Math.abs(this.y - o.y) <= EPS && Math.abs(this.z - o.z) <= EPS && Math.abs(this.w - o.w) <= EPS; });
+    addMethod(P4, 'lengthSqr', function () { return this.x * this.x + this.y * this.y + this.z * this.z + this.w * this.w; });
+    addMethod(P4, 'dot', function (o) { return this.x * o.x + this.y * o.y + this.z * o.z + this.w * o.w; });
+    addMethod(P4, 'mix', function (o, t) { return new Vec4(this.x + (o.x - this.x) * t, this.y + (o.y - this.y) * t, this.z + (o.z - this.z) * t, this.w + (o.w - this.w) * t); });
+    addMethod(P4, 'min', function (o) { return new Vec4(Math.min(this.x, o.x), Math.min(this.y, o.y), Math.min(this.z, o.z), Math.min(this.w, o.w)); });
+    addMethod(P4, 'max', function (o) { return new Vec4(Math.max(this.x, o.x), Math.max(this.y, o.y), Math.max(this.z, o.z), Math.max(this.w, o.w)); });
+    addMethod(P4, 'abs', function () { return new Vec4(Math.abs(this.x), Math.abs(this.y), Math.abs(this.z), Math.abs(this.w)); });
+    addMethod(P4, 'sign', function () { return new Vec4(Math.sign(this.x), Math.sign(this.y), Math.sign(this.z), Math.sign(this.w)); });
+    addMethod(P4, 'round', function () { return new Vec4(Math.round(this.x), Math.round(this.y), Math.round(this.z), Math.round(this.w)); });
+    addMethod(P4, 'floor', function () { return new Vec4(Math.floor(this.x), Math.floor(this.y), Math.floor(this.z), Math.floor(this.w)); });
+    addMethod(P4, 'ceil', function () { return new Vec4(Math.ceil(this.x), Math.ceil(this.y), Math.ceil(this.z), Math.ceil(this.w)); });
+    addMethod(P4, 'toString', function () { return this.x + ' ' + this.y + ' ' + this.z + ' ' + this.w; });
+    addMethod(P4, 'add', function (o) { return typeof o === 'number' ? new Vec4(this.x + o, this.y + o, this.z + o, this.w + o) : new Vec4(this.x + o.x, this.y + o.y, this.z + o.z, this.w + o.w); });
+    addMethod(P4, 'subtract', function (o) { return typeof o === 'number' ? new Vec4(this.x - o, this.y - o, this.z - o, this.w - o) : new Vec4(this.x - o.x, this.y - o.y, this.z - o.z, this.w - o.w); });
+    addMethod(P4, 'multiply', function (o) { return typeof o === 'number' ? new Vec4(this.x * o, this.y * o, this.z * o, this.w * o) : new Vec4(this.x * o.x, this.y * o.y, this.z * o.z, this.w * o.w); });
+    addMethod(P4, 'divide', function (o) { return typeof o === 'number' ? new Vec4(this.x / o, this.y / o, this.z / o, this.w / o) : new Vec4(this.x / o.x, this.y / o.y, this.z / o.z, this.w / o.w); });
+    addMethod(P4, 'length', function () { return Math.hypot(this.x, this.y, this.z, this.w); });
+    addMethod(P4, 'normalize', function () { var l = Math.hypot(this.x, this.y, this.z, this.w) || 1; return new Vec4(this.x / l, this.y / l, this.z / l, this.w / l); });
 
     addMethod(P4, 'distance', function (other) {
       var dx = this.x - other.x, dy = this.y - other.y, dz = this.z - other.z, dw = this.w - other.w;
@@ -329,7 +391,7 @@ globalThis.Vec4 = globalThis.Vec4 || class Vec4 {
         smoothStepNum(minZ, maxZ, this.z), smoothStepNum(minW, maxW, this.w)
       );
     });
-  }
+  });
 
   // ===========================================================================
   // Mat3 / Mat4 - column-major storage (glm/GLSL convention).
