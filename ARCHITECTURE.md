@@ -328,6 +328,9 @@ is to be the daemon API's reference client and the system's owner:
   The engine reads the file only at service start, so each restart-class row on Engine >
   Advanced carries a restart verb while the running engine's own environment differs from the file on that
   row's keys; one tap restarts the service in place for every row that is pending.
+  The same three switches can be chosen per wallpaper in the scene editor's `Quality and
+  memory` rule; a chosen value rides the show and the engine resolves it at scene load, an
+  absent one inherits the engine's launch environment.
 - It **writes overrides sparsely**: a per-wallpaper conf carries only what the user set or
   the wallpaper declares; a present key pins, an absent key inherits the global, so a
   default shipped later reaches every wallpaper that never chose otherwise.

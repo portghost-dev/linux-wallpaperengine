@@ -246,6 +246,23 @@ class EngineSyncTest(unittest.TestCase):
         self.assertEqual(entries[0]["fit"]["zoom"], 1.25)
         self.assertEqual(entries[1]["fit"], {"zoom": 1.0, "pan_x": 0.0, "pan_y": 0.0})
 
+    def test_show_args_carry_the_quality_switches_only_when_set(self) -> None:
+        """A wallpaper's own quality choice rides the show; absent means the engine's
+        launch environment, where the global setting already lives, so nothing is sent."""
+        wp.save("111", {"SPEED": 1.0})
+        _, args = models.resolve_show_args("111")
+        for key in ("res", "texcomp", "texdetail"):
+            self.assertNotIn(key, args)
+        wp.save("111", {"RENDER_RESOLUTION": "sharpfx", "TEXCOMP": False, "TEXTURE_DETAIL": "full"})
+        _, args = models.resolve_show_args("111")
+        self.assertEqual(args["res"], "sharpfx")
+        self.assertIs(args["texcomp"], False)
+        self.assertEqual(args["texdetail"], "full")
+        wp.save("111", {"RENDER_RESOLUTION": "", "TEXCOMP": "", "TEXTURE_DETAIL": ""})
+        _, args = models.resolve_show_args("111")
+        for key in ("res", "texcomp", "texdetail"):
+            self.assertNotIn(key, args, f"{key}: an empty value is the inherit, not a state")
+
     def test_setting_the_mode_pushes_it_live_and_refreshes_rotation(self) -> None:
         self._seed_playlist(["111"])
         sent: list[str] = []

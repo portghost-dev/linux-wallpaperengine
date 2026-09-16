@@ -15,6 +15,8 @@
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Render/Drivers/Output/OutputViewport.h"
 #include "WallpaperEngine/Render/MipResidency.h"
+#include "WallpaperEngine/Render/LoadQuality.h"
+#include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Render/Utils/WorkPool.h"
 
 #include <algorithm>
@@ -24,16 +26,6 @@
 
 extern float g_Time;
 extern float g_TimeLast;
-
-namespace {
-float lwe_ssfactor () {
-    static const float f = [] () {
-	const char* e = getenv ("LWE_SSFACTOR");
-	return e && *e ? static_cast<float> (atof (e)) : 1.0f;
-    }();
-    return f;
-}
-} // namespace
 
 using namespace WallpaperEngine;
 using namespace WallpaperEngine::Render;
@@ -48,9 +40,15 @@ CScene::CScene (
     // caller should check this, if not a std::bad_cast is good to throw
     auto scene = wallpaper.as<Scene> ();
 
+    // read once per scene; the detail switch gates every texture this scene resolves
+    const auto& quality = context.getApp ().getContext ().settings.render.quality;
+    this->m_ssfactor = LoadQuality::ssfactor (quality.res);
+    this->m_clampComposites = LoadQuality::clampComposites (quality.res);
+    MipResidency::setEnabled (LoadQuality::texdetailAuto (quality.texdetail));
+
     // mip residency: decide per-texture cappability from the data model BEFORE any
     // texture resolves (the cache is shared, so eligibility cannot be first-caller-
-    // decides). Inert when LWE_TEXDETAIL=full.
+    // decides). Inert when the detail switch is off.
     MipResidency::buildReferenceMap (*scene);
 
     // setup scripting engine
@@ -1487,7 +1485,7 @@ glm::ivec2 CScene::largestOutputSize () const {
 }
 
 glm::vec2 CScene::clampToCap (glm::vec2 size) const {
-    const float ssf = lwe_ssfactor ();
+    const float ssf = this->m_ssfactor;
     if (ssf <= 0.0f || size.x <= 0.0f || size.y <= 0.0f) {
 	return size; // disabled (escape hatch) or degenerate -> legacy behavior
     }

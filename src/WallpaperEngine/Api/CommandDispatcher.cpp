@@ -138,6 +138,26 @@ std::string validateShowArgs (const json& args) {
 	}
     }
 
+    if (args.contains ("res")) {
+	static const std::set<std::string> RES = { "screen", "sharpfx", "wallpaper" };
+
+	if (!args["res"].is_string () || RES.find (args["res"].get<std::string> ()) == RES.end ()) {
+	    return "args.res must be one of screen/sharpfx/wallpaper";
+	}
+    }
+
+    if (args.contains ("texcomp") && !args["texcomp"].is_boolean ()) {
+	return "args.texcomp must be a bool";
+    }
+
+    if (args.contains ("texdetail")) {
+	static const std::set<std::string> DETAILS = { "auto", "full" };
+
+	if (!args["texdetail"].is_string () || DETAILS.find (args["texdetail"].get<std::string> ()) == DETAILS.end ()) {
+	    return "args.texdetail must be one of auto/full";
+	}
+    }
+
     if (args.contains ("volume")) {
 	const auto& volume = args["volume"];
 

@@ -33,6 +33,9 @@ public:
      */
     std::shared_ptr<const TextureProvider> resolve (const std::string& filename);
 
+    /** cache key under the show's quality choices; names beginning with $ keep their plain name */
+    [[nodiscard]] static std::string cacheKey (const std::string& filename, bool texcomp, bool detailAuto);
+
     /**
      * Registers a texture in the cache
      *

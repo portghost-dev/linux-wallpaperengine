@@ -45,9 +45,12 @@ public:
     [[nodiscard]] int getHeight () const override;
 
     // LWE_SSFACTOR resolution clamp (S1): returns `size` scaled down (aspect-preserving) so it
-    // never exceeds the output-derived cap = output dims * LWE_SSFACTOR (default 1.0). SSFACTOR=0
-    // disables the clamp (exact legacy behavior). Used for scene RTs and oversized layer/effect FBOs.
+    // never exceeds the output-derived cap = output dims * the scene's factor (LWE_SSFACTOR,
+    // default 1.0, or the show's res). A factor of 0 disables the clamp (exact legacy
+    // behavior). Used for scene RTs and oversized layer/effect FBOs.
     [[nodiscard]] glm::vec2 clampToCap (glm::vec2 size) const override;
+    /** the show's composite rule: layer composites and effect targets clamp with the rest */
+    [[nodiscard]] bool clampComposites () const { return m_clampComposites; }
 
     /**
      * Dimensions of the LARGEST SINGLE SCREEN the wallpaper plays on: the largest live output
@@ -153,6 +156,9 @@ private:
     ObjectUniquePtr m_bloomObjectData;
     CObject* m_bloomObject = nullptr;
     bool m_hdrBloom = false;
+    /** the show's clamp factor: output size times this caps every render target; 0 = no clamp */
+    float m_ssfactor = 1.0f;
+    bool m_clampComposites = true;
     std::map<int, CObject*> m_objects = {};
     std::unordered_set<int> m_objectsBeingResolved = {};
     std::shared_ptr<const CFBO> m_compositionRenderTarget = nullptr;

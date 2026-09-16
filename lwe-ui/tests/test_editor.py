@@ -203,6 +203,30 @@ class TestEditorAgainstRealScene(unittest.TestCase):
                      "overridesAllGlobal"):
             self.assertFalse(hasattr(e, gone), f"editor.{gone} must not exist any more")
 
+    def test_quality_rows_store_sparse_overrides(self) -> None:
+        """The three quality keys behave like Scaling: a value pins, Global deletes."""
+        e = self.editor
+        e.open(self.wid)
+        self.assertTrue(e.setRenderResolutionValue("sharpfx"))
+        self.assertTrue(e.setBoolOverride("TEXCOMP", "false"))
+        self.assertTrue(e.setTextureDetailValue("full"))
+        self.assertEqual(self._live("RENDER_RESOLUTION"), "sharpfx")
+        self.assertEqual(self._live("TEXCOMP"), "false")
+        self.assertEqual(self._live("TEXTURE_DETAIL"), "full")
+        self.assertEqual(e.renderResolutionValue(), "sharpfx")
+        self.assertEqual(e.texcompValue(), "false")
+        self.assertEqual(e.textureDetailValue(), "full")
+        self.assertFalse(e.setRenderResolutionValue("half"), "an unknown state is refused")
+        self.assertFalse(e.setTextureDetailValue("medium"))
+        self.assertTrue(e.setRenderResolutionValue(""))
+        self.assertTrue(e.setBoolOverride("TEXCOMP", ""))
+        self.assertTrue(e.setTextureDetailValue(""))
+        for key in ("RENDER_RESOLUTION", "TEXCOMP", "TEXTURE_DETAIL"):
+            self.assertEqual(self._live(key), "<MISSING>", f"{key}: Global deletes the key")
+        self.assertEqual(e.globalDefaultFor("RENDER_RESOLUTION"), "Full clamping")
+        self.assertEqual(e.globalDefaultFor("TEXCOMP"), "on")
+        self.assertEqual(e.globalDefaultFor("TEXTURE_DETAIL"), "Automatic")
+
     def test_revert_restores_session_start_values(self) -> None:
         """Revert restores every marked key to its session-start value; marks clear."""
         e = self.editor

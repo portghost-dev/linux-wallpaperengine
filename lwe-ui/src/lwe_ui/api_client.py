@@ -130,6 +130,9 @@ def show(
     skip_objects: list[int] | None = None,
     ui_id: str | None = None,
     fit: dict[str, float] | None = None,
+    res: str | None = None,
+    texcomp: bool | None = None,
+    texdetail: str | None = None,
     sock: "str | os.PathLike | None" = None,
 ) -> dict[str, Any] | None:
     """Hot-swap every output to this wallpaper id. Default waits only for the ack.
@@ -144,7 +147,9 @@ def show(
     scaling in stretch/fit/fill/default; clamp in clamp/border/repeat; volume 0..128.
     skip_objects is the wallpaper's conf SKIP list (object ids hidden for this
     wallpaper only). fit is the wallpaper layer of the fit window, {zoom 1..2,
-    pan_x, pan_y -1..1}; the engine composes it with the lane layer (set_fit).
+    pan_x, pan_y -1..1}; the engine composes it with the lane layer (set_fit). res in
+    screen/sharpfx/wallpaper, texcomp a bool, texdetail in auto/full: the quality switches
+    read at scene load; omitted means the engine's launch environment.
     """
     args: dict[str, Any] = {"id": wid}
     if cc is not None:
@@ -174,6 +179,12 @@ def show(
         args["skip_objects"] = [int(x) for x in skip_objects]
     if fit is not None:
         args["fit"] = {str(k): float(v) for k, v in fit.items()}
+    if res is not None:
+        args["res"] = str(res)
+    if texcomp is not None:
+        args["texcomp"] = bool(texcomp)
+    if texdetail is not None:
+        args["texdetail"] = str(texdetail)
     if ui_id:
         # opaque identity echo: the engine stores + reports it so Now Playing can name
         # the preset TILE the user picked, not the base wallpaper the engine renders
@@ -429,8 +440,9 @@ def set_instrument(name: str, enabled: bool,
 
     Only pure log gates are settable. The engine REFUSES a name that is not in its runtime
     registry rather than accepting it into a no-op, so a launch-time switch (LWE_TEXCOMP and
-    friends, which decide what gets built) comes back as an error naming the reason. Treat a
-    failure here as information for the operator, not as a transport problem.
+    friends, which decide what gets built) comes back as an error naming the reason; their
+    per-show door is `show` (res, texcomp, texdetail). Treat a failure here as information
+    for the operator, not as a transport problem.
     """
     return request("set-instrument", {"name": name, "enabled": bool(enabled)}, sock=sock)
 

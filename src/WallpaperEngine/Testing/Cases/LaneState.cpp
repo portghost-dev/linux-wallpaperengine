@@ -367,6 +367,9 @@ TEST_CASE ("lane and playlist round-trip through json", "[lane]") {
     recordShow (lane, playlist.entries[2], true);
     lane.fit.zoom = 1.5f;
     lane.look.timescale = 2.0f;
+    lane.look.res = "sharpfx";
+    lane.look.texcomp = "0";
+    lane.look.texdetail = "full";
 
     const auto laneBack = laneFromJson (toJson (lane));
     const auto playlistBack = playlistFromJson (toJson (playlist));
@@ -379,6 +382,9 @@ TEST_CASE ("lane and playlist round-trip through json", "[lane]") {
     REQUIRE (laneBack.history.back ().id == lane.history.back ().id);
     REQUIRE (laneBack.fit.zoom == 1.5f);
     REQUIRE (laneBack.look.timescale == 2.0f);
+    REQUIRE (laneBack.look.res == "sharpfx");
+    REQUIRE (laneBack.look.texcomp == "0");
+    REQUIRE (laneBack.look.texdetail == "full");
     REQUIRE (playlistBack.entries.size () == 5);
     REQUIRE (playlistBack.entries[4].args["ui_id"] == "wp4");
 

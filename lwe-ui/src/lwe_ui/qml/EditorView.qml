@@ -1745,6 +1745,65 @@ Rectangle {
                         }
                     }
 
+                    Item { width: parent.width; height: Theme.spacingMd }
+                    PRule { label: "Quality and memory" }
+                    PRow {
+                        label: "Clamp resolution"
+                        PDrop {
+                            ckey: "RENDER_RESOLUTION"
+                            readonly property var names: ({ "screen": "Full clamping",
+                                                            "sharpfx": "Full res effects",
+                                                            "wallpaper": "All full res" })
+                            entries: [
+                                { label: "Global (" + (view.rev, editor.globalDefaultFor("RENDER_RESOLUTION")) + ")",
+                                  value: "" },
+                                { label: "Full clamping", value: "screen" },
+                                { label: "Full res effects", value: "sharpfx" },
+                                { label: "All full res", value: "wallpaper" }
+                            ]
+                            display: {
+                                var v = (view.rev, editor.renderResolutionValue());
+                                return v === "" ? "Global" : (names[v] || "Global");
+                            }
+                            onPicked: function(v) { editor.setRenderResolutionValue(v) }
+                        }
+                    }
+                    PRow {
+                        label: "Texture compression"
+                        PDrop {
+                            ckey: "TEXCOMP"
+                            entries: [
+                                { label: "Global (" + (view.rev, editor.globalDefaultFor("TEXCOMP")) + ")",
+                                  value: "" },
+                                { label: "On", value: "true" },
+                                { label: "Off", value: "false" }
+                            ]
+                            display: {
+                                var raw = (view.rev, editor.texcompValue());
+                                if (raw === "") return "Global";
+                                return raw === "true" ? "On" : "Off";
+                            }
+                            onPicked: function(v) { editor.setBoolOverride("TEXCOMP", v) }
+                        }
+                    }
+                    PRow {
+                        label: "Texture detail"
+                        PDrop {
+                            ckey: "TEXTURE_DETAIL"
+                            entries: [
+                                { label: "Global (" + (view.rev, editor.globalDefaultFor("TEXTURE_DETAIL")) + ")",
+                                  value: "" },
+                                { label: "Automatic", value: "auto" },
+                                { label: "Full", value: "full" }
+                            ]
+                            display: {
+                                var v = (view.rev, editor.textureDetailValue());
+                                return v === "" ? "Global" : (v === "full" ? "Full" : "Automatic");
+                            }
+                            onPicked: function(v) { editor.setTextureDetailValue(v) }
+                        }
+                    }
+
                     // --- Metadata ----------------------------------------------
                     // Instant-write to meta.json / tags.csv, never to wp/<id>.conf: it is
                     // outside the marked set and outside the revert set, so neither header
@@ -1953,18 +2012,6 @@ Rectangle {
                     }
 
                     Item { width: parent.width; height: 10 }
-                    Rectangle { width: parent.width; height: 1; color: Theme.border }
-                    Item {
-                        width: parent.width
-                        height: 36
-                        Label {
-                            anchors.left: parent.left
-                            anchors.verticalCenter: parent.verticalCenter
-                            text: "Changes apply live."
-                            color: Theme.textTertiary
-                            font.pixelSize: Theme.fontMicro
-                        }
-                    }
                 }
             }
         }

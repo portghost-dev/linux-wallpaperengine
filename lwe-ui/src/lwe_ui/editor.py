@@ -1052,6 +1052,35 @@ class EditorBridge(QObject):
         return self._set_key("SCALING", s or None)
 
     @Slot(result=str)
+    def renderResolutionValue(self) -> str:
+        return self._present_str("RENDER_RESOLUTION")
+
+    @Slot(str, result=bool)
+    def setRenderResolutionValue(self, value: str) -> bool:
+        """"" is the explicit unset (menu entry Global) and DELETES the key; else store it."""
+        s = str(value or "").strip()
+        if s and s not in C.RENDER_RESOLUTIONS:
+            self.commitFailed.emit(["RENDER_RESOLUTION"])
+            return False
+        return self._set_key("RENDER_RESOLUTION", s or None)
+
+    @Slot(result=str)
+    def textureDetailValue(self) -> str:
+        return self._present_str("TEXTURE_DETAIL")
+
+    @Slot(str, result=bool)
+    def setTextureDetailValue(self, value: str) -> bool:
+        s = str(value or "").strip()
+        if s and s not in C.TEXTURE_DETAILS:
+            self.commitFailed.emit(["TEXTURE_DETAIL"])
+            return False
+        return self._set_key("TEXTURE_DETAIL", s or None)
+
+    @Slot(result=str)
+    def texcompValue(self) -> str:
+        return self._present_str("TEXCOMP")
+
+    @Slot(result=str)
     def speedValue(self) -> str:
         return self._present_str("SPEED")
 
@@ -1199,7 +1228,7 @@ class EditorBridge(QObject):
         not edit it.
         """
         key = str(key or "")
-        if key not in ("AUDIO_REACTIVE", "MOUSE", "AUTOMUTE"):
+        if key not in ("AUDIO_REACTIVE", "MOUSE", "AUTOMUTE", "TEXCOMP"):
             self.commitFailed.emit([key])
             return False
         s = str(value or "").strip().lower()
@@ -1214,7 +1243,12 @@ class EditorBridge(QObject):
 
     @Slot(str, result=str)
     def globalDefaultFor(self, key: str) -> str:
-        """The inherited value a `Global (<value>)` menu entry displays."""
+        """The inherited value a `Global (<value>)` menu entry displays.
+
+        For the quality keys this is the settings file's value, which reaches the engine only
+        at service start; while the running engine is behind the file, the Settings page's
+        restart verb says so, and a wallpaper that inherits gets what the engine started with.
+        """
         key = str(key or "")
         if key == "SCALING":
             return str(self._setting("ENGINE_SCALING", "default"))
@@ -1228,6 +1262,14 @@ class EditorBridge(QObject):
             return "on" if self._setting("MOUSE_DEFAULT", False) else "off"
         if key == "AUTOMUTE":
             return "on" if self._setting("AUTOMUTE_DEFAULT", True) else "off"
+        if key == "RENDER_RESOLUTION":
+            names = dict(zip(C.RENDER_RESOLUTIONS, ("Full clamping", "Full res effects", "All full res")))
+            return names.get(str(self._setting("RENDER_RESOLUTION", "screen")), "Full clamping")
+        if key == "TEXCOMP":
+            v = self._setting("ENGINE_TEXCOMP", True)
+            return "on" if str(v).strip().lower() in ("1", "true", "yes", "on") else "off"
+        if key == "TEXTURE_DETAIL":
+            return "Full" if str(self._setting("TEXTURE_DETAIL", "auto")) == "full" else "Automatic"
         return ""
 
     @Slot(result=str)

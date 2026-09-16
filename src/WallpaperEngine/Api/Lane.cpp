@@ -636,6 +636,9 @@ nlohmann::json WallpaperEngine::Api::toJson (const Lane& lane) {
 		 { "automute", lane.look.automute },
 		 { "scaling", lane.look.scaling },
 		 { "clamp", lane.look.clamp },
+		 { "res", lane.look.res },
+		 { "texcomp", lane.look.texcomp },
+		 { "texdetail", lane.look.texdetail },
 		 { "fit",
 		   { { "zoom", lane.look.fit.zoom },
 		     { "pan_x", lane.look.fit.panX },
@@ -791,6 +794,9 @@ Lane WallpaperEngine::Api::laneFromJson (const nlohmann::json& j) {
 	lane.look.automute = look.value ("automute", true);
 	lane.look.scaling = look.value ("scaling", "");
 	lane.look.clamp = look.value ("clamp", "");
+	lane.look.res = look.value ("res", "");
+	lane.look.texcomp = look.value ("texcomp", "");
+	lane.look.texdetail = look.value ("texdetail", "");
 	lane.look.fit = look.contains ("fit") ? fitFromJson (look["fit"]) : Fit {};
     }
 

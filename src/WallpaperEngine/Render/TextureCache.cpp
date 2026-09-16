@@ -7,6 +7,7 @@
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Render/Helpers/ContextAware.h"
 #include "WallpaperEngine/Render/MipResidency.h"
+#include "WallpaperEngine/Render/LoadQuality.h"
 
 #include "WallpaperEngine/Data/Model/Project.h"
 #include "WallpaperEngine/Data/Parsers/TextureParser.h"
@@ -58,7 +59,14 @@ TextureCache::TextureCache (RenderContext& context) : Helpers::ContextAware (con
 TextureCache::~TextureCache () { this->m_mediaCallback (); }
 
 std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string& filename) {
-    if (const auto found = this->m_textureCache.find (filename); found != this->m_textureCache.end ()) {
+    // one texture per form: a show that asks for raw uploads or the authored chain is not
+    // handed the compressed or capped texture another show loaded under the same name
+    const auto& quality = this->getContext ().getApp ().getContext ().settings.render.quality;
+    const std::string key = cacheKey (
+	filename, LoadQuality::texcomp (quality.texcomp), LoadQuality::texdetailAuto (quality.texdetail)
+    );
+
+    if (const auto found = this->m_textureCache.find (key); found != this->m_textureCache.end ()) {
 	return found->second;
     }
 
@@ -92,7 +100,7 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 	    if (getenv ("LWE_AUDIT") != nullptr) {
 		sLog.out ("LWE-AUDIT texture resolve '", filename, "' -> texid=", texture->getTextureID (0));
 	    }
-	    this->store (filename, texture);
+	    this->store (key, texture);
 
 	    return texture;
 	} catch (AssetLoadException&) {
@@ -102,6 +110,13 @@ std::shared_ptr<const TextureProvider> TextureCache::resolve (const std::string&
 
     // TODO: FILL IN WITH A CHECKERED PATTERN TEXTURE INSTEAD?
     throw AssetLoadException ("Cannot find file", filename, std::error_code ());
+}
+
+std::string TextureCache::cacheKey (const std::string& filename, const bool texcomp, const bool detailAuto) {
+    if (!filename.empty () && filename[0] == '$') {
+	return filename;
+    }
+    return filename + (texcomp ? "" : "|raw") + (detailAuto ? "" : "|full");
 }
 
 void TextureCache::store (const std::string& name, std::shared_ptr<const TextureProvider> texture) {

@@ -1994,6 +1994,10 @@ nlohmann::json WallpaperApplication::apiStatus () const {
     // NOT listed - they are not in the registry, precisely because they cannot be changed.
     result["instruments"] = Logging::instrumentsEnabled ();
     result["fullscreen_pause"] = this->m_context.settings.render.fullscreenBehavior != FullscreenBehavior::Off;
+    // the quality switches this show set; empty = the launch environment's value
+    result["quality"] = { { "res", this->m_context.settings.render.quality.res },
+			  { "texcomp", this->m_context.settings.render.quality.texcomp },
+			  { "texdetail", this->m_context.settings.render.quality.texdetail } };
 
     for (const auto& [screen, bg] : this->m_context.settings.general.screenBackgrounds) {
 	if (screen.rfind ("span:", 0) == 0) {
@@ -2204,6 +2208,7 @@ bool WallpaperApplication::applyShowCore (
     const auto previousMouse = this->m_context.settings.mouse.enabled;
     const auto previousAutomute = this->m_context.settings.audio.automute;
     const auto previousFullscreenBehavior = this->m_context.settings.render.fullscreenBehavior;
+    const auto previousQuality = this->m_context.settings.render.quality;
 
     if (args.contains ("cc")) {
 	this->setColorCorrection (
@@ -2299,6 +2304,12 @@ bool WallpaperApplication::applyShowCore (
     // rebuild so buildWallpapers applies it, rolled back with the show
     this->lane ().look.fit = args.contains ("fit") ? Api::fitFromJson (args["fit"]) : Api::Fit {};
 
+    // read at scene load, so set before the rebuild; rolled back with the show
+    auto& quality = this->m_context.settings.render.quality;
+    quality.res = args.value ("res", "");
+    quality.texcomp = args.contains ("texcomp") ? (args["texcomp"].get<bool> () ? "1" : "0") : "";
+    quality.texdetail = args.value ("texdetail", "");
+
     try {
 	for (auto& [screen, bg] : this->m_context.settings.general.screenBackgrounds) {
 	    if (screen.rfind ("span:", 0) == 0) {
@@ -2328,6 +2339,7 @@ bool WallpaperApplication::applyShowCore (
 	this->m_context.settings.mouse.enabled = previousMouse;
 	this->m_context.settings.audio.automute = previousAutomute;
 	this->m_context.settings.render.fullscreenBehavior = previousFullscreenBehavior;
+	this->m_context.settings.render.quality = previousQuality;
 
 	try {
 	    this->rebuildForCurrentBackgrounds ();
@@ -2867,6 +2879,9 @@ void WallpaperApplication::captureLook (Api::Lane& lane, const nlohmann::json& a
     look.automute = this->m_context.settings.audio.automute;
     look.scaling = args.value ("scaling", "");
     look.clamp = args.value ("clamp", "");
+    look.res = this->m_context.settings.render.quality.res;
+    look.texcomp = this->m_context.settings.render.quality.texcomp;
+    look.texdetail = this->m_context.settings.render.quality.texdetail;
 }
 
 nlohmann::json WallpaperApplication::laneCanvas () const {

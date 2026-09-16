@@ -10,7 +10,7 @@ TEST_CASE ("instrument registry: unknown names are rejected, not silently accept
 
     // A launch-time switch must be refused rather than accepted into a no-op. LWE_TEXCOMP
     // decides a texture upload format at construction, so flipping it live cannot mean
-    // anything - the caller has to learn that from the reply, not from silence.
+    // anything; the per-show door for the same choice is the show verb's texcomp arg.
     REQUIRE_FALSE (instrumentKnown ("LWE_TEXCOMP"));
     REQUIRE_FALSE (instrumentSet ("LWE_TEXCOMP", true));
 

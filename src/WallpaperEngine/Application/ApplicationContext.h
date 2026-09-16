@@ -170,6 +170,16 @@ public:
 		WallpaperEngine::Render::WallpaperState::TextureUVsScaling scalingMode;
 	    } window;
 
+	    /** quality switches of the current show, read at scene load; empty = the launch environment */
+	    struct {
+		/** "" | screen | sharpfx | wallpaper */
+		std::string res;
+		/** "" | "1" | "0" */
+		std::string texcomp;
+		/** "" | auto | full */
+		std::string texdetail;
+	    } quality;
+
 	    struct {
 		/** Which wlr-layer-shell layer to use for desktop backgrounds */
 		WAYLAND_LAYER layer;

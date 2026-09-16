@@ -440,6 +440,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Render/CWallpaper.cpp
     src/WallpaperEngine/Render/OverlayLabel.cpp
     src/WallpaperEngine/Render/MipResidency.cpp
+
+    src/WallpaperEngine/Render/LoadQuality.cpp
     src/WallpaperEngine/Render/WallpaperState.h
     src/WallpaperEngine/Render/WallpaperState.cpp
     src/WallpaperEngine/Render/Wallpapers/CScene.h
@@ -615,6 +617,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/LaneState.cpp
         src/WallpaperEngine/Testing/Cases/LaneHistory.cpp
         src/WallpaperEngine/Testing/Cases/ClampOutput.cpp
+        src/WallpaperEngine/Testing/Cases/LoadQuality.cpp
         src/WallpaperEngine/Testing/Cases/StatePaths.cpp
         src/WallpaperEngine/Testing/Cases/MirrorOwner.cpp
         src/WallpaperEngine/Testing/Cases/FitWindow.cpp

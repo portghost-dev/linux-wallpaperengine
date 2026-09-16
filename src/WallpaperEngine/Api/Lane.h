@@ -68,6 +68,10 @@ struct Look {
     bool automute = true;
     std::string scaling;
     std::string clamp;
+    /** the show's quality switches, empty = the launch environment (see settings.render.quality) */
+    std::string res;
+    std::string texcomp;
+    std::string texdetail;
     /** the wallpaper layer of the fit window, from the show's fit arg */
     Fit fit;
 };

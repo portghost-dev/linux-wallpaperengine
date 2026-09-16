@@ -374,6 +374,18 @@ def resolve_show_args(wid: str) -> tuple[str, dict[str, Any]]:
     # wallpaper takes part ("" = inherit). A wallpaper that opts in while the global is
     # off still gets the historical meaning of that flag, which is pause.
     args["fullscreen_behavior"] = resolve_fullscreen_behavior(s, conf)
+
+    # the quality switches ride the show only when the wallpaper set them; absent means
+    # the engine's launch environment, which is where the global setting already lives
+    res = str(conf.get("RENDER_RESOLUTION") or "").strip()
+    if res in C.RENDER_RESOLUTIONS:
+        args["res"] = res
+    texcomp = conf.get("TEXCOMP")
+    if texcomp is not None and str(texcomp).strip() != "":
+        args["texcomp"] = _conf_true(texcomp, True)
+    detail = str(conf.get("TEXTURE_DETAIL") or "").strip()
+    if detail in C.TEXTURE_DETAILS:
+        args["texdetail"] = detail
     # leg-A alias, kept so an older engine still reads a truthful boolean off the show
     args["fullscreen_pause"] = args["fullscreen_behavior"] != "off"
 

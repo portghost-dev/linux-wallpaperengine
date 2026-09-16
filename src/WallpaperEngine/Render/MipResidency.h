@@ -13,6 +13,8 @@ class RenderContext;
 namespace WallpaperEngine::Render::MipResidency {
 
 bool enabled ();
+/** the detail switch for the scene being loaded: true caps, false keeps the authored chain */
+void setEnabled (bool on);
 
 int capDimension (int liveOutputMax);
 

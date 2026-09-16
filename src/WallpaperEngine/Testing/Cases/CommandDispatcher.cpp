@@ -60,6 +60,32 @@ TEST_CASE ("malformed requests are rejected with a parseable error", "[dispatche
     }
 }
 
+TEST_CASE ("show quality args are validated like scaling and clamp", "[dispatcher]") {
+    const auto ok = CommandDispatcher::parse (
+	R"({"id":1,"cmd":"show","args":{"id":"1","res":"sharpfx","texcomp":false,"texdetail":"full"}})"
+    );
+    REQUIRE (ok.command.has_value ());
+    CHECK (ok.command->args["res"] == "sharpfx");
+    CHECK (ok.command->args["texcomp"] == false);
+    CHECK (ok.command->args["texdetail"] == "full");
+
+    const std::string bad[] = {
+	R"({"id":1,"cmd":"show","args":{"id":"1","res":"half"}})",
+	R"({"id":1,"cmd":"show","args":{"id":"1","res":1}})",
+	R"({"id":1,"cmd":"show","args":{"id":"1","texcomp":"yes"}})",
+	R"({"id":1,"cmd":"show","args":{"id":"1","texdetail":"medium"}})",
+    };
+    for (const auto& request : bad) {
+	const auto outcome = CommandDispatcher::parse (request);
+	INFO (request);
+	CHECK_FALSE (outcome.command.has_value ());
+	const auto response = json::parse (outcome.errorResponse, nullptr, false);
+	REQUIRE (response.is_object ());
+	CHECK (response["ok"] == false);
+	CHECK (response["error"].get<std::string> ().find ("args.") != std::string::npos);
+    }
+}
+
 TEST_CASE ("error responses echo a usable id and null otherwise", "[dispatcher]") {
     const auto withId = json::parse (CommandDispatcher::parse (R"({"id":9,"cmd":"reboot"})").errorResponse);
     CHECK (withId["id"] == 9);

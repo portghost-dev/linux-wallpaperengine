@@ -170,6 +170,11 @@ WP_SCHEMA: dict[str, dict] = {
     "CLASSIC_EXP": {"type": "float", "default": 2.6},
     "VOLUME": {"type": "int", "default": 0},
     "CLAMPING": {"type": "enum_or_empty", "default": "", "choices": CLAMPS},
+    # the quality switches per wallpaper; "" inherits the Engine > Advanced value, which
+    # reaches the engine through its env file, so only a set value rides the show
+    "RENDER_RESOLUTION": {"type": "enum_or_empty", "default": "", "choices": RENDER_RESOLUTIONS},
+    "TEXCOMP": {"type": "bool_or_empty", "default": ""},
+    "TEXTURE_DETAIL": {"type": "enum_or_empty", "default": "", "choices": TEXTURE_DETAILS},
     "AUTOMUTE": {"type": "bool", "default": True},
     "AUDIO_REACTIVE": {"type": "bool", "default": False},
     "MOUSE": {"type": "bool", "default": False},

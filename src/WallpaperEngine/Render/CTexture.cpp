@@ -1,4 +1,6 @@
 #include "CTexture.h"
+#include "WallpaperEngine/Application/WallpaperApplication.h"
+#include "WallpaperEngine/Render/LoadQuality.h"
 #include "WallpaperEngine/Data/Utils/Sha256.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Logging/StatePaths.h"
@@ -201,10 +203,11 @@ void baseLevelProbe () {
     }
 }
 
-bool uploadFromTexcache (const WallpaperEngine::Data::Assets::Texture& h, const int capDimension, bool& held) {
+bool uploadFromTexcache (
+    const WallpaperEngine::Data::Assets::Texture& h, const int capDimension, bool& held, const bool allowCache
+) {
     using namespace WallpaperEngine::Data::Assets;
-    const char* tc = getenv ("LWE_TEXCOMP");
-    if (tc != nullptr && std::string (tc) == "0") {
+    if (!allowCache) {
 	return false;
     }
     if (getenv ("LWE_SRGBALL") != nullptr) {
@@ -337,6 +340,9 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header, const int c
 }
 
 void CTexture::createGL () {
+    // the show's compression switch, the launch environment when it says nothing
+    const bool allowCache
+	= LoadQuality::texcomp (this->getContext ().getApp ().getContext ().settings.render.quality.texcomp);
     if (getenv ("LWE_BASELEVEL_PROBE") != nullptr) {
 	static const bool probed = [] () {
 	    baseLevelProbe ();
@@ -381,7 +387,7 @@ void CTexture::createGL () {
     for (const auto& [index, mipmaps] : this->m_header->images) {
 	this->setupOpenGLParameters (index);
 
-	if (index == 0 && uploadFromTexcache (*this->m_header, this->m_capDimension, this->m_held)) {
+	if (index == 0 && uploadFromTexcache (*this->m_header, this->m_capDimension, this->m_held, allowCache)) {
 	    continue;
 	}
 

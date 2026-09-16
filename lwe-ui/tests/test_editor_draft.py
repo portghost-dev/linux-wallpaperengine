@@ -607,8 +607,28 @@ class TestEditorSurfaceContract(unittest.TestCase):
         self.assertNotIn("Theme.warning", self._editor_text(),
                          "the amber indicator (and its dot) must be gone")
 
-    def test_L2_footer_states_the_apply_model(self) -> None:
-        self.assertIn('text: "Changes apply live."', self._editor_text())
+    def test_L2_footer_line_is_gone(self) -> None:
+        """The Tuning column ends on its last row: no closing hairline, no footer line."""
+        text = self._editor_text()
+        self.assertNotIn("Changes apply live.", text)
+        tail = text[text.index('PRule { label: "Metadata" }'):]
+        self.assertNotIn("Rectangle { width: parent.width; height: 1; color: Theme.border }", tail)
+
+    def test_L3_quality_rule_sits_above_metadata(self) -> None:
+        """The order is the rule: Quality and memory, its three rows, then Metadata; each
+        row is a PDrop on its conf key with a Global entry and the Settings page's names."""
+        text = self._editor_text()
+        q = text.index('PRule { label: "Quality and memory" }')
+        m = text.index('PRule { label: "Metadata" }')
+        self.assertLess(q, m)
+        block = text[q:m]
+        for label, key in (("Clamp resolution", "RENDER_RESOLUTION"),
+                           ("Texture compression", "TEXCOMP"), ("Texture detail", "TEXTURE_DETAIL")):
+            self.assertIn(f'label: "{label}"', block)
+            self.assertIn(f'ckey: "{key}"', block)
+            self.assertIn(f'editor.globalDefaultFor("{key}")', block)
+        for entry in ("Full clamping", "Full res effects", "All full res", "Automatic", "Full"):
+            self.assertIn(f'"{entry}"', block)
 
     def test_29a_object_exclusion_header_layout(self) -> None:
         """Row 1 = title + caption LEFT, filter + bulk toggle RIGHT. Row 2 = pill + search."""

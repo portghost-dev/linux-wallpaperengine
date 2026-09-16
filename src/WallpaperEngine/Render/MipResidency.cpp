@@ -1,4 +1,5 @@
 #include "MipResidency.h"
+#include "LoadQuality.h"
 #include "CTexture.h"
 #include "RenderContext.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
@@ -50,10 +51,17 @@ void recordPass (const std::string& shader, const TextureMap& textures, const bo
 } // namespace
 
 namespace WallpaperEngine::Render::MipResidency {
+namespace {
+// set at every scene load from the show's texdetail, the launch environment as the default
+bool g_enabled = LoadQuality::texdetailAuto ("");
+} // namespace
+
 bool enabled () {
-    // unset means auto: capping is the default, "full" asks for the authored chain
-    static const char* mode = getenv ("LWE_TEXDETAIL");
-    return mode == nullptr || std::string (mode) == "auto";
+    return g_enabled;
+}
+
+void setEnabled (const bool on) {
+    g_enabled = on;
 }
 
 int capDimension (const int liveOutputMax) {
