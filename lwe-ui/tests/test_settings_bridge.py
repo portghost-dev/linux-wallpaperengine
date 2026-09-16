@@ -275,6 +275,32 @@ def _test_restart_pending_and_restart_read_the_machine_never_the_sandbox(sb, b) 
     assert sb.restartBusy is False
     assert sb.takeRestart() is False
     assert sb.restartBusy is False, "a refused job must not grey the verbs for 20 s"
+    # an accepted restart settles only once the replacement engine is seen on the file:
+    # a tick with no readable process holds the window, a matching process closes it
+    saved = (b.restartMaster, daemon_unit.live_engine_env, daemon_unit._read_env_file)
+    try:
+        b.restartMaster = lambda: True
+        daemon_unit.live_engine_env = lambda: None
+        daemon_unit._read_env_file = lambda: {"LWE_HWDEC": "no"}
+        assert sb.takeRestart() is True
+        assert sb.restartBusy is True
+        sb._settle_tick()
+        assert sb.restartBusy is True, "no process seen yet: the window must hold"
+        daemon_unit.live_engine_env = lambda: {"LWE_ENGINE_ARGS": "x", "LWE_HWDEC": "auto"}
+        sb._settle_tick()
+        assert sb.restartBusy is True, "a process on other values is not settled"
+        daemon_unit.live_engine_env = lambda: {"LWE_ENGINE_ARGS": "x", "LWE_HWDEC": "no"}
+        sb._settle_tick()
+        assert sb.restartBusy is False, "the replacement engine on the file closes the window"
+        # a start that never comes back closes on the timeout alone
+        daemon_unit.live_engine_env = lambda: None
+        assert sb.takeRestart() is True
+        sb._settle_started -= 21
+        sb._settle_tick()
+        assert sb.restartBusy is False
+    finally:
+        b.restartMaster, daemon_unit.live_engine_env, daemon_unit._read_env_file = saved
+        sb._settle.stop(); sb._settling = False
     # a restore that rewrites the env file forgets the cache like a commit does
     sb._pending = {"RENDER_RESOLUTION": True}
     sb._regenerate()

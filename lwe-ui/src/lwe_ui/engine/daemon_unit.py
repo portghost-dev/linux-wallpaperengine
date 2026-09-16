@@ -438,28 +438,35 @@ def _read_env_file() -> dict[str, str] | None:
     return parse_env(text.splitlines())
 
 
-def restart_pending_keys(live: dict[str, str] | None = None,
-                         env_text: str | None = None) -> dict[str, bool]:
-    """Every restart-class setting -> True when the running engine started with other
-    values than the env file now carries for the keys that setting owns. One read of
-    the process and one of the file answer all of them. `live` and `env_text` are
-    injectable for tests; production reads the process and the file.
+def restart_state(live: dict[str, str] | None = None,
+                  env_text: str | None = None) -> tuple[bool, dict[str, bool]]:
+    """(observed, pending). observed is False while the engine process or the env file
+    cannot be read, and pending is then all False: no running engine means nothing is
+    pending, the next start reads the file. Otherwise pending maps every restart-class
+    setting to True when the running engine started with other values than the file now
+    carries for the keys that setting owns. One read of the process and one of the file
+    answer all of them. `live` and `env_text` are injectable for tests.
 
-    No running engine means nothing is pending: the next start reads the file. The file
-    is read from the panel's config dir; the unit names it under the home directory, so a
-    config home pointed elsewhere compares against a file the engine never reads. Keys
-    the writer always emits (LWE_HWDEC, LWE_TEXDETAIL) pend against an engine started
-    before the line existed; that engine did not read the setting.
+    The file is read from the panel's config dir; the unit names it under the home
+    directory, so a config home pointed elsewhere compares against a file the engine never
+    reads. Keys the writer always emits (LWE_HWDEC, LWE_TEXDETAIL) pend against an engine
+    started before the line existed; that engine did not read the setting.
     """
     if live is None:
         live = live_engine_env()
     if live is None:
-        return {k: False for k in RESTART_ENV_KEYS}
+        return False, {k: False for k in RESTART_ENV_KEYS}
     wanted = parse_env(env_text.splitlines()) if env_text is not None else _read_env_file()
     if wanted is None:
-        return {k: False for k in RESTART_ENV_KEYS}
-    return {k: any(_probe(wanted, probe) != _probe(live, probe) for probe in probes)
-            for k, probes in RESTART_ENV_KEYS.items()}
+        return False, {k: False for k in RESTART_ENV_KEYS}
+    return True, {k: any(_probe(wanted, probe) != _probe(live, probe) for probe in probes)
+                  for k, probes in RESTART_ENV_KEYS.items()}
+
+
+def restart_pending_keys(live: dict[str, str] | None = None,
+                         env_text: str | None = None) -> dict[str, bool]:
+    """The pending map of `restart_state`."""
+    return restart_state(live, env_text)[1]
 
 
 def restart_pending(setting_key: str, live: dict[str, str] | None = None,

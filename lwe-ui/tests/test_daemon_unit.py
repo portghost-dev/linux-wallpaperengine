@@ -371,6 +371,11 @@ class DaemonUnitTest(unittest.TestCase):
             dict(live, LWE_ENGINE_ARGS="--screen-root DP-1"),
             same.replace("auto", "full") + "LWE_ENGINE_ARGS=--screen-root DP-1 --layer top\n")
         self.assertEqual({k for k, v in both.items() if v}, {"TEXTURE_DETAIL", "ENGINE_LAYER"})
+        observed, pend = daemon_unit.restart_state(None, same)
+        self.assertFalse(observed, "no readable process is not an observation")
+        self.assertFalse(any(pend.values()))
+        observed, pend = daemon_unit.restart_state(live, same)
+        self.assertTrue(observed)
         self.assertEqual(set(daemon_unit.RESTART_ENV_KEYS),
                          {"ENGINE_LAYER", "ENGINE_HWDEC", "TEXTURE_DETAIL", "RENDER_RESOLUTION",
                           "ENGINE_TEXCOMP"})

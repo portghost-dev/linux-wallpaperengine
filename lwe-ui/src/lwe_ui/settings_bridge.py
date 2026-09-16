@@ -62,6 +62,7 @@ class SettingsBridge(QObject):
         self._receipt: dict = {}
         # one service read answers every row; cleared on an env file rewrite or invalidate
         self._pending: dict[str, bool] | None = None
+        self._observed = False
         # settle window of a restart taken from a row; held here because the Settings
         # pages are rebuilt on a tab switch
         self._settling = False
@@ -188,9 +189,9 @@ class SettingsBridge(QObject):
 
     def _refresh_pending(self) -> None:
         try:
-            self._pending = daemon_unit.restart_pending_keys()
+            self._observed, self._pending = daemon_unit.restart_state()
         except Exception:
-            self._pending = {}
+            self._observed, self._pending = False, {}
 
     @Slot(str, result=bool)
     def restartPending(self, key: str) -> bool:
@@ -243,7 +244,10 @@ class SettingsBridge(QObject):
         self._pending = None
         self._refresh_pending()
         self.changed.emit()
-        if not any((self._pending or {}).values()) or monotonic() - self._settle_started >= 20:
+        # the window closes on an observed engine with nothing pending, never on an
+        # unreadable one: the replacement process has to be seen on the file
+        settled = self._observed and not any((self._pending or {}).values())
+        if settled or monotonic() - self._settle_started >= 20:
             self._settle.stop()
             self._settling = False
             self.restartBusyChanged.emit()
