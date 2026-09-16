@@ -32,7 +32,9 @@ import re
 import subprocess
 from typing import Any
 
-from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
+from time import monotonic
+
+from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
 
 from . import api_client
 from . import constants as C
@@ -48,6 +50,7 @@ class SettingsBridge(QObject):
     """`settingsBridge` - the Settings surface's store access, reach receipt and verbs."""
 
     changed = Signal()
+    restartBusyChanged = Signal()
     commitFailed = Signal("QVariantList", str)
     truthRefreshed = Signal()
 
@@ -57,6 +60,15 @@ class SettingsBridge(QObject):
         self._backend = backend
         self._import = import_bridge
         self._receipt: dict = {}
+        # one service read answers every row; cleared on an env file rewrite or invalidate
+        self._pending: dict[str, bool] | None = None
+        # settle window of a restart taken from a row; held here because the Settings
+        # pages are rebuilt on a tab switch
+        self._settling = False
+        self._settle_started = 0.0
+        self._settle = QTimer(self)
+        self._settle.setInterval(1500)
+        self._settle.timeout.connect(self._settle_tick)
         try:
             backend.settingsChanged.connect(self.changed)
         except Exception:
@@ -174,6 +186,68 @@ class SettingsBridge(QObject):
             return "NEXT-SHOW"
         return "NEXT-SHOW"
 
+    def _refresh_pending(self) -> None:
+        try:
+            self._pending = daemon_unit.restart_pending_keys()
+        except Exception:
+            self._pending = {}
+
+    @Slot(str, result=bool)
+    def restartPending(self, key: str) -> bool:
+        """True while the running engine started with other values than the env file now
+        carries for the keys `key` reaches it through. Read from the engine's own process,
+        so it holds across panel launches and clears by itself once the engine comes back
+        up on the new file. Cached: a rewrite of the env file and `invalidateRestart` are
+        the only things that read the service again, and one read answers every row."""
+        if self._pending is None:
+            self._refresh_pending()
+        return bool((self._pending or {}).get(str(key), False))
+
+    @Slot(result="QVariantList")
+    def restartKeys(self) -> list:
+        """The setting keys that carry a restart verb, from the engine env table."""
+        return list(daemon_unit.RESTART_ENV_KEYS)
+
+    @Slot()
+    def invalidateRestart(self) -> None:
+        """Forget the cached answers, so the next restartPending reads the service."""
+        self._pending = None
+
+    @Property(bool, notify=restartBusyChanged)
+    def restartBusy(self) -> bool:
+        """True from a restart taken here until the engine is back up on the file or the
+        window runs out; every verb is held while it is."""
+        return self._settling
+
+    @Slot(result=bool)
+    def takeRestart(self) -> bool:
+        """One restart for every row that is pending. Queued through the backend, then a
+        settle window re-reads the service every 1.5 s until nothing pends or 20 s pass.
+        A refused job opens no window."""
+        if self._settling:
+            return False
+        try:
+            accepted = bool(self._backend.restartMaster())
+        except Exception:
+            accepted = False
+        if not accepted:
+            return False
+        self._settling = True
+        self._settle_started = monotonic()
+        self._pending = None
+        self._settle.start()
+        self.restartBusyChanged.emit()
+        return True
+
+    def _settle_tick(self) -> None:
+        self._pending = None
+        self._refresh_pending()
+        self.changed.emit()
+        if not any((self._pending or {}).values()) or monotonic() - self._settle_started >= 20:
+            self._settle.stop()
+            self._settling = False
+            self.restartBusyChanged.emit()
+
     def _fail(self, key: str, reason: str) -> bool:
         self.commitFailed.emit([key], reason)
         return False
@@ -260,7 +334,10 @@ class SettingsBridge(QObject):
         """Rewrite the engine env file so a SERVICE-RESTART key means
         something at all. The restart itself is NOT taken - deliberately left open, so the
         change lands in the file and the user restarts. Safe only because U4 landed first.
+        Every rewrite of the file forgets the cached restart answers, whichever door it
+        came through (a commit, a restore).
         """
+        self._pending = None
         try:
             daemon_unit.write_files()
             return True

@@ -17,6 +17,7 @@ import json
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 from .. import constants as C
 from ..storage import atomic, paths, settings
@@ -356,3 +357,112 @@ def write_files(outputs: list[str] | None = None) -> tuple[str, str]:
             "systemd daemon-reload failed: "
             + (reload_proc.stderr.strip() or f"exit {reload_proc.returncode}"))
     return str(env_path), unit_path
+
+
+#: env keys per restart-class setting; a (key, flag) probe is one token of a
+#: word-split argument line. Only these are compared; a drop-in or environment.d
+#: value for one of them is not seen.
+RESTART_ENV_KEYS: dict[str, tuple[str | tuple[str, str], ...]] = {
+    "ENGINE_LAYER": (("LWE_ENGINE_ARGS", "--layer"),),
+    "ENGINE_HWDEC": ("LWE_HWDEC",),
+    "TEXTURE_DETAIL": ("LWE_TEXDETAIL",),
+    "RENDER_RESOLUTION": ("LWE_SSFACTOR", "LWE_CLAMPCOMPOSITES"),
+    "ENGINE_TEXCOMP": ("LWE_TEXCOMP",),
+}
+
+
+def _probe(env: dict[str, str], probe: str | tuple[str, str]) -> str | None:
+    """One probe's value in an environment: the key's value, or the token after `flag`
+    in the key's value split on whitespace, which is how systemd splits the line."""
+    if isinstance(probe, tuple):
+        key, flag = probe
+        words = env.get(key, "").split()
+        for i, word in enumerate(words[:-1]):
+            if word == flag:
+                return words[i + 1]
+        return None
+    return env.get(probe)
+
+
+def parse_env(lines) -> dict[str, str]:
+    """KEY=VALUE entries to a dict; comments, blanks and lines without = are skipped."""
+    out: dict[str, str] = {}
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        value = value.strip()
+        # systemd strips one pair of matching quotes from an EnvironmentFile value
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        out[key.strip()] = value
+    return out
+
+
+def live_engine_env() -> dict[str, str] | None:
+    """The environment the running engine started with, read from its own process.
+
+    systemd hands the env file to the process at start and the unit reports none of it
+    back, so the process is the only record of what the engine actually read. None when
+    the service has no main process, when it cannot be read, or while the main process
+    is forked but has not exec'd the engine yet: a simple unit's start job completes at
+    the fork, and until the exec its environment is still the manager's own.
+    """
+    if os.environ.get("LWE_SANDBOX") == "1":
+        return None
+    try:
+        proc = subprocess.run(
+            ["systemctl", "--user", "show", C.ENGINE_SERVICE, "-p", "MainPID", "--value"],
+            capture_output=True, text=True, timeout=3, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    pid = (proc.stdout or "").strip()
+    if proc.returncode != 0 or not pid.isdigit() or pid == "0":
+        return None
+    try:
+        raw = Path(f"/proc/{pid}/environ").read_bytes()
+    except OSError:
+        return None
+    env = parse_env(chunk.decode("utf-8", "replace") for chunk in raw.split(b"\0"))
+    if "LWE_ENGINE_ARGS" not in env:
+        return None
+    return env
+
+
+def _read_env_file() -> dict[str, str] | None:
+    try:
+        text = (paths.config_dir() / ENV_FILE_NAME).read_text(encoding="utf-8")
+    except OSError:
+        return None
+    return parse_env(text.splitlines())
+
+
+def restart_pending_keys(live: dict[str, str] | None = None,
+                         env_text: str | None = None) -> dict[str, bool]:
+    """Every restart-class setting -> True when the running engine started with other
+    values than the env file now carries for the keys that setting owns. One read of
+    the process and one of the file answer all of them. `live` and `env_text` are
+    injectable for tests; production reads the process and the file.
+
+    No running engine means nothing is pending: the next start reads the file. The file
+    is read from the panel's config dir; the unit names it under the home directory, so a
+    config home pointed elsewhere compares against a file the engine never reads. Keys
+    the writer always emits (LWE_HWDEC, LWE_TEXDETAIL) pend against an engine started
+    before the line existed; that engine did not read the setting.
+    """
+    if live is None:
+        live = live_engine_env()
+    if live is None:
+        return {k: False for k in RESTART_ENV_KEYS}
+    wanted = parse_env(env_text.splitlines()) if env_text is not None else _read_env_file()
+    if wanted is None:
+        return {k: False for k in RESTART_ENV_KEYS}
+    return {k: any(_probe(wanted, probe) != _probe(live, probe) for probe in probes)
+            for k, probes in RESTART_ENV_KEYS.items()}
+
+
+def restart_pending(setting_key: str, live: dict[str, str] | None = None,
+                    env_text: str | None = None) -> bool:
+    """One setting's answer from `restart_pending_keys`; a key with no env keys never pends."""
+    return restart_pending_keys(live, env_text).get(setting_key, False)

@@ -327,6 +327,60 @@ class DaemonUnitTest(unittest.TestCase):
         self.assertIn("MemoryMax=3G", unit)
         self.assertIn("WantedBy=graphical-session.target", unit)
 
+    def test_restart_pending_compares_only_the_settings_own_keys(self) -> None:
+        """The clamp reaches the engine only at service start, so the row's restart verb
+        shows exactly while the live process and the file disagree on the clamp keys and
+        on nothing else: a foreign instrument the process carries must not hold it open."""
+        live_default = {"LWE_TEXCOMP": "1", "LWE_TEXCACHEDUMP": "1"}
+        file_default = "# GENERATED\nLWE_TEXCOMP=1\n"
+        file_sharpfx = file_default + "LWE_CLAMPCOMPOSITES=0\n"
+        file_wallpaper = file_default + "LWE_SSFACTOR=0\n"
+        pending = daemon_unit.restart_pending
+        self.assertFalse(pending("RENDER_RESOLUTION", live_default, file_default))
+        self.assertTrue(pending("RENDER_RESOLUTION", live_default, file_sharpfx))
+        self.assertTrue(pending("RENDER_RESOLUTION", live_default, file_wallpaper))
+        live_sharpfx = dict(live_default, LWE_CLAMPCOMPOSITES="0")
+        self.assertFalse(pending("RENDER_RESOLUTION", live_sharpfx, file_sharpfx))
+        self.assertTrue(pending("RENDER_RESOLUTION", live_sharpfx, file_default),
+                        "back to the default clears the line, and that is a change too")
+        self.assertFalse(pending("ENGINE_LAYER", live_default, file_sharpfx),
+                         "a setting with no env keys registered never pends")
+        # the sandbox reports no running engine: nothing pends, the next start reads the file
+        self.assertFalse(pending("RENDER_RESOLUTION", None, file_sharpfx))
+        # the other rows: one env line each
+        live = {"LWE_HWDEC": "no", "LWE_TEXCOMP": "1", "LWE_TEXDETAIL": "auto"}
+        same = "LWE_HWDEC=no\nLWE_TEXCOMP=1\nLWE_TEXDETAIL=auto\n"
+        self.assertFalse(pending("ENGINE_HWDEC", live, same))
+        self.assertTrue(pending("ENGINE_HWDEC", live, same.replace("no", "auto")))
+        self.assertTrue(pending("ENGINE_TEXCOMP", live, same.replace("TEXCOMP=1", "TEXCOMP=0")))
+        self.assertTrue(pending("TEXTURE_DETAIL", live, same.replace("auto", "full")))
+        self.assertFalse(pending("TEXTURE_DETAIL", live, same.replace("TEXCOMP=1", "TEXCOMP=0")),
+                         "another row's key must not light this one")
+        # the layer is one token of the argument line beside the monitor list
+        live_args = {"LWE_ENGINE_ARGS": "--assets-dir /a --screen-root DP-1 --layer top"}
+        self.assertFalse(pending("ENGINE_LAYER", live_args,
+                                 "LWE_ENGINE_ARGS=--assets-dir /a --screen-root DP-1 --screen-root DP-2 --layer top\n"),
+                         "a monitor change must not light the layer row")
+        self.assertTrue(pending("ENGINE_LAYER", live_args,
+                                "LWE_ENGINE_ARGS=--assets-dir /a --screen-root DP-1\n"),
+                        "back to the default drops the token, and that is a change")
+        self.assertTrue(pending("ENGINE_LAYER", live_args,
+                                "LWE_ENGINE_ARGS=--assets-dir /a --screen-root DP-1 --layer overlay\n"))
+        # one read answers every row
+        both = daemon_unit.restart_pending_keys(
+            dict(live, LWE_ENGINE_ARGS="--screen-root DP-1"),
+            same.replace("auto", "full") + "LWE_ENGINE_ARGS=--screen-root DP-1 --layer top\n")
+        self.assertEqual({k for k, v in both.items() if v}, {"TEXTURE_DETAIL", "ENGINE_LAYER"})
+        self.assertEqual(set(daemon_unit.RESTART_ENV_KEYS),
+                         {"ENGINE_LAYER", "ENGINE_HWDEC", "TEXTURE_DETAIL", "RENDER_RESOLUTION",
+                          "ENGINE_TEXCOMP"})
+
+    def test_parse_env_skips_comments_and_malformed_lines(self) -> None:
+        got = daemon_unit.parse_env(["# c", "", "A=1", "B = x=y ", "novalue", " C=", "=D",
+                                     'Q="0"', "R='a b'", 'S="x'])
+        self.assertEqual(got, {"A": "1", "B": "x=y", "C": "", "": "D",
+                               "Q": "0", "R": "a b", "S": '"x'})
+
 
 def _test_cross_compositor_enumeration() -> None:
     """Output names must resolve on KDE and generic wlroots, not just Hyprland.

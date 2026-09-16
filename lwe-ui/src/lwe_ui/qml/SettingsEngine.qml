@@ -29,6 +29,15 @@ Column {
 
     function val(key) { return (page.rev, settingsBridge.value(key)) }
 
+    // restartPending answers from the bridge's cache; the page clears it when the
+    // engine's state moves (master toggle, show)
+    property int restartRev: 0
+    function recheckRestart() { settingsBridge.invalidateRestart(); page.restartRev++ }
+    Connections {
+        target: backend
+        function onStatusChanged() { page.recheckRestart() }
+    }
+
     width: parent ? parent.width : 0
     spacing: 0
 
@@ -490,32 +499,49 @@ Column {
 
     SettingsRow {
         label: "Wayland layer"
-        SettingsCombo {
-            id: layerCombo
-            readonly property var vals: ["background", "bottom", "top", "overlay"]
-            failed: page.isFailed("ENGINE_LAYER")
-            model: ["Background", "Bottom", "Top", "Overlay"]
-            currentIndex: Math.max(0, vals.indexOf(String(page.val("ENGINE_LAYER"))))
-            onActivated: function(i) {
-                settingsBridge.commit("ENGINE_LAYER", layerCombo.vals[i]);
+        Row {
+            spacing: Theme.spacingSm
+            RestartVerb {
+                settingKey: "ENGINE_LAYER"
+                rev: page.rev
+                restartRev: page.restartRev
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            SettingsCombo {
+                id: layerCombo
+                anchors.verticalCenter: parent.verticalCenter
+                readonly property var vals: ["background", "bottom", "top", "overlay"]
+                failed: page.isFailed("ENGINE_LAYER")
+                model: ["Background", "Bottom", "Top", "Overlay"]
+                currentIndex: Math.max(0, vals.indexOf(String(page.val("ENGINE_LAYER"))))
+                onActivated: function(i) {
+                    settingsBridge.commit("ENGINE_LAYER", layerCombo.vals[i]);
+                }
             }
         }
     }
 
     SettingsRow {
         label: "Video decode"
-        SettingsCombo {
-            id: hwdecCombo
-            // Universal entries only (S-12.5): no vendor names anywhere in the UI. "auto"
-            // lets mpv pick whatever decode hardware the system actually has, and the
-            // entry name discloses the fallback honestly - bare "Hardware" would lie the
-            // moment a codec falls back to software. Stored `nvdec` migrates to auto.
-            readonly property var vals: ["no", "auto"]
-            failed: page.isFailed("ENGINE_HWDEC")
-            model: ["Software", "Hardware when available"]
-            currentIndex: { var v = String(page.val("ENGINE_HWDEC")); return v === "nvdec" ? 1 : Math.max(0, vals.indexOf(v)) }
-            onActivated: function(i) {
-                settingsBridge.commit("ENGINE_HWDEC", hwdecCombo.vals[i]);
+        Row {
+            spacing: Theme.spacingSm
+            RestartVerb {
+                settingKey: "ENGINE_HWDEC"
+                rev: page.rev
+                restartRev: page.restartRev
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            SettingsCombo {
+                id: hwdecCombo
+                anchors.verticalCenter: parent.verticalCenter
+                // auto lets mpv pick the decode hardware present; a stored nvdec maps to auto
+                readonly property var vals: ["no", "auto"]
+                failed: page.isFailed("ENGINE_HWDEC")
+                model: ["Software", "Hardware when available"]
+                currentIndex: { var v = String(page.val("ENGINE_HWDEC")); return v === "nvdec" ? 1 : Math.max(0, vals.indexOf(v)) }
+                onActivated: function(i) {
+                    settingsBridge.commit("ENGINE_HWDEC", hwdecCombo.vals[i]);
+                }
             }
         }
     }
@@ -523,17 +549,26 @@ Column {
     SettingsRow {
         label: "Texture detail"
         caption: "Automatic matches your display and frees the memory above it"
-        SettingsCombo {
-            id: texDetailCombo
-            // mip residency (stint 5): entries name outcomes, not mechanisms. Automatic
-            // keeps resolution along the author's own mip chain at the display's size,
-            // streaming the full chain back the moment a scene truly magnifies into it.
-            readonly property var vals: ["auto", "full"]
-            failed: page.isFailed("TEXTURE_DETAIL")
-            model: ["Automatic", "Full"]
-            currentIndex: Math.max(0, vals.indexOf(String(page.val("TEXTURE_DETAIL") || "auto")))
-            onActivated: function(i) {
-                settingsBridge.commit("TEXTURE_DETAIL", texDetailCombo.vals[i]);
+        Row {
+            spacing: Theme.spacingSm
+            RestartVerb {
+                settingKey: "TEXTURE_DETAIL"
+                rev: page.rev
+                restartRev: page.restartRev
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            SettingsCombo {
+                id: texDetailCombo
+                anchors.verticalCenter: parent.verticalCenter
+                // Automatic keeps the display-sized chain resident and streams the full
+                // chain back on magnification
+                readonly property var vals: ["auto", "full"]
+                failed: page.isFailed("TEXTURE_DETAIL")
+                model: ["Automatic", "Full"]
+                currentIndex: Math.max(0, vals.indexOf(String(page.val("TEXTURE_DETAIL") || "auto")))
+                onActivated: function(i) {
+                    settingsBridge.commit("TEXTURE_DETAIL", texDetailCombo.vals[i]);
+                }
             }
         }
     }
@@ -541,16 +576,26 @@ Column {
     SettingsRow {
         label: "Clamp resolution"
         caption: "Clamping content to screen resolution saves video memory at the cost of some sharpness"
-        SettingsCombo {
-            id: renderResCombo
-            // the clamp's three states: everything at the screen's size, effect layers at
-            // their authored size, or nothing clamped
-            readonly property var vals: ["screen", "sharpfx", "wallpaper"]
-            failed: page.isFailed("RENDER_RESOLUTION")
-            model: ["Full clamping", "Full res effects", "All full res"]
-            currentIndex: Math.max(0, vals.indexOf(String(page.val("RENDER_RESOLUTION") || "screen")))
-            onActivated: function(i) {
-                settingsBridge.commit("RENDER_RESOLUTION", renderResCombo.vals[i]);
+        Row {
+            spacing: Theme.spacingSm
+            RestartVerb {
+                settingKey: "RENDER_RESOLUTION"
+                rev: page.rev
+                restartRev: page.restartRev
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            SettingsCombo {
+                id: renderResCombo
+                anchors.verticalCenter: parent.verticalCenter
+                // the clamp's three states: everything at the screen's size, effect layers at
+                // their authored size, or nothing clamped
+                readonly property var vals: ["screen", "sharpfx", "wallpaper"]
+                failed: page.isFailed("RENDER_RESOLUTION")
+                model: ["Full clamping", "Full res effects", "All full res"]
+                currentIndex: Math.max(0, vals.indexOf(String(page.val("RENDER_RESOLUTION") || "screen")))
+                onActivated: function(i) {
+                    settingsBridge.commit("RENDER_RESOLUTION", renderResCombo.vals[i]);
+                }
             }
         }
     }
@@ -558,9 +603,19 @@ Column {
     SettingsRow {
         label: "Texture compression"
         caption: "Trades a little banding for a lot of video memory"
-        ThemedSwitch {
-            checked: page.val("ENGINE_TEXCOMP") === true
-            onToggled: settingsBridge.commit("ENGINE_TEXCOMP", checked)
+        Row {
+            spacing: Theme.spacingSm
+            RestartVerb {
+                settingKey: "ENGINE_TEXCOMP"
+                rev: page.rev
+                restartRev: page.restartRev
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            ThemedSwitch {
+                anchors.verticalCenter: parent.verticalCenter
+                checked: page.val("ENGINE_TEXCOMP") === true
+                onToggled: settingsBridge.commit("ENGINE_TEXCOMP", checked)
+            }
         }
     }
 

@@ -325,6 +325,9 @@ is to be the daemon API's reference client and the system's owner:
   engine's env file (`engine/daemon_unit.py`), reconciling drift at every start. The
   restart-class engine settings live there, among them the resolution cap's three states
   (`Clamp resolution` on Engine > Advanced: everything clamped, composites exempt, or off).
+  The engine reads the file only at service start, so each restart-class row on Engine >
+  Advanced carries a restart verb while the running engine's own environment differs from the file on that
+  row's keys; one tap restarts the service in place for every row that is pending.
 - It **writes overrides sparsely**: a per-wallpaper conf carries only what the user set or
   the wallpaper declares; a present key pins, an absent key inherits the global, so a
   default shipped later reaches every wallpaper that never chose otherwise.

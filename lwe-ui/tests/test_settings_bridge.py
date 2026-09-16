@@ -253,6 +253,36 @@ def _test_service_restart_keys_regenerate_the_env_file(sb) -> None:
     print("OK SERVICE-RESTART keys regenerate the env file, dials intact (sequencing law)")
 
 
+def _test_restart_pending_and_restart_read_the_machine_never_the_sandbox(sb, b) -> None:
+    """The Clamp resolution row's restart verb asks the engine's own process; under the
+    sandbox there is none, so nothing pends and a restart is refused rather than taken."""
+    assert sb.restartPending("RENDER_RESOLUTION") is False
+    assert sb.restartPending("no-such-key") is False
+    assert b.restartMaster() is False, "the sandbox must never restart the machine's engine"
+    # the answer is cached until a restart-class commit or an explicit invalidate
+    sb._pending = {"RENDER_RESOLUTION": True}
+    assert sb.restartPending("RENDER_RESOLUTION") is True
+    assert sb.commit("ENGINE_VOLUME", 40) is True
+    assert sb.restartPending("RENDER_RESOLUTION") is True, "a live commit must not re-read"
+    assert sb.commit("RENDER_RESOLUTION", "sharpfx") is True
+    assert sb.restartPending("RENDER_RESOLUTION") is False, "a restart-class commit re-reads"
+    sb._pending = {"RENDER_RESOLUTION": True}
+    sb.invalidateRestart()
+    assert sb.restartPending("RENDER_RESOLUTION") is False
+    assert set(sb.restartKeys()) == {"ENGINE_LAYER", "ENGINE_HWDEC", "TEXTURE_DETAIL",
+                                     "RENDER_RESOLUTION", "ENGINE_TEXCOMP"}
+    # a refused restart opens no settle window; the sandbox refuses every restart
+    assert sb.restartBusy is False
+    assert sb.takeRestart() is False
+    assert sb.restartBusy is False, "a refused job must not grey the verbs for 20 s"
+    # a restore that rewrites the env file forgets the cache like a commit does
+    sb._pending = {"RENDER_RESOLUTION": True}
+    sb._regenerate()
+    assert sb._pending is None
+    print("OK restart verb: sandbox sees no engine and refuses to restart; the answer is "
+          "cached across live commits and re-read on restart-class ones")
+
+
 def _test_dial_seeding_ladder(sb) -> None:
     """P22: live status -> the persisted key -> calibrated. U4 created the middle rung."""
     saved = api_client.status
@@ -409,6 +439,7 @@ def main() -> None:
     _test_reach_is_derived_not_prose(sb, b)
     _test_verb_first_persist_on_confirmation(sb)
     _test_service_restart_keys_regenerate_the_env_file(sb)
+    _test_restart_pending_and_restart_read_the_machine_never_the_sandbox(sb, b)
     _test_dial_seeding_ladder(sb)
     _test_exceptions_editor_uses_the_existing_blacklist(sb)
     _test_system_truth_reads_the_live_unit_file(sb)

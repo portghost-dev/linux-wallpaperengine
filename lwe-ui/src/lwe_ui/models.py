@@ -1052,6 +1052,25 @@ class Backend(QObject):
         except (OSError, subprocess.SubprocessError):
             return False
 
+    @Slot(result=bool)
+    def restartMaster(self) -> bool:
+        """Queue a restart of the master service in place, so a change that reaches the
+        engine only through its env file lands now. The enable state is left as it is.
+
+        Queued, not awaited: a stop can run to the unit's stop timeout before systemd
+        kills the engine, so the call returns before the engine has stopped. True means
+        the job was accepted; whether the engine is back up is read from the service."""
+        if _sandboxed():
+            return False
+        try:
+            proc = subprocess.run(
+                ["systemctl", "--user", "--no-block", "restart", self._master_service()],
+                capture_output=True, text=True, timeout=10, check=False)
+            self.statusChanged.emit()
+            return proc.returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
+
     def _schedule_entries(self) -> list[dict[str, str]]:
         """The stored SCHEDULE as the engine's entries, in stored order (row 1 is where day
         begins, row 2 where it ends); an entry naming a missing playlist is dropped."""

@@ -261,6 +261,24 @@ def _test_released_halts_are_actually_built() -> None:
           "reset copy, audio footnote, tray")
 
 
+def _test_every_restart_row_carries_the_verb() -> None:
+    """The five restart-class rows on the Engine page each pair their control with a
+    RestartVerb in one Row; the restart and its settle window live in the bridge."""
+    engine = _code("SettingsEngine.qml")
+    assert (_QML_SRC_DIR / "RestartVerb.qml").exists()
+    for key in ("ENGINE_LAYER", "ENGINE_HWDEC", "TEXTURE_DETAIL", "RENDER_RESOLUTION",
+                "ENGINE_TEXCOMP"):
+        assert f'settingKey: "{key}"' in engine, f"{key} row has no restart verb"
+    assert engine.count("RestartVerb {") == 5
+    verb = _code("RestartVerb.qml")
+    assert "settingsBridge.takeRestart()" in verb and "settingsBridge.restartBusy" in verb, \
+        "the restart and its settle window belong to the bridge, which outlives the page"
+    assert "takeRestart" not in engine and "restartBusy" not in engine and "Timer" not in engine.split("PSection")[0][-600:], \
+        "no page-owned restart window: the page is a Loader source and dies on a tab switch"
+    assert "ENGINE_LAYER" in engine
+    print("OK the five restart-class rows carry the verb; the bridge owns the one restart")
+
+
 def _test_no_raw_enum_reaches_the_user() -> None:
     """S6's real target: the surface must never render a schema token as copy."""
     raw = ["clamp", "border", "repeat", "nvdec", "stretch", "interval", "manual",
@@ -689,6 +707,7 @@ def main() -> None:
     _test_no_xdg_open_text_editor_on_the_surface()
     _test_released_halts_are_actually_built()
     _test_no_raw_enum_reaches_the_user()
+    _test_every_restart_row_carries_the_verb()
     _test_regenerate_is_never_reachable_before_the_dial_generator()
     _live()
     print("ALL settings UI regressions passed")
