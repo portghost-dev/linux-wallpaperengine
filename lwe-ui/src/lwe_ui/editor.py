@@ -670,7 +670,7 @@ class EditorBridge(QObject):
 
     def _resolved_speed(self) -> float:
         """conf SPEED when set, else the global speed - exactly the rate the next show would send."""
-        return C.resolve_speed(self._wp_get("SPEED"), self.globalSpeed())
+        return C.resolve_speed(wp.set_speed(self._wid), self.globalSpeed())
 
     def _resolved_volume(self) -> int:
         """VOLUME present means it (0 included); absent inherits ENGINE_VOLUME."""
@@ -854,11 +854,7 @@ class EditorBridge(QObject):
         except (TypeError, ValueError):
             self.commitFailed.emit(["ENGINE_TIMESCALE"])
             return False
-        conf_speed = 1.0
-        try:
-            conf_speed = float(self._wp_get("SPEED") or 1.0)
-        except (TypeError, ValueError):
-            conf_speed = 1.0
+        conf_speed = wp.set_speed(self._wid)
         if not self._push(api_client.set_speed, "ENGINE_TIMESCALE", C.resolve_speed(conf_speed, factor)):
             return False
         if not self._persist_setting("ENGINE_TIMESCALE", factor):
@@ -1159,7 +1155,7 @@ class EditorBridge(QObject):
                 return
             if "speed" in pending:
                 factor = max(SPEED_MIN, min(SPEED_MAX, pending.pop("speed")))
-                api_client.set_speed(C.resolve_speed(self._wp_get("SPEED"), factor))
+                api_client.set_speed(C.resolve_speed(wp.set_speed(self._wid), factor))
             if "wp_speed" in pending:
                 conf_speed = max(SPEED_MIN, min(SPEED_MAX, pending.pop("wp_speed")))
                 api_client.set_speed(C.resolve_speed(conf_speed, self.globalSpeed()))

@@ -96,6 +96,15 @@ def load(wid: str) -> dict[str, Any]:
     return load_path(paths.wp_file(wid))
 
 
+def set_speed(wid: str) -> Any:
+    """This wallpaper's SPEED only when its file carries one; None when it inherits.
+    load() fills the schema default, which would read as a set value of 1.0."""
+    try:
+        return load_set(wid).get("SPEED")
+    except Exception:
+        return None
+
+
 def load_set_path(path) -> dict[str, Any]:
     """Presence-aware read: ONLY the schema keys the file actually carries, typed, + props.
 

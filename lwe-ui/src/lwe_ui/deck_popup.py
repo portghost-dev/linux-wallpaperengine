@@ -226,12 +226,7 @@ class DeckPopupBridge(QObject):
         except (TypeError, ValueError):
             self.commitFailed.emit(["ENGINE_TIMESCALE"])
             return False
-        conf_speed = 1.0
-        if self._wid:
-            try:
-                conf_speed = float(wp.load(self._wid).get("SPEED") or 1.0)
-            except Exception:
-                conf_speed = 1.0
+        conf_speed = wp.set_speed(self._wid) if self._wid else None
         if not self._push(api_client.set_speed, "ENGINE_TIMESCALE", C.resolve_speed(conf_speed, factor)):
             return False
         if not self._persist_setting("ENGINE_TIMESCALE", factor):
@@ -400,7 +395,7 @@ class DeckPopupBridge(QObject):
                     conf = {}
             if "speed" in pending:
                 factor = max(SPEED_MIN, min(SPEED_MAX, pending.pop("speed")))
-                api_client.set_speed(C.resolve_speed(conf.get("SPEED") or 1.0, factor))
+                api_client.set_speed(C.resolve_speed(wp.set_speed(self._wid) if self._wid else None, factor))
             if "volume" in pending:
                 api_client.set_volume(max(0, min(100, int(round(pending.pop("volume"))))))
             if pending and self._wid:

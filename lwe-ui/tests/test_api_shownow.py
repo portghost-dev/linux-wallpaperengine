@@ -178,6 +178,14 @@ class ApiShowNowTest(unittest.TestCase):
         self.assertAlmostEqual(models.effective_speed("3134543499", 10.0), C.ENGINE_SPEED_MAX)
         self.assertAlmostEqual(models.effective_speed("3134543499", 0.5), C.ENGINE_SPEED_MAX)
         self.assertAlmostEqual(models.effective_speed("", 3.0), 3.0)
+        # a wallpaper whose file carries no SPEED inherits the global; the store fills the
+        # schema default on a plain load, which must not read as a set value
+        from lwe_ui.storage import paths
+        paths.wp_file("3134543499").write_text("BG=3134543499\nSCALING=fill\n", encoding="utf-8")
+        settings.save({"ENGINE_TIMESCALE": 2.5})
+        self.assertAlmostEqual(models.effective_speed("3134543499"), 2.5)
+        self.assertTrue(self.backend.showNow("3134543499"))
+        self.assertAlmostEqual(captured["speed"], 2.5, "absent SPEED inherits the global")
 
     def test_vocabulary_defaults_and_overrides(self) -> None:
         """Untouched conf: schema defaults ride (editor confs pin every key - SCALING

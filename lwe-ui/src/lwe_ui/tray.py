@@ -151,13 +151,8 @@ class TrayProcess(QObject):
         if float(st.get("speed", 1.0) or 0.0) == 0.0:
             # resume restores the resolved rate of the wallpaper on screen, the same
             # number a show or the panel's own resume would send
-            conf_speed = 1.0
-            try:
-                wid = str(((st.get("current") or {}).get("ui_id")) or "")
-                if wid:
-                    conf_speed = wp.load(wid).get("SPEED", 1.0)
-            except Exception:
-                conf_speed = 1.0
+            wid = str(((st.get("current") or {}).get("ui_id")) or "")
+            conf_speed = wp.set_speed(wid) if wid else None
             try:
                 factor = settings.load().get("ENGINE_TIMESCALE", 1.0)
             except Exception:

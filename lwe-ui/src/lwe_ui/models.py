@@ -245,12 +245,7 @@ def split_playlist_parts(entries: list[dict]) -> list[list[dict]]:
 def effective_speed(wid: str, factor=None) -> float:
     """The rate the engine runs for `wid`: its conf SPEED when set, else the global speed
     (the stored ENGINE_TIMESCALE when `factor` is None), clamped to the engine's range."""
-    conf_speed = None
-    if wid:
-        try:
-            conf_speed = wp.load(wid).get("SPEED")
-        except Exception:
-            conf_speed = None
+    conf_speed = wp.set_speed(wid) if wid else None
     if factor is None:
         try:
             factor = settings.load().get("ENGINE_TIMESCALE", 1.0)
@@ -313,7 +308,7 @@ def resolve_show_args(wid: str) -> tuple[str, dict[str, Any]]:
         pass
     args["cc"] = cc
 
-    args["speed"] = C.resolve_speed(conf.get("SPEED"), s.get("ENGINE_TIMESCALE"))
+    args["speed"] = C.resolve_speed(wp.set_speed(wid), s.get("ENGINE_TIMESCALE"))
 
     raw_props = conf.get("props")
     if isinstance(raw_props, dict) and raw_props:
