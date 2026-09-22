@@ -145,18 +145,18 @@ class ApiShowNowTest(unittest.TestCase):
         self.assertFalse(captured["automute"])
         self.assertTrue(captured["fullscreen_pause"], "policy pause+both must inherit as ON")
         self.assertEqual(captured["skip_objects"], [27, 539])
-        self.assertAlmostEqual(captured["speed"], 3.0, msg="SPEED 1.5 x global 2.0")
+        self.assertAlmostEqual(captured["speed"], 1.5, msg="a set SPEED replaces the global 2.0")
 
-    def test_speed_product_clamped_to_engine_range(self) -> None:
-        """The engine refuses a whole show over speed 20; the panel resolves and clamps
-        in one place, so a large per-wallpaper SPEED times a large global factor still
-        lands as an accepted show at the engine's ceiling."""
+    def test_speed_override_clamped_to_engine_range(self) -> None:
+        """A wallpaper's SPEED replaces the global; the global applies only when the
+        wallpaper sets none; the panel resolves and clamps in one place, so a value over
+        the engine's ceiling still lands as an accepted show at the ceiling."""
         from lwe_ui import constants as C
         from lwe_ui.storage import wp
 
         self._flag(True)
         settings.save({"ENGINE_TIMESCALE": 10.0})
-        wp.save("3134543499", {"SPEED": 10.0})
+        wp.save("3134543499", {"SPEED": 25.0})
 
         captured: dict = {}
 
@@ -169,13 +169,14 @@ class ApiShowNowTest(unittest.TestCase):
 
         self.assertTrue(self.backend.showNow("3134543499"))
         self.assertAlmostEqual(captured["speed"], C.ENGINE_SPEED_MAX)
-        self.assertAlmostEqual(C.resolve_speed(3.0, 2.0), 6.0)
+        self.assertAlmostEqual(C.resolve_speed(3.0, 2.0), 3.0, "a set SPEED wins outright")
         self.assertAlmostEqual(C.resolve_speed(None, None), 1.0)
-        self.assertAlmostEqual(C.resolve_speed("x", 2.0), 2.0)
-        self.assertAlmostEqual(C.resolve_speed(0.0, 5.0), 0.0)
+        self.assertAlmostEqual(C.resolve_speed("", 2.0), 2.0, "absent inherits the global")
+        self.assertAlmostEqual(C.resolve_speed("x", 2.0), 2.0, "an unreadable value inherits")
+        self.assertAlmostEqual(C.resolve_speed(0.0, 5.0), 0.0, "an explicit 0 is a value")
         # the live doors resolve the same number through the same helper
         self.assertAlmostEqual(models.effective_speed("3134543499", 10.0), C.ENGINE_SPEED_MAX)
-        self.assertAlmostEqual(models.effective_speed("3134543499", 0.5), 5.0)
+        self.assertAlmostEqual(models.effective_speed("3134543499", 0.5), C.ENGINE_SPEED_MAX)
         self.assertAlmostEqual(models.effective_speed("", 3.0), 3.0)
 
     def test_vocabulary_defaults_and_overrides(self) -> None:

@@ -243,14 +243,14 @@ def split_playlist_parts(entries: list[dict]) -> list[list[dict]]:
 
 
 def effective_speed(wid: str, factor=None) -> float:
-    """The rate the engine runs for `wid`: its conf SPEED times the global factor (the
-    stored ENGINE_TIMESCALE when `factor` is None), clamped to the engine's range."""
-    conf_speed = 1.0
+    """The rate the engine runs for `wid`: its conf SPEED when set, else the global speed
+    (the stored ENGINE_TIMESCALE when `factor` is None), clamped to the engine's range."""
+    conf_speed = None
     if wid:
         try:
-            conf_speed = wp.load(wid).get("SPEED", 1.0)
+            conf_speed = wp.load(wid).get("SPEED")
         except Exception:
-            conf_speed = 1.0
+            conf_speed = None
     if factor is None:
         try:
             factor = settings.load().get("ENGINE_TIMESCALE", 1.0)
@@ -1827,7 +1827,7 @@ class Backend(QObject):
                     pass
 
             # the engine holds one speed number, the resolved rate of the wallpaper on
-            # screen, so the global factor is pushed through the same resolve as a show.
+            # screen, so the global speed is pushed through the same resolve as a show.
             # independently tolerant, like every other push in this method: one verb that
             # cannot answer must never cost the rest of the fan-out
             try:

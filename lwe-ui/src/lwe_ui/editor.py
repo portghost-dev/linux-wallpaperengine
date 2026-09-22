@@ -669,7 +669,7 @@ class EditorBridge(QObject):
             return float(spec["calibrated"])
 
     def _resolved_speed(self) -> float:
-        """conf SPEED x the global timescale - exactly the rate the next show would send."""
+        """conf SPEED when set, else the global speed - exactly the rate the next show would send."""
         return C.resolve_speed(self._wp_get("SPEED"), self.globalSpeed())
 
     def _resolved_volume(self) -> int:
@@ -846,8 +846,8 @@ class EditorBridge(QObject):
         not commit. A persisted value the engine refused would leave the row showing a rate
         nothing is running, which is the failure this surface exists to make visible.
 
-        The engine is told the EFFECTIVE rate (this wallpaper's conf SPEED times the global
-        factor), which is exactly what the next show would send.
+        The engine is told the EFFECTIVE rate (this wallpaper's conf SPEED when set, else the
+        global speed), which is exactly what the next show would send.
         """
         try:
             factor = max(SPEED_MIN, min(SPEED_MAX, float(value)))

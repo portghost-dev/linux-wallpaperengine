@@ -68,15 +68,20 @@ ENGINE_SPEED_MAX = 20.0
 
 
 def resolve_speed(conf_speed, factor) -> float:
-    """The rate the engine runs: this wallpaper's SPEED times the global factor, clamped."""
-    try:
-        speed = float(conf_speed if conf_speed not in (None, "") else 1.0)
-    except (TypeError, ValueError):
-        speed = 1.0
-    try:
-        speed *= float(factor if factor not in (None, "") else 1.0)
-    except (TypeError, ValueError):
-        pass
+    """The rate the engine runs: this wallpaper's SPEED when it sets one, else the global
+    speed, clamped to the engine's range. A wallpaper value replaces the global; the two
+    never combine, as with every other per-wallpaper key."""
+    speed = None
+    if conf_speed not in (None, ""):
+        try:
+            speed = float(conf_speed)
+        except (TypeError, ValueError):
+            speed = None
+    if speed is None:
+        try:
+            speed = float(factor if factor not in (None, "") else 1.0)
+        except (TypeError, ValueError):
+            speed = 1.0
     return max(ENGINE_SPEED_MIN, min(ENGINE_SPEED_MAX, speed))
 
 

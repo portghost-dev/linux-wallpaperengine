@@ -216,13 +216,14 @@ class DeckPopupSessionTests(unittest.TestCase):
         self.popup_mod.api_client.available = lambda: True
         self.popup_mod.api_client.set_speed = lambda v: (sent.append(("speed", v)) or {"ok": True})
         self.popup_mod.api_client.set_volume = lambda v: (sent.append(("volume", v)) or {"ok": True})
-        # the effective rate, conf SPEED times the dragged factor, as the commit would send
+        # the effective rate: this wallpaper sets SPEED 2.0, so the dragged global does not
+        # reach the engine; the commit would send the same number
         self.popup.previewLive("speed", 1.25)
         self.popup.previewLive("speed", 1.5)
         self.popup.previewLive("volume", 40.0)
         self.assertEqual(sent, [])
         QTest.qWait(80)
-        self.assertEqual(sent, [("speed", 3.0), ("volume", 40)])
+        self.assertEqual(sent, [("speed", 2.0), ("volume", 40)])
         self.assertEqual(dict(settings.load()), before, "a preview persists nothing")
         self.assertEqual(self.failures, [])
         self.popup.previewLive("fps", 60.0)
