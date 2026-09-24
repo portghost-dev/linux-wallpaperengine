@@ -156,6 +156,8 @@ WallpaperApplication::WallpaperApplication (ApplicationContext& context) : m_con
 	.fullscreenBehavior = this->m_context.settings.render.fullscreenBehavior,
 	.screenScalings = this->m_context.settings.general.screenScalings,
 	.screenClamps = this->m_context.settings.general.screenClamps,
+	.cc = this->m_colorCorrection,
+	.timescale = this->m_timescale,
     };
 
     if (const char* e = getenv ("LWE_DEADMAN"); e != nullptr && *e != '\0') {
@@ -2215,10 +2217,14 @@ bool WallpaperApplication::applyShowCore (
 	    { args["cc"][0].get<float> (), args["cc"][1].get<float> (), args["cc"][2].get<float> (),
 	      args["cc"][3].get<float> () }
 	);
+    } else {
+	this->setColorCorrection (this->m_showDefaults.cc);
     }
 
     if (args.contains ("speed")) {
 	this->setTimescale (args["speed"].get<float> ());
+    } else {
+	this->setTimescale (this->m_showDefaults.timescale);
     }
 
     auto& propertyOverrides = this->m_context.settings.general.properties;

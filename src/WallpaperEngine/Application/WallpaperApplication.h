@@ -337,6 +337,8 @@ private:
 	FullscreenBehavior fullscreenBehavior;
 	std::map<std::string, WallpaperEngine::Render::WallpaperState::TextureUVsScaling> screenScalings;
 	std::map<std::string, TextureFlags> screenClamps;
+	glm::vec4 cc;
+	float timescale;
     } m_showDefaults {};
     std::map<std::string, Api::Lane> m_lanes { { "all", Api::Lane {} } };
     Api::Schedule m_schedule;
