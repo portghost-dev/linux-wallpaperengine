@@ -2974,6 +2974,10 @@ std::filesystem::path WallpaperApplication::runtimeStateDir () {
 }
 
 void WallpaperApplication::persistRuntimeState () const {
+    if (!this->m_context.settings.general.daemonMode) {
+	return;
+    }
+
     nlohmann::json state = nlohmann::json::object ();
     state["version"] = RUNTIME_STATE_VERSION;
     const auto& lane = this->lane ();

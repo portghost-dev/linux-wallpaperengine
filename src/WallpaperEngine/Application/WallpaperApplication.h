@@ -234,9 +234,9 @@ private:
     void captureLook (Api::Lane& lane, const nlohmann::json& args) const;
     [[nodiscard]] nlohmann::json laneCanvas () const;
     /**
-     * Runtime state persistence: the engine writes its own durable state (current show,
-     * rotation set, playback/audio/policy toggles) after every mutating verb and restores
-     * it on an idle daemon boot, so a service restart is invisible without any client.
+     * Runtime state persistence: in daemon mode the engine writes its own durable state (current show, rotation set,
+     * playback/audio/policy toggles) after every mutating verb and restores it on an idle daemon boot, so a service
+     * restart is invisible without any client.
      */
     void persistRuntimeState () const;
     void restoreRuntimeState ();
