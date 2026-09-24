@@ -1,5 +1,6 @@
 #include "CommandServer.h"
 
+#include "WallpaperEngine/Application/Config.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <cerrno>
@@ -70,19 +71,7 @@ CommandServer::~CommandServer () {
     }
 }
 
-std::filesystem::path CommandServer::defaultSocketPath () {
-    if (const char* socketOverride = getenv ("LWE_SOCKET"); socketOverride != nullptr && *socketOverride != 0) {
-	return { socketOverride };
-    }
-
-    if (const char* runtime = getenv ("XDG_RUNTIME_DIR"); runtime != nullptr && *runtime != '\0') {
-	return std::filesystem::path (runtime) / "lwe" / "engine.sock";
-    }
-
-    // no runtime dir (unusual: no logind session). /tmp is world-writable, so a
-    // uid-qualified subdirectory created 0700 is the only safe shape here.
-    return std::filesystem::path ("/tmp") / ("lwe-" + std::to_string (geteuid ())) / "engine.sock";
-}
+std::filesystem::path CommandServer::defaultSocketPath () { return Application::Config::get ().socket.value; }
 
 bool CommandServer::listen () {
     const std::string path = this->m_socketPath.string ();

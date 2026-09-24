@@ -5,6 +5,7 @@
 
 #include "Steam/FileSystem/FileSystem.h"
 #include "WallpaperEngine/Application/ApplicationState.h"
+#include "WallpaperEngine/Application/Config.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.h"
 #include "WallpaperEngine/Audio/Drivers/NullAudioDriver.h"
@@ -63,18 +64,11 @@ float g_Time;
 float g_TimeLast;
 float g_Daytime;
 
-static float lweEnvFloat (const char* name, const float fallback, const float lo, const float hi) {
-    const char* env = getenv (name);
-    if (env == nullptr) {
-	return fallback;
-    }
-    return std::clamp (static_cast<float> (atof (env)), lo, hi);
-}
-float g_LweClassicDivisor = lweEnvFloat ("LWE_CLASSICK", 16.0f, 0.01f, 1000.0f);
-float g_LweFalloffExp = lweEnvFloat ("LWE_CLASSICEXP", 2.0f, 0.5f, 6.0f);
-float g_LweAudioGain = lweEnvFloat ("LWE_AUDIOGAIN", 1.0f, 0.1f, 20.0f);
+float g_LweClassicDivisor = WallpaperEngine::Application::Config::get ().classicK.value;
+float g_LweFalloffExp = WallpaperEngine::Application::Config::get ().classicExp.value;
+float g_LweAudioGain = WallpaperEngine::Application::Config::get ().audioGain.value;
 // band smoothing time constant in msecs; 0 disables smoothing entirely
-float g_LweAudioSmoothMs = lweEnvFloat ("LWE_AUDIOSMOOTH", 90.0f, 0.0f, 500.0f);
+float g_LweAudioSmoothMs = WallpaperEngine::Application::Config::get ().audioSmooth.value;
 
 using namespace WallpaperEngine::Assets;
 using namespace WallpaperEngine::Application;
@@ -131,22 +125,8 @@ void CustomGLDebugCallback (
 }
 
 WallpaperApplication::WallpaperApplication (ApplicationContext& context) : m_context (context) {
-    if (const char* e = getenv ("LWE_CC"); e != nullptr) {
-	glm::vec4 cc = this->m_colorCorrection;
-
-	if (sscanf (e, "%f %f %f %f", &cc.x, &cc.y, &cc.z, &cc.w) == 4) {
-	    this->setColorCorrection (cc);
-	}
-    }
-
-    if (const char* e = getenv ("LWE_TIMESCALE"); e != nullptr && *e != '\0') {
-	char* end = nullptr;
-	const double v = strtod (e, &end);
-
-	if (end != e && v >= 0.0) {
-	    this->setTimescale (static_cast<float> (v));
-	}
-    }
+    this->setColorCorrection (Config::get ().cc.value);
+    this->setTimescale (Config::get ().timescale.value);
 
     this->m_showDefaults = {
 	.volume = this->m_context.settings.audio.volume,
@@ -160,14 +140,7 @@ WallpaperApplication::WallpaperApplication (ApplicationContext& context) : m_con
 	.timescale = this->m_timescale,
     };
 
-    if (const char* e = getenv ("LWE_DEADMAN"); e != nullptr && *e != '\0') {
-	char* end = nullptr;
-	const long v = strtol (e, &end, 10);
-
-	if (end != e && v >= 0 && v <= 86400) {
-	    this->m_deadmanSeconds = static_cast<int> (v);
-	}
-    }
+    this->m_deadmanSeconds = Config::get ().deadman.value;
 
     this->initializeSubsystems ();
     this->loadBackgrounds ();
@@ -1913,7 +1886,23 @@ nlohmann::json WallpaperApplication::apiStatus () const {
 	}
     }
 
-    result["current"] = { { "id", currentId }, { "ui_id", this->lane ().current.uiId } };
+    auto currentProject = this->m_backgrounds.end ();
+
+    for (const auto& [screen, path] : this->m_context.settings.general.screenBackgrounds) {
+	if (screen.rfind ("span:", 0) != 0 && !path.empty ()) {
+	    currentProject = this->m_backgrounds.find (screen);
+	    break;
+	}
+    }
+
+    if (currentProject == this->m_backgrounds.end ()) {
+	currentProject = this->m_backgrounds.find ("default");
+    }
+
+    result["current"]
+	= { { "id", currentId },
+	    { "ui_id", this->lane ().current.uiId },
+	    { "title", currentProject != this->m_backgrounds.end () ? currentProject->second->title : "" } };
     result["outputs"] = { { "state", this->m_releaseReason == ReleaseReason::Live ? "live" : "released" },
 			  { "reason",
 			    this->m_releaseReason == ReleaseReason::Deadman            ? "deadman"
@@ -2001,6 +1990,28 @@ nlohmann::json WallpaperApplication::apiStatus () const {
 			  { "clampcomposites", this->m_context.settings.render.quality.clampComposites },
 			  { "texcomp", this->m_context.settings.render.quality.texcomp },
 			  { "texdetail", this->m_context.settings.render.quality.texdetail } };
+    const auto& config = Config::get ();
+    result["config"] = {
+	{ "LWE_SOCKET", { { "value", config.socket.value.string () }, { "source", config.socket.source } } },
+	{ "LWE_SSFACTOR", { { "value", config.ssfactor.value }, { "source", config.ssfactor.source } } },
+	{ "LWE_CLAMPCOMPOSITES",
+	  { { "value", config.clampComposites.value }, { "source", config.clampComposites.source } } },
+	{ "LWE_TEXCOMP", { { "value", config.texcomp.value }, { "source", config.texcomp.source } } },
+	{ "LWE_TEXDETAIL",
+	  { { "value", config.texdetailAuto.value ? "auto" : "full" }, { "source", config.texdetailAuto.source } } },
+	{ "LWE_HWDEC", { { "value", config.hwdec.value }, { "source", config.hwdec.source } } },
+	{ "LWE_CC",
+	  { { "value",
+	      { this->m_showDefaults.cc.x, this->m_showDefaults.cc.y, this->m_showDefaults.cc.z,
+		this->m_showDefaults.cc.w } },
+	    { "source", config.cc.source } } },
+	{ "LWE_TIMESCALE", { { "value", this->m_showDefaults.timescale }, { "source", config.timescale.source } } },
+	{ "LWE_DEADMAN", { { "value", config.deadman.value }, { "source", config.deadman.source } } },
+	{ "LWE_CLASSICK", { { "value", config.classicK.value }, { "source", config.classicK.source } } },
+	{ "LWE_CLASSICEXP", { { "value", config.classicExp.value }, { "source", config.classicExp.source } } },
+	{ "LWE_AUDIOGAIN", { { "value", config.audioGain.value }, { "source", config.audioGain.source } } },
+	{ "LWE_AUDIOSMOOTH", { { "value", config.audioSmooth.value }, { "source", config.audioSmooth.source } } },
+    };
 
     for (const auto& [screen, bg] : this->m_context.settings.general.screenBackgrounds) {
 	if (screen.rfind ("span:", 0) == 0) {

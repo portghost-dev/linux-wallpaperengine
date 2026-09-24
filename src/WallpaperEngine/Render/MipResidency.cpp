@@ -1,7 +1,7 @@
 #include "MipResidency.h"
-#include "LoadQuality.h"
 #include "CTexture.h"
 #include "RenderContext.h"
+#include "WallpaperEngine/Application/Config.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Data/Model/Object.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
@@ -53,7 +53,7 @@ void recordPass (const std::string& shader, const TextureMap& textures, const bo
 namespace WallpaperEngine::Render::MipResidency {
 namespace {
 // set at every scene load from the show's texdetail, the launch environment as the default
-bool g_enabled = LoadQuality::texdetailAuto ("");
+bool g_enabled = Application::Config::get ().texdetailAuto.value;
 } // namespace
 
 bool enabled () {

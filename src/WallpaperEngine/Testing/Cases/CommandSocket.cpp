@@ -3,6 +3,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -10,6 +11,7 @@
 #include <unistd.h>
 
 #include "WallpaperEngine/Api/CommandServer.h"
+#include "WallpaperEngine/Application/Config.h"
 
 using namespace WallpaperEngine::Api;
 
@@ -261,11 +263,26 @@ TEST_CASE ("CommandServer exposes every fd the caller must poll", "[api]") {
 }
 
 TEST_CASE ("CommandServer honors the LWE_SOCKET override", "[api]") {
+    std::optional<std::string> inherited;
+
+    if (const char* runtime = getenv ("XDG_RUNTIME_DIR"); runtime != nullptr) {
+	inherited = runtime;
+    }
+
     setenv ("LWE_SOCKET", "/tmp/lwe-override-probe.sock", 1);
+    WallpaperEngine::Application::Config::reload ();
     REQUIRE (CommandServer::defaultSocketPath () == std::filesystem::path ("/tmp/lwe-override-probe.sock"));
     unsetenv ("LWE_SOCKET");
+    WallpaperEngine::Application::Config::reload ();
 
     setenv ("XDG_RUNTIME_DIR", "/run/user/testing", 1);
+    WallpaperEngine::Application::Config::reload ();
     REQUIRE (CommandServer::defaultSocketPath () == std::filesystem::path ("/run/user/testing/lwe/engine.sock"));
     unsetenv ("XDG_RUNTIME_DIR");
+    WallpaperEngine::Application::Config::reload ();
+
+    if (inherited.has_value ()) {
+	setenv ("XDG_RUNTIME_DIR", inherited->c_str (), 1);
+	WallpaperEngine::Application::Config::reload ();
+    }
 }

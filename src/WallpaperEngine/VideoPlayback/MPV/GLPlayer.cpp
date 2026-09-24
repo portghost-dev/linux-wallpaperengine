@@ -1,5 +1,6 @@
 #include "GLPlayer.h"
 
+#include "WallpaperEngine/Application/Config.h"
 #include "WallpaperEngine/Logging/Log.h"
 
 #include <algorithm>
@@ -292,8 +293,7 @@ void GLPlayer::init () {
 	sLog.exception ("Could not initialize mpv context");
     }
 
-    const char* hwdecMode = getenv ("LWE_HWDEC");
-    mpv_set_property_string (this->m_handle, "hwdec", (hwdecMode && *hwdecMode) ? hwdecMode : "no");
+    mpv_set_property_string (this->m_handle, "hwdec", Application::Config::get ().hwdec.value.c_str ());
     // LWE: cap the NVDEC decode-ahead pool (libmpv default 6 -> 2) to trim ~160MB of hw-decode VRAM;
     // ignored under software decode. Override with LWE_MPV_EXTRA_FRAMES.
     const char* efMode = getenv ("LWE_MPV_EXTRA_FRAMES");

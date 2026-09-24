@@ -331,6 +331,7 @@ set(COMMON_SOURCES
 
     src/WallpaperEngine/Application/ApplicationContext.cpp
     src/WallpaperEngine/Application/ApplicationContext.h
+    src/WallpaperEngine/Application/Config.cpp
     src/WallpaperEngine/Application/WallpaperApplication.cpp
     src/WallpaperEngine/Application/WallpaperApplication.h
 
@@ -618,6 +619,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/LaneHistory.cpp
         src/WallpaperEngine/Testing/Cases/ClampOutput.cpp
         src/WallpaperEngine/Testing/Cases/LoadQuality.cpp
+        src/WallpaperEngine/Testing/Cases/Config.cpp
         src/WallpaperEngine/Testing/Cases/StatePaths.cpp
         src/WallpaperEngine/Testing/Cases/MirrorOwner.cpp
         src/WallpaperEngine/Testing/Cases/FitWindow.cpp
