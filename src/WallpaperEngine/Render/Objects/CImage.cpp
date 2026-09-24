@@ -284,7 +284,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	}
     }
     // unclamped composites keep effect chains at their authored size
-    const glm::vec2 fboSize = scene.clampComposites () ? scene.clampToCap (fboBase) : fboBase;
+    const glm::vec2 fboSize = scene.clampToEffectCap (fboBase);
     const uint32_t fboFlags = this->m_texture->getFlags ();
     const TextureFormat compositeFormat = scene.isHdrBloom () ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;
     auto [poolA, poolB] = scene.leaseCompositePair (this->getImage ().id, fboSize, fboFlags, compositeFormat);
@@ -701,9 +701,7 @@ void CImage::setup () {
 		// create all the fbos for this effect
 		for (const auto& fbo : cur->effect->fbos) {
 		    fboProvider->create (
-			*fbo, this->m_texture->getFlags (),
-			this->getScene ().clampComposites () ? this->getScene ().clampToCap (this->getSize ())
-							     : this->getSize ()
+			*fbo, this->m_texture->getFlags (), this->getScene ().clampToEffectCap (this->getSize ())
 		    );
 		}
 

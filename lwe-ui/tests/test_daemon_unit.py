@@ -106,7 +106,8 @@ class DaemonUnitTest(unittest.TestCase):
         settings.save({"RENDER_RESOLUTION": "wallpaper"})
         regenerated = daemon_unit.build_env_content(outputs=["DP-1"], existing=content)
         self.assertIn("LWE_SSFACTOR=0", regenerated)
-        self.assertNotIn("LWE_CLAMPCOMPOSITES", regenerated)
+        self.assertEqual(regenerated.count("LWE_CLAMPCOMPOSITES"), 1)
+        self.assertIn("LWE_CLAMPCOMPOSITES=0", regenerated)
 
     def test_reconcile_env(self) -> None:
         """Startup drift repair: a stale env rewrites on panel start; a

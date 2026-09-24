@@ -254,10 +254,12 @@ Stop means release the outputs entirely.
 
 The shipped answer to VRAM cost is steady-state, not pause-time: composite FBOs are
 leased from a per-scene ping-pong pool instead of dedicated per layer (`LWE_FBOPOOL=0`
-disables), sized to on-screen coverage and clamped to output size x `LWE_SSFACTOR`
-(canvas/view split, `CScene.cpp::largestOutputSize`, which is the largest screen the wallpaper
-plays on, the largest monitor even for a bench window; `LWE_CLAMPCOMPOSITES=0` exempts the
-composites so effect chains keep their authored texel size), and mip residency can cap uploads to the
+disables), sized to on-screen coverage and clamped to output size x `LWE_CLAMPCOMPOSITES`, the
+effect factor, while the scene target clamps to output size x `LWE_SSFACTOR` (each factor a
+number at most 4, 0 or below off; canvas/view split, `CScene.cpp::largestOutputSize`, which is
+the largest screen the wallpaper plays on, the largest monitor even for a bench window;
+`LWE_CLAMPCOMPOSITES` at 0 or below leaves the composites uncapped, so effect chains keep their
+texel size), and mip residency can cap uploads to the
 largest live output dimension with per-frame demand expansion (on by default,
 `LWE_TEXDETAIL=full` opts out;
 `MipResidency.cpp`). Offline BC7/BC4/BC5 compression is ingested from a disk cache
@@ -324,7 +326,9 @@ is to be the daemon API's reference client and the system's owner:
 - It **generates and manages** `~/.config/systemd/user/lwe-engine.service` and the
   engine's env file (`engine/daemon_unit.py`), reconciling drift at every start. The
   restart-class engine settings live there, among them the resolution cap's three states
-  (`Clamp resolution` on Engine > Advanced: everything clamped, composites exempt, or off).
+  (`Clamp resolution` on Engine > Advanced), written as the engine's two numbers, each at most 4
+  with 0 or below off: everything clamped leaves both at 1, composites exempt sets the effect
+  factor to 0, and off sets both to 0.
   The engine reads the file only at service start, so each restart-class row on Engine >
   Advanced carries a restart verb while the running engine's own environment differs from the file on that
   row's keys; one tap restarts the service in place for every row that is pending.

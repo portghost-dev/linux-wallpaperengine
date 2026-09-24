@@ -374,7 +374,8 @@ def resolve_show_args(wid: str) -> tuple[str, dict[str, Any]]:
     # the engine's launch environment, which is where the global setting already lives
     res = str(conf.get("RENDER_RESOLUTION") or "").strip()
     if res in C.RENDER_RESOLUTIONS:
-        args["res"] = res
+        args["ssfactor"] = 0.0 if res == "wallpaper" else 1.0
+        args["clampcomposites"] = 1.0 if res == "screen" else 0.0
     texcomp = conf.get("TEXCOMP")
     if texcomp is not None and str(texcomp).strip() != "":
         args["texcomp"] = _conf_true(texcomp, True)

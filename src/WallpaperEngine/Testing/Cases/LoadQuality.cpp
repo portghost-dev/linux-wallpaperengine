@@ -15,26 +15,30 @@ struct EnvGuard {
 };
 } // namespace
 
-TEST_CASE ("a show's res resolves the clamp factor and the composite rule", "[quality]") {
+TEST_CASE ("a show's scene and effect factors win over the environment, read as numbers", "[quality]") {
     EnvGuard ss ("LWE_SSFACTOR");
     EnvGuard cc ("LWE_CLAMPCOMPOSITES");
-    CHECK (LoadQuality::ssfactor ("screen") == 1.0f);
-    CHECK (LoadQuality::ssfactor ("sharpfx") == 1.0f);
-    CHECK (LoadQuality::ssfactor ("wallpaper") == 0.0f);
-    CHECK (LoadQuality::clampComposites ("screen"));
-    CHECK_FALSE (LoadQuality::clampComposites ("sharpfx"));
-    CHECK (LoadQuality::clampComposites ("wallpaper"));
-    SECTION ("empty means the launch environment") {
-	CHECK (LoadQuality::ssfactor ("") == 1.0f);
-	CHECK (LoadQuality::clampComposites (""));
-	ss.set ("0");
-	cc.set ("0");
-	CHECK (LoadQuality::ssfactor ("") == 0.0f);
-	CHECK_FALSE (LoadQuality::clampComposites (""));
-	// the show's own value still wins over the environment
-	CHECK (LoadQuality::ssfactor ("screen") == 1.0f);
-	CHECK (LoadQuality::clampComposites ("screen"));
-    }
+    CHECK (LoadQuality::ssfactor (std::nullopt) == 1.0f);
+    CHECK (LoadQuality::clampComposites (std::nullopt) == 1.0f);
+
+    ss.set ("1.5");
+    cc.set ("0.5");
+    CHECK (LoadQuality::ssfactor (std::nullopt) == 1.5f);
+    CHECK (LoadQuality::clampComposites (std::nullopt) == 0.5f);
+    CHECK (LoadQuality::ssfactor (2.5f) == 2.5f);
+    CHECK (LoadQuality::clampComposites (3.0f) == 3.0f);
+
+    CHECK (LoadQuality::ssfactor (0.0f) == 0.0f);
+    CHECK (LoadQuality::clampComposites (-1.0f) == 0.0f);
+    ss.set ("-2");
+    cc.set ("0");
+    CHECK (LoadQuality::ssfactor (std::nullopt) == 0.0f);
+    CHECK (LoadQuality::clampComposites (std::nullopt) == 0.0f);
+
+    ss.set ("6");
+    cc.set ("4.5");
+    CHECK (LoadQuality::ssfactor (std::nullopt) == 4.0f);
+    CHECK (LoadQuality::clampComposites (std::nullopt) == 4.0f);
 }
 
 TEST_CASE ("the texture cache keys raw and full-chain requests apart, engine textures never", "[quality]") {

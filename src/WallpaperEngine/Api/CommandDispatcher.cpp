@@ -139,10 +139,16 @@ std::string validateShowArgs (const json& args) {
     }
 
     if (args.contains ("res")) {
-	static const std::set<std::string> RES = { "screen", "sharpfx", "wallpaper" };
+	return "args.res is no longer accepted; send ssfactor and clampcomposites";
+    }
 
-	if (!args["res"].is_string () || RES.find (args["res"].get<std::string> ()) == RES.end ()) {
-	    return "args.res must be one of screen/sharpfx/wallpaper";
+    for (const auto* key : { "ssfactor", "clampcomposites" }) {
+	if (args.contains (key)) {
+	    const auto& factor = args[key];
+
+	    if (!factor.is_number () || !std::isfinite (factor.get<double> ()) || factor.get<double> () > 4.0) {
+		return std::string ("args.") + key + " must be a number no greater than 4";
+	    }
 	}
     }
 

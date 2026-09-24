@@ -182,7 +182,7 @@ def test_clamp_rows_exclude_each_other(dev) -> None:
 
     dev.setToggle("A", "resclamp", False)
     env, unset = dev.compose_env("A")
-    assert env.get("LWE_SSFACTOR") == "0" and "LWE_CLAMPCOMPOSITES" in unset, "both off: nothing clamped"
+    assert env.get("LWE_SSFACTOR") == "0" and env.get("LWE_CLAMPCOMPOSITES") == "0", "both off: nothing clamped"
 
 
 def test_journal_lines_are_tagged(dev) -> None:

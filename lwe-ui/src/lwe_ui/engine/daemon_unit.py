@@ -269,12 +269,13 @@ def build_env_content(outputs: list[str] | None = None, existing: str | None = N
     detail = str(s.get("TEXTURE_DETAIL") or "auto").strip()
     lines.append(f"LWE_TEXDETAIL={detail if detail in C.TEXTURE_DETAILS else 'auto'}")
 
-    # the engine clamps everything by default; only the two sharper states write a line
+    # the engine clamps everything by default; sharpfx turns the effect clamp off and wallpaper turns both off
     res = str(s.get("RENDER_RESOLUTION") or "screen").strip()
     if res == "sharpfx":
         lines.append("LWE_CLAMPCOMPOSITES=0")
     elif res == "wallpaper":
         lines.append("LWE_SSFACTOR=0")
+        lines.append("LWE_CLAMPCOMPOSITES=0")
 
     for skey, env_name in C.AUDIO_DIAL_ENV.items():
         try:

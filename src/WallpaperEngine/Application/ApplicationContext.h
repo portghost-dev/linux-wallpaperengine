@@ -172,8 +172,8 @@ public:
 
 	    /** quality switches of the current show, read at scene load; empty = the launch environment */
 	    struct {
-		/** "" | screen | sharpfx | wallpaper */
-		std::string res;
+		std::optional<float> ssfactor;
+		std::optional<float> clampComposites;
 		/** "" | "1" | "0" */
 		std::string texcomp;
 		/** "" | auto | full */

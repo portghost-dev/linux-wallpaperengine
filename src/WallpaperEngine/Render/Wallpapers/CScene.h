@@ -44,13 +44,11 @@ public:
     [[nodiscard]] int getWidth () const override;
     [[nodiscard]] int getHeight () const override;
 
-    // LWE_SSFACTOR resolution clamp (S1): returns `size` scaled down (aspect-preserving) so it
-    // never exceeds the output-derived cap = output dims * the scene's factor (LWE_SSFACTOR,
-    // default 1.0, or the show's res). A factor of 0 disables the clamp (exact legacy
-    // behavior). Used for scene RTs and oversized layer/effect FBOs.
+    // LWE_SSFACTOR resolution clamp for the scene target and composition layers; the cap is the largest output times
+    // the scene factor (the show's ssfactor, else LWE_SSFACTOR, default 1). The size keeps its aspect and never grows:
+    // fit and stretch shrink it inside the cap, fill and default until one side meets it; 0 or below leaves it as is.
     [[nodiscard]] glm::vec2 clampToCap (glm::vec2 size) const override;
-    /** the show's composite rule: layer composites and effect targets clamp with the rest */
-    [[nodiscard]] bool clampComposites () const { return m_clampComposites; }
+    [[nodiscard]] glm::vec2 clampToEffectCap (glm::vec2 size) const;
 
     /**
      * Dimensions of the LARGEST SINGLE SCREEN the wallpaper plays on: the largest live output
@@ -148,6 +146,7 @@ private:
     void addObjectToRenderOrder (const Object& object);
     void collectSharedComposites (const Scene& scene);
     void reportPoolHighWater () const;
+    [[nodiscard]] glm::vec2 clampToFactor (glm::vec2 size, float factor) const;
 
     std::unique_ptr<Scripting::ScriptEngine> m_scriptEngine;
     std::unique_ptr<Camera> m_camera;
@@ -156,9 +155,10 @@ private:
     ObjectUniquePtr m_bloomObjectData;
     CObject* m_bloomObject = nullptr;
     bool m_hdrBloom = false;
-    /** the show's clamp factor: output size times this caps every render target; 0 = no clamp */
+    /** the show's scene factor: clampToCap never grows the scene target, shrinks it inside the largest output times
+     *  this under fit and stretch, and under fill and default until one side meets it; 0 or below leaves it as is */
     float m_ssfactor = 1.0f;
-    bool m_clampComposites = true;
+    float m_clampComposites = 1.0f;
     std::map<int, CObject*> m_objects = {};
     std::unordered_set<int> m_objectsBeingResolved = {};
     std::shared_ptr<const CFBO> m_compositionRenderTarget = nullptr;

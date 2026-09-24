@@ -636,7 +636,8 @@ nlohmann::json WallpaperEngine::Api::toJson (const Lane& lane) {
 		 { "automute", lane.look.automute },
 		 { "scaling", lane.look.scaling },
 		 { "clamp", lane.look.clamp },
-		 { "res", lane.look.res },
+		 { "ssfactor", lane.look.ssfactor },
+		 { "clampcomposites", lane.look.clampComposites },
 		 { "texcomp", lane.look.texcomp },
 		 { "texdetail", lane.look.texdetail },
 		 { "fit",
@@ -644,6 +645,29 @@ nlohmann::json WallpaperEngine::Api::toJson (const Lane& lane) {
 		     { "pan_x", lane.look.fit.panX },
 		     { "pan_y", lane.look.fit.panY } } } } } };
 }
+
+namespace {
+void migrateRes (nlohmann::json& args) {
+    if (!args.contains ("res") || !args["res"].is_string () || args.contains ("ssfactor")
+	|| args.contains ("clampcomposites")) {
+	return;
+    }
+
+    const auto res = args["res"].get<std::string> ();
+    args.erase ("res");
+
+    if (res == "wallpaper") {
+	args["ssfactor"] = 0.0;
+	args["clampcomposites"] = 0.0;
+    } else if (res == "screen") {
+	args["ssfactor"] = 1.0;
+	args["clampcomposites"] = 1.0;
+    } else if (res == "sharpfx") {
+	args["ssfactor"] = 1.0;
+	args["clampcomposites"] = 0.0;
+    }
+}
+} // namespace
 
 Entry WallpaperEngine::Api::entryFromJson (const nlohmann::json& j) {
     Entry entry;
@@ -663,6 +687,7 @@ Entry WallpaperEngine::Api::entryFromJson (const nlohmann::json& j) {
 	entry.args = j;
     }
 
+    migrateRes (entry.args);
     return entry;
 }
 
@@ -780,7 +805,8 @@ Lane WallpaperEngine::Api::laneFromJson (const nlohmann::json& j) {
     }
 
     if (j.contains ("look") && j["look"].is_object ()) {
-	const auto& look = j["look"];
+	auto look = j["look"];
+	migrateRes (look);
 	lane.look.properties = look.contains ("properties") && look["properties"].is_object ()
 	    ? look["properties"]
 	    : nlohmann::json::object ();
@@ -794,7 +820,12 @@ Lane WallpaperEngine::Api::laneFromJson (const nlohmann::json& j) {
 	lane.look.automute = look.value ("automute", true);
 	lane.look.scaling = look.value ("scaling", "");
 	lane.look.clamp = look.value ("clamp", "");
-	lane.look.res = look.value ("res", "");
+	lane.look.ssfactor = look.contains ("ssfactor") && look["ssfactor"].is_number ()
+	    ? std::optional<float> (look["ssfactor"].get<float> ())
+	    : std::nullopt;
+	lane.look.clampComposites = look.contains ("clampcomposites") && look["clampcomposites"].is_number ()
+	    ? std::optional<float> (look["clampcomposites"].get<float> ())
+	    : std::nullopt;
 	lane.look.texcomp = look.value ("texcomp", "");
 	lane.look.texdetail = look.value ("texdetail", "");
 	lane.look.fit = look.contains ("fit") ? fitFromJson (look["fit"]) : Fit {};
@@ -820,6 +851,7 @@ void WallpaperEngine::Api::fromLegacyState (const nlohmann::json& state, Lane& l
 		entry.id = args.value ("id", "");
 		entry.uiId = args.value ("ui_id", "");
 		entry.args = args;
+		migrateRes (entry.args);
 		playlist.entries.push_back (entry);
 	    }
 	}
@@ -834,6 +866,7 @@ void WallpaperEngine::Api::fromLegacyState (const nlohmann::json& state, Lane& l
 	lane.current.uiId = current.value ("ui_id", "");
 	lane.current.args
 	    = current.contains ("args") && current["args"].is_object () ? current["args"] : nlohmann::json::object ();
+	migrateRes (lane.current.args);
     }
 }
 

@@ -251,17 +251,25 @@ class EngineSyncTest(unittest.TestCase):
         launch environment, where the global setting already lives, so nothing is sent."""
         wp.save("111", {"SPEED": 1.0})
         _, args = models.resolve_show_args("111")
-        for key in ("res", "texcomp", "texdetail"):
+        for key in ("ssfactor", "clampcomposites", "texcomp", "texdetail"):
             self.assertNotIn(key, args)
+        self.assertNotIn("res", args)
         wp.save("111", {"RENDER_RESOLUTION": "sharpfx", "TEXCOMP": False, "TEXTURE_DETAIL": "full"})
         _, args = models.resolve_show_args("111")
-        self.assertEqual(args["res"], "sharpfx")
+        self.assertEqual((args["ssfactor"], args["clampcomposites"]), (1.0, 0.0))
+        self.assertNotIn("res", args)
         self.assertIs(args["texcomp"], False)
         self.assertEqual(args["texdetail"], "full")
+        for word, factors in (("screen", (1.0, 1.0)), ("wallpaper", (0.0, 0.0))):
+            wp.save("111", {"RENDER_RESOLUTION": word})
+            _, args = models.resolve_show_args("111")
+            self.assertEqual((args["ssfactor"], args["clampcomposites"]), factors, word)
+            self.assertNotIn("res", args, word)
         wp.save("111", {"RENDER_RESOLUTION": "", "TEXCOMP": "", "TEXTURE_DETAIL": ""})
         _, args = models.resolve_show_args("111")
-        for key in ("res", "texcomp", "texdetail"):
+        for key in ("ssfactor", "clampcomposites", "texcomp", "texdetail"):
             self.assertNotIn(key, args, f"{key}: an empty value is the inherit, not a state")
+        self.assertNotIn("res", args)
 
     def test_setting_the_mode_pushes_it_live_and_refreshes_rotation(self) -> None:
         self._seed_playlist(["111"])

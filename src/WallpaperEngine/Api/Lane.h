@@ -69,7 +69,8 @@ struct Look {
     std::string scaling;
     std::string clamp;
     /** the show's quality switches, empty = the launch environment (see settings.render.quality) */
-    std::string res;
+    std::optional<float> ssfactor;
+    std::optional<float> clampComposites;
     std::string texcomp;
     std::string texdetail;
     /** the wallpaper layer of the fit window, from the show's fit arg */

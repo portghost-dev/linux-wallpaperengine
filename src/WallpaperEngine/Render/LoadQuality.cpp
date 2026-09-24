@@ -1,30 +1,58 @@
 #include "LoadQuality.h"
 
+#include <cmath>
 #include <cstdlib>
 
+#include "WallpaperEngine/Logging/Log.h"
+
 namespace WallpaperEngine::Render::LoadQuality {
-float ssfactor (const std::string& res) {
-    if (res == "wallpaper") {
-	return 0.0f;
+float ssfactor (std::optional<float> perShow) {
+    static bool logged = false;
+    float f = 1.0f;
+
+    if (perShow.has_value ()) {
+	f = *perShow;
+    } else if (const char* e = getenv ("LWE_SSFACTOR"); e && *e) {
+	f = static_cast<float> (atof (e));
+
+	if (std::isnan (f)) {
+	    f = 1.0f;
+	} else if (f > 4.0f) {
+	    if (!logged) {
+		logged = true;
+		sLog.error ("LWE_SSFACTOR=", e, " is above 4; using 4");
+	    }
+
+	    f = 4.0f;
+	}
     }
-    if (res == "screen" || res == "sharpfx") {
-	return 1.0f;
-    }
-    const char* e = getenv ("LWE_SSFACTOR");
-    const float f = e && *e ? static_cast<float> (atof (e)) : 1.0f;
+
     // 0 and below is the escape hatch: no clamp at all
     return f <= 0.0f ? 0.0f : f;
 }
 
-bool clampComposites (const std::string& res) {
-    if (res == "sharpfx") {
-	return false;
+float clampComposites (std::optional<float> perShow) {
+    static bool logged = false;
+    float f = 1.0f;
+
+    if (perShow.has_value ()) {
+	f = *perShow;
+    } else if (const char* e = getenv ("LWE_CLAMPCOMPOSITES"); e && *e) {
+	f = static_cast<float> (atof (e));
+
+	if (std::isnan (f)) {
+	    f = 1.0f;
+	} else if (f > 4.0f) {
+	    if (!logged) {
+		logged = true;
+		sLog.error ("LWE_CLAMPCOMPOSITES=", e, " is above 4; using 4");
+	    }
+
+	    f = 4.0f;
+	}
     }
-    if (res == "screen" || res == "wallpaper") {
-	return true;
-    }
-    const char* e = getenv ("LWE_CLAMPCOMPOSITES");
-    return e == nullptr || std::string (e) != "0";
+
+    return f <= 0.0f ? 0.0f : f;
 }
 
 bool texcomp (const std::string& value) {

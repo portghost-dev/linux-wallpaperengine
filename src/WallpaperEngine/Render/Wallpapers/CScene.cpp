@@ -42,8 +42,8 @@ CScene::CScene (
 
     // read once per scene; the detail switch gates every texture this scene resolves
     const auto& quality = context.getApp ().getContext ().settings.render.quality;
-    this->m_ssfactor = LoadQuality::ssfactor (quality.res);
-    this->m_clampComposites = LoadQuality::clampComposites (quality.res);
+    this->m_ssfactor = LoadQuality::ssfactor (quality.ssfactor);
+    this->m_clampComposites = LoadQuality::clampComposites (quality.clampComposites);
     MipResidency::setEnabled (LoadQuality::texdetailAuto (quality.texdetail));
 
     // mip residency: decide per-texture cappability from the data model BEFORE any
@@ -1484,14 +1484,19 @@ glm::ivec2 CScene::largestOutputSize () const {
     return { outW, outH };
 }
 
-glm::vec2 CScene::clampToCap (glm::vec2 size) const {
-    const float ssf = this->m_ssfactor;
-    if (ssf <= 0.0f || size.x <= 0.0f || size.y <= 0.0f) {
+glm::vec2 CScene::clampToCap (glm::vec2 size) const { return this->clampToFactor (size, this->m_ssfactor); }
+
+glm::vec2 CScene::clampToEffectCap (glm::vec2 size) const {
+    return this->clampToFactor (size, this->m_clampComposites);
+}
+
+glm::vec2 CScene::clampToFactor (glm::vec2 size, float factor) const {
+    if (factor <= 0.0f || size.x <= 0.0f || size.y <= 0.0f) {
 	return size; // disabled (escape hatch) or degenerate -> legacy behavior
     }
     const glm::ivec2 out = this->largestOutputSize ();
-    const float capW = static_cast<float> (out.x) * ssf;
-    const float capH = static_cast<float> (out.y) * ssf;
+    const float capW = static_cast<float> (out.x) * factor;
+    const float capH = static_cast<float> (out.y) * factor;
     if (capW <= 0.0f || capH <= 0.0f) {
 	return size;
     }

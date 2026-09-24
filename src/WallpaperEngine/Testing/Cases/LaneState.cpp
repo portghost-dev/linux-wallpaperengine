@@ -367,7 +367,8 @@ TEST_CASE ("lane and playlist round-trip through json", "[lane]") {
     recordShow (lane, playlist.entries[2], true);
     lane.fit.zoom = 1.5f;
     lane.look.timescale = 2.0f;
-    lane.look.res = "sharpfx";
+    lane.look.ssfactor = 1.5f;
+    lane.look.clampComposites = 0.0f;
     lane.look.texcomp = "0";
     lane.look.texdetail = "full";
 
@@ -382,7 +383,8 @@ TEST_CASE ("lane and playlist round-trip through json", "[lane]") {
     REQUIRE (laneBack.history.back ().id == lane.history.back ().id);
     REQUIRE (laneBack.fit.zoom == 1.5f);
     REQUIRE (laneBack.look.timescale == 2.0f);
-    REQUIRE (laneBack.look.res == "sharpfx");
+    REQUIRE (laneBack.look.ssfactor == 1.5f);
+    REQUIRE (laneBack.look.clampComposites == 0.0f);
     REQUIRE (laneBack.look.texcomp == "0");
     REQUIRE (laneBack.look.texdetail == "full");
     REQUIRE (playlistBack.entries.size () == 5);
@@ -391,6 +393,62 @@ TEST_CASE ("lane and playlist round-trip through json", "[lane]") {
     auto broken = toJson (lane);
     broken["cursor"] = 99;
     REQUIRE (laneFromJson (broken).cursor == -1);
+}
+
+TEST_CASE ("a look's two clamp numbers round-trip as null and an old res word loads as the numbers", "[lane]") {
+    const Lane lane;
+    const auto saved = toJson (lane);
+    CHECK (saved.at ("look").at ("ssfactor").is_null ());
+    CHECK (saved.at ("look").at ("clampcomposites").is_null ());
+    const auto back = laneFromJson (saved);
+    CHECK_FALSE (back.look.ssfactor.has_value ());
+    CHECK_FALSE (back.look.clampComposites.has_value ());
+
+    const auto loadWord = [&lane] (const std::string& word) {
+	auto old = toJson (lane);
+	old["look"].erase ("ssfactor");
+	old["look"].erase ("clampcomposites");
+	old["look"]["res"] = word;
+	return laneFromJson (old).look;
+    };
+    CHECK (loadWord ("wallpaper").ssfactor == 0.0f);
+    CHECK (loadWord ("wallpaper").clampComposites == 0.0f);
+    CHECK (loadWord ("screen").ssfactor == 1.0f);
+    CHECK (loadWord ("screen").clampComposites == 1.0f);
+    CHECK (loadWord ("sharpfx").ssfactor == 1.0f);
+    CHECK (loadWord ("sharpfx").clampComposites == 0.0f);
+}
+
+TEST_CASE ("a persisted res word in show args loads as the two clamp numbers", "[lane]") {
+    const auto parse = [] (const char* text) { return nlohmann::json::parse (text); };
+
+    CHECK (
+	entryFromJson (parse (R"({"id":"1","args":{"id":"1","res":"sharpfx","speed":2}})")).args
+	== parse (R"({"id":"1","speed":2,"ssfactor":1.0,"clampcomposites":0.0})")
+    );
+    CHECK (
+	entryFromJson (parse (R"({"id":"2","res":"wallpaper"})")).args
+	== parse (R"({"id":"2","ssfactor":0.0,"clampcomposites":0.0})")
+    );
+
+    Lane lane;
+    Playlist playlist;
+    fromLegacyState (
+	parse (
+	    R"({"version":1,"current":{"id":"3","args":{"id":"3","res":"screen"}},)"
+	    R"("rotation":{"entries":[{"id":"4","res":"sharpfx"}]}})"
+	),
+	lane, playlist
+    );
+    REQUIRE (playlist.entries.size () == 1);
+    CHECK (playlist.entries[0].args == parse (R"({"id":"4","ssfactor":1.0,"clampcomposites":0.0})"));
+    CHECK (lane.current.args == parse (R"({"id":"3","ssfactor":1.0,"clampcomposites":1.0})"));
+
+    CHECK (
+	entryFromJson (parse (R"({"id":"5","args":{"res":"wallpaper","ssfactor":2}})")).args
+	== parse (R"({"res":"wallpaper","ssfactor":2})")
+    );
+    CHECK (entryFromJson (parse (R"({"id":"6","args":{"id":"6","res":"half"}})")).args == parse (R"({"id":"6"})"));
 }
 
 TEST_CASE ("the status block names what is on screen and what comes next", "[lane]") {

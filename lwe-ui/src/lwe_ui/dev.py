@@ -1180,6 +1180,8 @@ class DevBridge(QObject):
             # the clamp stays on for the scene target; only the composites are exempt
             env.pop("LWE_SSFACTOR", None)
             unset.append("LWE_SSFACTOR")
+        elif not self.toggleOn(side, "resclamp"):
+            env["LWE_CLAMPCOMPOSITES"] = "0"
         if s.trail == "Exact":
             env[TRAIL_ENV] = "exact"
         else:

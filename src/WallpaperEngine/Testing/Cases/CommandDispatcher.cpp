@@ -62,16 +62,46 @@ TEST_CASE ("malformed requests are rejected with a parseable error", "[dispatche
 
 TEST_CASE ("show quality args are validated like scaling and clamp", "[dispatcher]") {
     const auto ok = CommandDispatcher::parse (
-	R"({"id":1,"cmd":"show","args":{"id":"1","res":"sharpfx","texcomp":false,"texdetail":"full"}})"
+	R"({"id":1,"cmd":"show","args":{"id":"1","ssfactor":1.5,"clampcomposites":0,"texcomp":false,"texdetail":"full"}})"
     );
     REQUIRE (ok.command.has_value ());
-    CHECK (ok.command->args["res"] == "sharpfx");
+    CHECK (ok.command->args["ssfactor"] == 1.5);
+    CHECK (ok.command->args["clampcomposites"] == 0);
     CHECK (ok.command->args["texcomp"] == false);
     CHECK (ok.command->args["texdetail"] == "full");
 
+    for (const std::string key : { "ssfactor", "clampcomposites" }) {
+	for (const json value : { json (0), json (1.5), json (4), json (-1) }) {
+	    const json request = { { "id", 1 }, { "cmd", "show" }, { "args", { { "id", "1" }, { key, value } } } };
+	    INFO (request.dump ());
+	    CHECK (CommandDispatcher::parse (request.dump ()).command.has_value ());
+	}
+
+	for (const json value : { json (4.5), json ("1") }) {
+	    const json request = { { "id", 1 }, { "cmd", "show" }, { "args", { { "id", "1" }, { key, value } } } };
+	    const auto outcome = CommandDispatcher::parse (request.dump ());
+	    INFO (request.dump ());
+	    REQUIRE_FALSE (outcome.command.has_value ());
+	    const auto error = json::parse (outcome.errorResponse)["error"].get<std::string> ();
+	    CHECK (error == "args." + key + " must be a number no greater than 4");
+	}
+
+	// an overflowing literal is the only non-finite number JSON text can carry; the parser refuses it
+	const std::string overflow = R"({"id":1,"cmd":"show","args":{"id":"1",")" + key + R"(":-1e999}})";
+	CHECK_FALSE (CommandDispatcher::parse (overflow).command.has_value ());
+    }
+
+    const std::string resRefused = "args.res is no longer accepted; send ssfactor and clampcomposites";
+    const auto showWithRes = CommandDispatcher::parse (R"({"id":1,"cmd":"show","args":{"id":"1","res":"sharpfx"}})");
+    CHECK_FALSE (showWithRes.command.has_value ());
+    CHECK (showWithRes.errorResponse == CommandDispatcher::failure (1, resRefused));
+    const auto entryWithRes = CommandDispatcher::parse (
+	R"({"id":1,"cmd":"playlist-set","args":{"slug":"default","entries":[{"id":"1","res":"sharpfx"}]}})"
+    );
+    CHECK_FALSE (entryWithRes.command.has_value ());
+    CHECK (entryWithRes.errorResponse == CommandDispatcher::failure (1, "entry 1: " + resRefused));
+
     const std::string bad[] = {
-	R"({"id":1,"cmd":"show","args":{"id":"1","res":"half"}})",
-	R"({"id":1,"cmd":"show","args":{"id":"1","res":1}})",
 	R"({"id":1,"cmd":"show","args":{"id":"1","texcomp":"yes"}})",
 	R"({"id":1,"cmd":"show","args":{"id":"1","texdetail":"medium"}})",
     };

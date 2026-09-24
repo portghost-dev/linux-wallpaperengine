@@ -1997,7 +1997,8 @@ nlohmann::json WallpaperApplication::apiStatus () const {
     result["instruments"] = Logging::instrumentsEnabled ();
     result["fullscreen_pause"] = this->m_context.settings.render.fullscreenBehavior != FullscreenBehavior::Off;
     // the quality switches this show set; empty = the launch environment's value
-    result["quality"] = { { "res", this->m_context.settings.render.quality.res },
+    result["quality"] = { { "ssfactor", this->m_context.settings.render.quality.ssfactor },
+			  { "clampcomposites", this->m_context.settings.render.quality.clampComposites },
 			  { "texcomp", this->m_context.settings.render.quality.texcomp },
 			  { "texdetail", this->m_context.settings.render.quality.texdetail } };
 
@@ -2312,7 +2313,16 @@ bool WallpaperApplication::applyShowCore (
 
     // read at scene load, so set before the rebuild; rolled back with the show
     auto& quality = this->m_context.settings.render.quality;
-    quality.res = args.value ("res", "");
+    const auto factorArg = [&args] (const char* key) -> std::optional<float> {
+	if (!args.contains (key)) {
+	    return std::nullopt;
+	}
+
+	const double value = args[key].get<double> ();
+	return value <= 0.0 ? 0.0f : value > 4.0 ? 4.0f : static_cast<float> (value);
+    };
+    quality.ssfactor = factorArg ("ssfactor");
+    quality.clampComposites = factorArg ("clampcomposites");
     quality.texcomp = args.contains ("texcomp") ? (args["texcomp"].get<bool> () ? "1" : "0") : "";
     quality.texdetail = args.value ("texdetail", "");
 
@@ -2885,7 +2895,8 @@ void WallpaperApplication::captureLook (Api::Lane& lane, const nlohmann::json& a
     look.automute = this->m_context.settings.audio.automute;
     look.scaling = args.value ("scaling", "");
     look.clamp = args.value ("clamp", "");
-    look.res = this->m_context.settings.render.quality.res;
+    look.ssfactor = this->m_context.settings.render.quality.ssfactor;
+    look.clampComposites = this->m_context.settings.render.quality.clampComposites;
     look.texcomp = this->m_context.settings.render.quality.texcomp;
     look.texdetail = this->m_context.settings.render.quality.texdetail;
 }
