@@ -1862,6 +1862,7 @@ nlohmann::json WallpaperApplication::apiStatus () const {
 
     nlohmann::json result = nlohmann::json::object ();
     result["api"] = 1;
+    result["version"] = LWE_VERSION;
     result["pid"] = getpid ();
     result["uptime_s"] = uptime.count ();
     result["screens"] = screens;

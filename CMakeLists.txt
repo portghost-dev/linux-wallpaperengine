@@ -22,6 +22,16 @@ if(NOT ERRORONLY)
     set(ERRORONLY 0)
 endif()
 
+if(NOT EXISTS "${CMAKE_SOURCE_DIR}/VERSION")
+    message(FATAL_ERROR "VERSION not found at ${CMAKE_SOURCE_DIR}/VERSION: its first line must be the version stamp")
+endif()
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/VERSION")
+file(STRINGS "${CMAKE_SOURCE_DIR}/VERSION" LWE_VERSION LIMIT_COUNT 1)
+string(STRIP "${LWE_VERSION}" LWE_VERSION)
+if("${LWE_VERSION}" STREQUAL "")
+    message(FATAL_ERROR "The first line of ${CMAKE_SOURCE_DIR}/VERSION is empty: it must be the version stamp")
+endif()
+
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing")
 
 find_package(X11)
@@ -620,6 +630,7 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/ClampOutput.cpp
         src/WallpaperEngine/Testing/Cases/LoadQuality.cpp
         src/WallpaperEngine/Testing/Cases/Config.cpp
+        src/WallpaperEngine/Testing/Cases/Version.cpp
         src/WallpaperEngine/Testing/Cases/StatePaths.cpp
         src/WallpaperEngine/Testing/Cases/MirrorOwner.cpp
         src/WallpaperEngine/Testing/Cases/FitWindow.cpp
@@ -682,11 +693,14 @@ endif()
 
 target_compile_definitions(linux-wallpaperengine-lib PUBLIC ERRORONLY=${ERRORONLY})
 target_compile_definitions(linux-wallpaperengine-lib PUBLIC DEMOMODE=${DEMOMODE})
+target_compile_definitions(linux-wallpaperengine-lib PUBLIC LWE_VERSION="${LWE_VERSION}")
 
 if (BUILD_TESTING)
     # tests should give as much output as possible
     target_compile_definitions(tests PRIVATE ERRORONLY=0)
     target_compile_definitions(tests PRIVATE DEMOMODE=0)
+    target_compile_definitions(tests PRIVATE LWE_VERSION="${LWE_VERSION}")
+    target_compile_definitions(tests PRIVATE LWE_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endif()
 
 if(X11_SUPPORT_FOUND)

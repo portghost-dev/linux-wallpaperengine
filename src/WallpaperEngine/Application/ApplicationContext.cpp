@@ -249,7 +249,15 @@ ApplicationContext::ApplicationContext (int argc, char* argv[]) : m_argc (argc),
 void ApplicationContext::loadSettingsFromArgv () {
     std::string lastScreen;
 
-    argparse::ArgumentParser program ("linux-wallpaperengine", "0.0", argparse::default_arguments::help);
+    argparse::ArgumentParser program ("linux-wallpaperengine", LWE_VERSION, argparse::default_arguments::help);
+
+    program.add_argument ("--version")
+	.help ("Prints the version and exits")
+	.flag ()
+	.action ([] (const std::string& value) -> void {
+	    std::cout << LWE_VERSION << std::endl;
+	    std::exit (0);
+	});
 
     auto& backgroundGroup = program.add_group ("Background options");
     auto& backgroundMode = backgroundGroup.add_mutually_exclusive_group (false);

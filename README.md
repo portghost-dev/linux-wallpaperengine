@@ -238,6 +238,9 @@ running, and comes back on the wallpaper that was actually up. The full verb lis
 argument and bound is in [`docs/FORK-MAP.md`](docs/FORK-MAP.md) chapters 1 and
 8; the wire schema is documented in `src/WallpaperEngine/Api/CommandDispatcher.h`.
 
+`linux-wallpaperengine --version` prints the engine's version stamp alone on one line and exits, and the
+`status` reply carries the same stamp in its `version` field.
+
 ## Troubleshooting
 
 - On a machine with no usable GPU, CEF falls back to software rendering through
