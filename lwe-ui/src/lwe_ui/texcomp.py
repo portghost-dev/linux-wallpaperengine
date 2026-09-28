@@ -50,6 +50,8 @@ FMTNAME = {0: "ARGB8888", 9: "R8", 8: "RG88", 1: "RGB888", 2: "RGB565",
            4: "DXT5", 6: "DXT3", 7: "DXT1", 12: "BC7"}
 #: compressed bytes/texel by shim fmt: BC7 1.0, BC4 0.5, BC5 1.0
 _BC_BPT = {7: 1.0, 4: 0.5, 5: 1.0}
+#: bytes/texel the engine uploads for an uncached texture, by source format
+_UPLOAD_BPT = {0: 4, 9: 1, 8: 2}
 EXEMPT_RE = re.compile(r"lut|ramp|gradientmap|noise|displace|distort|flow|mask", re.I)
 UNKNOWN = 0xFFFFFFFF
 
@@ -374,19 +376,28 @@ def _encode_surface(w: int, h: int, rgba: bytes, shimfmt: int,
 def encode_scene(d: str, wid: str,
                  progress: Callable[[int, int], None] | None = None,
                  cancelled: Callable[[], bool] | None = None,
-                 workers: int | None = None) -> dict[str, int]:
+                 workers: int | None = None,
+                 measure: dict[str, int] | None = None) -> dict[str, int]:
     """Encode every eligible-and-uncached texture of one wallpaper into the cache.
 
     progress(done, total) fires per finished texture; cancelled() is polled between
     textures (a started texture always completes - a torn cache entry must never
     exist, and atomic rename guarantees it doesn't).
+
+    A measure dict receives "eligible" (eligible textures, cached or not) and, over the
+    textures encoded in this run, "bytes_before" (their stored levels at the engine's
+    upload size), "bytes_after" (the block bytes written) and "disk_bytes" (the .bc and
+    .meta files written). A failed texture adds to none of them.
     """
     jobs = []
+    eligible = 0
     for k, _base, fmt, fif, tw, th, images in _iter_eligible(d):
+        eligible += 1
         if not _cached(_key_of(images)):
             jobs.append((k, fmt, fif, tw, th, images))
     total = len(jobs)
     done = encoded = failed = 0
+    before = after = disk = 0
     if progress:
         progress(0, total)
     os.makedirs(CACHE, exist_ok=True)
@@ -425,11 +436,17 @@ def encode_scene(d: str, wid: str,
                                "gl": glname, "fmt_src": FMTNAME.get(fmt, fmt),
                                "tw": tw, "th": th, "mips": meta_mips}, f)
                 os.replace(meta_tmp, mp)
+                written = os.path.getsize(bcp) + os.path.getsize(mp)
                 encoded += 1
+                before += sum(mw * mh for (mw, mh, _raw) in images[0]) * _UPLOAD_BPT[fmt]
+                after += sum(len(blk) for blk in blocks)
+                disk += written
             except Exception:
                 failed += 1
             finally:
                 done += 1
                 if progress:
                     progress(done, total)
+    if measure is not None:
+        measure.update(eligible=eligible, bytes_before=before, bytes_after=after, disk_bytes=disk)
     return {"encoded": encoded, "failed": failed, "total": total}

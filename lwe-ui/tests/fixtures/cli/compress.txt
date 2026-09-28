@@ -1,0 +1,9 @@
+$ lwe compress --all
+Aurora Lake (1275921440)     textures 412 MB before, 96 MB after
+Deep Space (1505438974)      textures 1.20 GB before, 288 MB after; 2 textures failed
+Rain City (2105138680)       already compressed
+Neon Drive (2270289901)      video, nothing to compress
+Compressed 2 of 4 wallpapers. Textures 1.61 GB before, 384 MB after. The cache adds 371 MB on disk.
+
+$ lwe compress 2
+Deep Space (1505438974)      textures 1.20 GB before, 288 MB after

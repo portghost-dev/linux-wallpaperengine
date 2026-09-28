@@ -1,10 +1,10 @@
-"""lwe list, workshop and scan: the library catalog printed. They only read; nothing is locked,
-written or sent to the engine."""
+"""lwe list, workshop and scan print the library catalog and only read; lwe compress builds the
+engine's texture cache. None of them locks a store or sends anything to the engine."""
 from __future__ import annotations
 
 import json
 
-from .. import DONE, USAGE, Context
+from .. import DONE, REFUSED, USAGE, Context
 from ..registry import Verb
 
 _TYPES = ("scene", "video", "web")
@@ -78,9 +78,61 @@ def _scan(ctx: Context, args: list[str]) -> int:
     return DONE
 
 
+def _compress(ctx: Context, args: list[str]) -> int:
+    options = [a for a in args if a.startswith("-")]
+    words = [a for a in args if not a.startswith("-")]
+    if options not in ([], ["--all"]) or bool(words) == bool(options):
+        return _refuse(ctx, "compress takes wallpapers or --all")
+    from ... import texcomp
+    from ...library import catalog, compress
+    from .. import select
+
+    rows = catalog.wallpaper_rows()[0]
+    if options:
+        named = [r for r in rows if r.state in ("pool", "missing")]
+    else:
+        try:
+            picks = select.wallpapers(words)
+        except select.PickError as exc:
+            return select.report(ctx, exc)
+        for p in picks:
+            if p.source == "trashed":
+                message = f"{p.title} ({p.ui_id}) is in the trash; untrash it first"
+                ctx.error(message, "lwe: " + message)
+                return REFUSED
+        by_id = {r.id: r for r in rows}
+        named = [by_id.get(p.ui_id) or catalog.Row(0, p.ui_id, p.title, p.alias, "", p.source, False)
+                 for p in picks]
+    if not texcomp.shim_available():
+        message = f"the texture encoder {texcomp.shim_path()} is missing; nothing was compressed"
+        ctx.error(message, "lwe: " + message)
+        return REFUSED
+    results = []
+    for row in named:
+        result = compress.compress_one(row)
+        results.append(result)
+        if not ctx.json:
+            print(compress.result_line(row, result), file=ctx.out, flush=True)
+    if ctx.json:
+        print(json.dumps({
+            "wallpapers": [{"id": row.id, "title": row.title, "result": r.kind, "bytes_before": r.before,
+                            "bytes_after": r.after, "failed": r.failed, "disk_bytes": r.disk}
+                           for row, r in zip(named, results)],
+            "total": {"compressed": sum(1 for r in results if compress.written(r)), "named": len(results),
+                      "bytes_before": sum(r.before for r in results),
+                      "bytes_after": sum(r.after for r in results),
+                      "disk_bytes": sum(r.disk for r in results)},
+        }, ensure_ascii=False, separators=(",", ":")), file=ctx.out)
+    elif len(results) > 1:
+        print(compress.total_line(results), file=ctx.out)
+    return DONE
+
+
 VERBS = (
     Verb("list", _list, "Your library, numbered by title, with each wallpaper's id and alias.", "library"),
     Verb("workshop", _workshop, "Workshop downloads that are not in your pool yet, numbered, including ones "
          "waiting for review.", "library"),
     Verb("scan", _scan, "Looks for new Workshop downloads now.", "library"),
+    Verb("compress", _compress, "Builds the compressed textures that make wallpapers load faster and use "
+         "less video memory.", "library"),
 )
