@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -176,6 +177,18 @@ bool sameSchedule (const Schedule& a, const Schedule& b);
 bool laneSet (
     Lane& lane, std::map<std::string, Playlist>& playlists, Schedule& schedule, const std::string& slug, bool enabled,
     bool manual, Clock::time_point now
+);
+
+bool showNow (
+    Lane& lane, const Playlist& playlist, const std::function<bool (const Entry&)>& showEntry,
+    const std::function<bool ()>& advance, const std::function<Clock::time_point ()>& clock
+);
+
+enum class PendingSwitch { Nothing, Shown, Failed };
+
+PendingSwitch landPending (
+    Lane& lane, std::map<std::string, Playlist>& playlists, Schedule& schedule, const std::function<bool ()>& show,
+    Clock::time_point now
 );
 
 nlohmann::json toJson (const Schedule& schedule);

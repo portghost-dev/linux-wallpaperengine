@@ -21,6 +21,7 @@ public:
 	const std::string& cmd, const nlohmann::json& args, bool ok, Api::Lane& lane, const Api::Playlist& playlist,
 	Api::Schedule& schedule, Api::Clock::time_point now
     );
+    [[nodiscard]] static bool showsAfterRelease (bool released, const std::string& cmd, bool live, bool screenEmpty);
 
 private:
     bool holds ();

@@ -70,6 +70,12 @@ bool BootGuard::release (
     return true;
 }
 
+bool BootGuard::showsAfterRelease (
+    const bool released, const std::string& cmd, const bool live, const bool screenEmpty
+) {
+    return released && cmd == "lanes-set" && live && screenEmpty;
+}
+
 bool BootGuard::holds () {
     if (this->m_restoreRefused && !this->m_holdLogged) {
 	this->m_holdLogged = true;

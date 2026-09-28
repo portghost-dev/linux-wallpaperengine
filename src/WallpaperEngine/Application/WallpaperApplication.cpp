@@ -1516,11 +1516,18 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 	}
 
 	// a boundary crossed since the last advance: the step lands on the new playlist
-	if (this->applyPendingSchedule ()) {
-	    this->releaseHold (command.cmd, command.args, true);
-	    this->m_commandServer->respond (
-		client, Api::CommandDispatcher::done (command.id, { { "id", this->lane ().current.id } })
-	    );
+	if (const auto landed = this->applyPendingSchedule (error); landed != Api::PendingSwitch::Nothing) {
+	    const bool shown = landed == Api::PendingSwitch::Shown;
+	    this->releaseHold (command.cmd, command.args, shown);
+
+	    if (shown) {
+		this->m_commandServer->respond (
+		    client, Api::CommandDispatcher::done (command.id, { { "id", this->lane ().current.id } })
+		);
+	    } else {
+		this->m_commandServer->respond (client, Api::CommandDispatcher::failure (command.id, error));
+	    }
+
 	    return;
 	}
 
@@ -2685,7 +2692,7 @@ void WallpaperApplication::apiLanesSet (int client, int64_t requestId, const nlo
     }
 
     this->applyFitWindow ();
-    this->releaseHold ("lanes-set", args, true);
+    const bool released = this->releaseHold ("lanes-set", args, true);
 
     nlohmann::json lanes = nlohmann::json::array ();
 
@@ -2694,6 +2701,16 @@ void WallpaperApplication::apiLanesSet (int client, int64_t requestId, const nlo
     }
 
     this->m_commandServer->respond (client, Api::CommandDispatcher::done (requestId, { { "lanes", lanes } }));
+
+    if (BootGuard::showsAfterRelease (
+	    released, "lanes-set", this->m_releaseReason == ReleaseReason::Live, this->m_backgrounds.empty ()
+	)) {
+	std::string error;
+
+	if (!this->showLaneEntry (error)) {
+	    sLog.error ("API: the lane could not show its next entry after the release: ", error);
+	}
+    }
 }
 
 void WallpaperApplication::bindLane (
@@ -2725,63 +2742,65 @@ void WallpaperApplication::tickSchedule () {
 	    this->m_releaseReason == ReleaseReason::Live, this->m_schedule, this->m_scheduleMissing,
 	    this->playlistOf (this->lane ())
 	)) {
-	this->applyPendingSchedule ();
+	std::string error;
+	this->applyPendingSchedule (error);
     }
 }
 
-bool WallpaperApplication::applyPendingSchedule () {
+WallpaperEngine::Api::PendingSwitch WallpaperApplication::applyPendingSchedule (std::string& error) {
     const auto slug = this->m_schedule.pending;
 
-    if (slug.empty ()) {
-	return false;
-    }
-
-    if (this->m_playlists.find (slug) == this->m_playlists.end ()) {
+    if (!slug.empty () && this->m_playlists.find (slug) == this->m_playlists.end ()) {
 	if (this->m_scheduleMissing != slug) {
 	    this->m_scheduleMissing = slug;
 	    sLog.error ("API: schedule names playlist ", slug, " which the engine was never sent; staying put");
 	}
 
-	return false;
+	return Api::PendingSwitch::Nothing;
     }
 
-    this->m_schedule.pending.clear ();
+    const auto landed = Api::landPending (
+	this->lane (), this->m_playlists, this->m_schedule, [this, &error] () { return this->showLaneEntry (error); },
+	std::chrono::steady_clock::now ()
+    );
+
+    if (landed == Api::PendingSwitch::Nothing) {
+	return landed;
+    }
+
     this->m_scheduleMissing.clear ();
 
-    auto& lane = this->lane ();
-    this->bindLane (lane, slug, lane.enabled, std::chrono::steady_clock::now ());
-    Api::jumpToEnd (lane);
-    std::string error;
-    const auto& playlist = this->playlistOf (lane);
-
-    // a static playlist shows its first scene: the user orders the playlist to choose it
-    if (playlist.order == "static" && !playlist.entries.empty ()) {
-	const auto entry = playlist.entries.front ();
-	const auto path = resolveLibraryBackground (entry.id);
-
-	if (!path.has_value () || !this->preflightWallpaper (path->string ())) {
-	    error = "first entry no longer resolves: " + entry.id;
-	} else if (!this->makeAnyViewportCurrent ()) {
-	    error = "no active viewport to switch on";
-	} else if (this->applyShowCore (*path, entry.args, true, error)) {
-	    Api::seatCursor (lane, Api::displayId (entry));
-	    Api::restartCountdown (lane, playlist, std::chrono::steady_clock::now ());
-	    error.clear ();
-	}
-    } else if (!this->apiRotationAdvance (error)) {
-	// error carries the reason
-    } else {
-	error.clear ();
-    }
-
-    if (error.empty ()) {
+    if (landed == Api::PendingSwitch::Shown) {
 	sLog.out ("API: schedule switched the lane to ", slug);
     } else {
 	sLog.error ("API: schedule switch to ", slug, " bound but could not show: ", error);
     }
 
     this->persistRuntimeState ();
-    return true;
+    return landed;
+}
+
+bool WallpaperApplication::showLaneEntry (std::string& error) {
+    return Api::showNow (
+	this->lane (), this->playlistOf (this->lane ()),
+	[this, &error] (const Api::Entry& entry) {
+	    const auto path = resolveLibraryBackground (entry.id);
+
+	    if (!path.has_value () || !this->preflightWallpaper (path->string ())) {
+		error = "first entry no longer resolves: " + entry.id;
+		return false;
+	    }
+
+	    if (!this->makeAnyViewportCurrent ()) {
+		error = "no active viewport to switch on";
+		return false;
+	    }
+
+	    return this->applyShowCore (*path, entry.args, true, error);
+	},
+	[this, &error] () { return this->apiRotationAdvance (error); },
+	[] () { return std::chrono::steady_clock::now (); }
+    );
 }
 
 void WallpaperApplication::apiScheduleSet (int client, int64_t requestId, const nlohmann::json& args) {
@@ -3416,19 +3435,21 @@ void WallpaperApplication::markBootSurvived (bool cleanStop) {
     }
 }
 
-void WallpaperApplication::releaseHold (const std::string& cmd, const nlohmann::json& args, const bool ok) {
+bool WallpaperApplication::releaseHold (const std::string& cmd, const nlohmann::json& args, const bool ok) {
     const auto now = std::chrono::steady_clock::now ();
 
     if (!this->m_bootGuard.release (
 	    cmd, args, ok, this->lane (), this->playlistOf (this->lane ()), this->m_schedule, now
 	)) {
-	return;
+	return false;
     }
 
     for (auto& [_, playlist] : this->m_activePlaylists) {
 	const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
 	playlist.nextSwitch = now + std::chrono::minutes (delayMinutes);
     }
+
+    return true;
 }
 
 size_t WallpaperApplication::apiRotationPick () {
@@ -3812,7 +3833,9 @@ void WallpaperApplication::tickApiRotation () {
 	return;
     }
 
-    if (this->applyPendingSchedule ()) {
+    std::string error;
+
+    if (this->applyPendingSchedule (error) != Api::PendingSwitch::Nothing) {
 	return;
     }
 
@@ -3820,7 +3843,6 @@ void WallpaperApplication::tickApiRotation () {
     // and keeps its books when the advance fails so status never runs ahead of the screen
     const Api::Lane saved = lane;
     Api::jumpToEnd (lane);
-    std::string error;
 
     if (!this->apiRotationAdvance (error)) {
 	lane = saved;

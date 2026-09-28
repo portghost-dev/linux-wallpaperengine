@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <chrono>
+#include <functional>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <sstream>
@@ -157,6 +158,18 @@ TEST_CASE ("a held boot advances neither the lane timer nor the legacy playlist 
 	CHECK (guard.restoreRefused ());
     }
 
+    SECTION ("the lane timer's own stop") {
+	auto guard = held ();
+	auto* out = new std::ostringstream ();
+	sLog.addOutput (out);
+
+	CHECK_FALSE (guard.rotationMayAdvance (true, rotation.lane, rotation.playlist, now));
+	const std::string lines = out->str ();
+	out->setstate (std::ios::badbit);
+
+	CHECK (occurrences (lines, HOLDING) == 1);
+    }
+
     SECTION ("unheld control") {
 	BootGuard guard;
 	auto* out = new std::ostringstream ();
@@ -190,11 +203,19 @@ TEST_CASE ("a held boot does not let the schedule switch playlists", "[bootguard
 	auto* out = new std::ostringstream ();
 	sLog.addOutput (out);
 
+	auto rotating = bound;
+	rotating.order = "sequential";
+	CHECK_FALSE (guard.scheduleMayApply (false, schedule, "", bound));
+	CHECK_FALSE (guard.scheduleMayApply (true, schedule, "night", bound));
+	CHECK_FALSE (guard.scheduleMayApply (true, schedule, "", rotating));
+	const std::string beforeStop = out->str ();
+
 	CHECK_FALSE (guard.scheduleMayApply (true, schedule, "", bound));
 	CHECK_FALSE (guard.scheduleMayApply (true, schedule, "", bound));
 	const std::string lines = out->str ();
 	out->setstate (std::ios::badbit);
 
+	CHECK (beforeStop.empty ());
 	CHECK (occurrences (lines, HOLDING) == 1);
 	CHECK (schedule.pending == "night");
     }
@@ -264,9 +285,13 @@ TEST_CASE ("a held boot keeps the rotation it is sent and runs it from the relea
 TEST_CASE ("a show or next or prev without automatic true and a manual lanes-set release the hold", "[bootguard]") {
     const auto now = Api::Clock::now ();
     const std::vector<std::pair<std::string, nlohmann::json>> releasing = {
-	{ "show", { { "id", "a" } } },         { "show", { { "id", "a" }, { "automatic", false } } },
-	{ "next", nlohmann::json::object () }, { "prev", nlohmann::json::object () },
+	{ "show", { { "id", "a" } } },
+	{ "show", { { "id", "a" }, { "automatic", false } } },
+	{ "next", nlohmann::json::object () },
+	{ "prev", nlohmann::json::object () },
 	{ "lanes-set", manualLanes (true) },
+	{ "lanes-set",
+	  { { "lanes", nlohmann::json::array ({ { { "id", "all" }, { "manual", true } }, { { "id", "all" } } }) } } },
     };
 
     for (const auto& [cmd, args] : releasing) {
@@ -493,4 +518,201 @@ TEST_CASE ("a held boot holds an automatic next or prev like an automatic show",
 
 	CHECK (lines.empty ());
     }
+}
+
+TEST_CASE ("a lane the schedule bound to an existing empty playlist keeps it on a policy push", "[bootguard]") {
+    const auto now = Api::Clock::now ();
+    auto playlists = library ();
+    playlists.at ("night").entries.clear ();
+    Api::Lane lane;
+    Api::bindLane (lane, "night", playlists.at ("night"), true, now);
+    auto schedule = mainByDay ();
+    Api::scheduleTick (schedule, lane.playlistSlug, 21 * 60);
+
+    CHECK_FALSE (Api::laneSet (lane, playlists, schedule, "main", true, false, now));
+    CHECK (lane.playlistSlug == "night");
+    Api::scheduleTick (schedule, lane.playlistSlug, 21 * 60 + 1);
+    CHECK (schedule.pending.empty ());
+}
+
+TEST_CASE ("a release on a sequential lane leaves a pending switch to land at the countdown", "[bootguard]") {
+    const auto now = Api::Clock::now ();
+    auto guard = held ();
+    auto playlists = library ();
+    Api::Lane lane;
+    Api::Schedule off;
+    REQUIRE (Api::laneSet (lane, playlists, off, "main", true, false, now));
+    auto schedule = mainByDay ();
+    Api::scheduleTick (schedule, lane.playlistSlug, 21 * 60);
+    REQUIRE (schedule.pending == "night");
+
+    REQUIRE (guard.release ("show", { { "id", "a" } }, true, lane, playlists.at (lane.playlistSlug), schedule, now));
+    CHECK_FALSE (schedule.held);
+    CHECK (schedule.pending == "night");
+    CHECK (guard.rotationMayAdvance (true, lane, playlists.at (lane.playlistSlug), now + std::chrono::seconds (60)));
+}
+
+TEST_CASE (
+    "a held boot released by a manual lanes-set shows its next entry at once and counts from that show", "[bootguard]"
+) {
+    const auto released = Api::Clock::now ();
+    auto guard = held ();
+    auto playlists = library ();
+    Api::Lane lane;
+    Api::Schedule off;
+    auto clockNow = released;
+    std::vector<std::string> entriesShown;
+    int advances = 0;
+    std::mt19937 rng (7);
+    const auto clock = [&clockNow] () { return clockNow; };
+    const auto showEntry = [&clockNow, &entriesShown] (const Api::Entry& entry) {
+	clockNow += std::chrono::seconds (5);
+	entriesShown.push_back (entry.id);
+	return true;
+    };
+
+    SECTION ("sequential") {
+	REQUIRE (Api::laneSet (lane, playlists, off, "main", true, false, released - std::chrono::minutes (10)));
+	const bool releasedNow
+	    = guard.release ("lanes-set", manualLanes (true), true, lane, playlists.at ("main"), off, released);
+	CHECK (BootGuard::showsAfterRelease (releasedNow, "lanes-set", true, true));
+	const auto advance = [&] () {
+	    clockNow += std::chrono::seconds (5);
+	    advances++;
+	    return Api::pickNext (lane, playlists.at ("main"), rng) < playlists.at ("main").entries.size ();
+	};
+
+	CHECK (Api::showNow (lane, playlists.at ("main"), showEntry, advance, clock));
+	CHECK (advances == 1);
+	CHECK (entriesShown.empty ());
+	CHECK_FALSE (
+	    guard.rotationMayAdvance (true, lane, playlists.at ("main"), released + std::chrono::seconds (60))
+	);
+	CHECK (guard.rotationMayAdvance (true, lane, playlists.at ("main"), released + std::chrono::seconds (65)));
+    }
+
+    SECTION ("static") {
+	playlists.at ("main").order = "static";
+	REQUIRE (Api::laneSet (lane, playlists, off, "main", true, false, released - std::chrono::minutes (10)));
+	const bool releasedNow
+	    = guard.release ("lanes-set", manualLanes (true), true, lane, playlists.at ("main"), off, released);
+	CHECK (BootGuard::showsAfterRelease (releasedNow, "lanes-set", true, true));
+	const auto advance = [&advances] () {
+	    advances++;
+	    return true;
+	};
+
+	CHECK (Api::showNow (lane, playlists.at ("main"), showEntry, advance, clock));
+	CHECK (entriesShown == std::vector<std::string> { "maina" });
+	CHECK (advances == 0);
+	CHECK (lane.cursor == 0);
+	CHECK (lane.lastShow == released + std::chrono::seconds (5));
+    }
+}
+
+TEST_CASE ("only a lanes-set release on a live engine with nothing on screen shows at once", "[bootguard]") {
+    CHECK (BootGuard::showsAfterRelease (true, "lanes-set", true, true));
+    CHECK_FALSE (BootGuard::showsAfterRelease (true, "lanes-set", true, false));
+    CHECK_FALSE (BootGuard::showsAfterRelease (true, "lanes-set", false, true));
+    CHECK_FALSE (BootGuard::showsAfterRelease (false, "lanes-set", true, true));
+
+    for (const auto* verb : { "show", "next", "prev" }) {
+	INFO (verb);
+	CHECK_FALSE (BootGuard::showsAfterRelease (true, verb, true, true));
+    }
+}
+
+TEST_CASE ("an unheld manual lanes-set naming the bound playlist changes nothing", "[bootguard]") {
+    const auto now = Api::Clock::now ();
+    BootGuard guard;
+    auto playlists = library ();
+    Api::Lane lane;
+    Api::Schedule off;
+    REQUIRE (Api::laneSet (lane, playlists, off, "main", true, false, now - std::chrono::minutes (1)));
+    const auto before = lane.lastShow;
+
+    CHECK (Api::laneSet (lane, playlists, off, "main", lane.enabled, true, now));
+    CHECK (lane.playlistSlug == "main");
+    const bool releasedNow
+	= guard.release ("lanes-set", manualLanes (true), true, lane, playlists.at ("main"), off, now);
+    CHECK_FALSE (releasedNow);
+    CHECK_FALSE (BootGuard::showsAfterRelease (releasedNow, "lanes-set", true, true));
+    CHECK (lane.lastShow == before);
+}
+
+TEST_CASE ("a held next that lands a pending switch whose load fails stays held and fails", "[bootguard]") {
+    const auto now = Api::Clock::now ();
+    auto guard = held ();
+    auto playlists = library ();
+    Api::Lane lane;
+    Api::Schedule off;
+    REQUIRE (Api::laneSet (lane, playlists, off, "main", true, false, now));
+    auto schedule = mainByDay ();
+    Api::scheduleTick (schedule, lane.playlistSlug, 21 * 60);
+    REQUIRE (schedule.pending == "night");
+    int entryLoads = 0;
+    int advances = 0;
+    const auto failEntry = [&entryLoads] (const Api::Entry&) {
+	entryLoads++;
+	return false;
+    };
+    const auto failAdvance = [&advances] () {
+	advances++;
+	return false;
+    };
+    const auto clock = [now] () { return now; };
+    const auto show
+	= [&] () { return Api::showNow (lane, playlists.at (lane.playlistSlug), failEntry, failAdvance, clock); };
+
+    SECTION ("static") {
+	playlists.at ("night").order = "static";
+	const auto landed = Api::landPending (lane, playlists, schedule, show, now);
+
+	CHECK (landed == Api::PendingSwitch::Failed);
+	CHECK (entryLoads == 1);
+	CHECK (lane.playlistSlug == "night");
+	CHECK_FALSE (guard.release (
+	    "next", nlohmann::json::object (), landed == Api::PendingSwitch::Shown, lane, playlists.at ("night"),
+	    schedule, now
+	));
+	CHECK (guard.restoreRefused ());
+    }
+
+    SECTION ("sequential") {
+	const auto landed = Api::landPending (lane, playlists, schedule, show, now);
+
+	CHECK (landed == Api::PendingSwitch::Failed);
+	CHECK (advances == 1);
+	CHECK (lane.playlistSlug == "night");
+	CHECK_FALSE (guard.release (
+	    "next", nlohmann::json::object (), landed == Api::PendingSwitch::Shown, lane, playlists.at ("night"),
+	    schedule, now
+	));
+	CHECK (guard.restoreRefused ());
+    }
+}
+
+TEST_CASE ("a held next that lands a pending switch whose load succeeds releases", "[bootguard]") {
+    const auto now = Api::Clock::now ();
+    auto guard = held ();
+    auto playlists = library ();
+    Api::Lane lane;
+    Api::Schedule off;
+    REQUIRE (Api::laneSet (lane, playlists, off, "main", true, false, now));
+    auto schedule = mainByDay ();
+    Api::scheduleTick (schedule, lane.playlistSlug, 21 * 60);
+    const auto show = [&] () {
+	return Api::showNow (
+	    lane, playlists.at (lane.playlistSlug), [] (const Api::Entry&) { return true; }, [] () { return true; },
+	    [now] () { return now; }
+	);
+    };
+
+    const auto landed = Api::landPending (lane, playlists, schedule, show, now);
+    CHECK (landed == Api::PendingSwitch::Shown);
+    CHECK (guard.release (
+	"next", nlohmann::json::object (), landed == Api::PendingSwitch::Shown, lane, playlists.at ("night"), schedule,
+	now
+    ));
+    CHECK_FALSE (guard.restoreRefused ());
 }

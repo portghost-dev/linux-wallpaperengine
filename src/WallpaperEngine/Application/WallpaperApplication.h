@@ -218,7 +218,8 @@ private:
     /** The local minute of the day, 0..1439. */
     [[nodiscard]] static int localMinute ();
     /** The schedule's pending switch, if any: rebind and show the new playlist's first item. */
-    bool applyPendingSchedule ();
+    Api::PendingSwitch applyPendingSchedule (std::string& error);
+    bool showLaneEntry (std::string& error);
     void tickSchedule ();
     /** the wallpaper layer (this show's args) composed with the lane layer */
     [[nodiscard]] WallpaperEngine::Render::WallpaperState::Fit effectiveFit () const;
@@ -249,7 +250,7 @@ private:
      *  touch a previous boot's record */
     bool m_bootHistoryArmed = false;
     BootGuard m_bootGuard;
-    void releaseHold (const std::string& cmd, const nlohmann::json& args, bool ok);
+    bool releaseHold (const std::string& cmd, const nlohmann::json& args, bool ok);
     bool apiRotationAdvance (std::string& error);
     [[nodiscard]] size_t apiRotationPick ();
 

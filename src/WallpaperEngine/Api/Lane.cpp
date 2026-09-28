@@ -1040,7 +1040,8 @@ bool WallpaperEngine::Api::laneSet (
 ) {
     const auto isUnbound = [&playlists, &lane] () {
 	const auto bound = playlists.find (lane.playlistSlug);
-	return bound == playlists.end () || bound->second.entries.empty ();
+	return lane.playlistSlug.empty () || bound == playlists.end ()
+	    || (lane.playlistSlug == "default" && bound->second.entries.empty ());
     };
     auto target = slug;
     bool honored = true;
@@ -1073,6 +1074,45 @@ bool WallpaperEngine::Api::laneSet (
     }
 
     return honored;
+}
+
+bool WallpaperEngine::Api::showNow (
+    Lane& lane, const Playlist& playlist, const std::function<bool (const Entry&)>& showEntry,
+    const std::function<bool ()>& advance, const std::function<Clock::time_point ()>& clock
+) {
+    jumpToEnd (lane);
+
+    // a static playlist shows its first scene: the user orders the playlist to choose it
+    if (playlist.order == "static" && !playlist.entries.empty ()) {
+	const auto entry = playlist.entries.front ();
+
+	if (!showEntry (entry)) {
+	    return false;
+	}
+
+	seatCursor (lane, displayId (entry));
+    } else if (!advance ()) {
+	return false;
+    }
+
+    restartCountdown (lane, playlist, clock ());
+    return true;
+}
+
+PendingSwitch WallpaperEngine::Api::landPending (
+    Lane& lane, std::map<std::string, Playlist>& playlists, Schedule& schedule, const std::function<bool ()>& show,
+    const Clock::time_point now
+) {
+    const auto slug = schedule.pending;
+    const auto target = playlists.find (slug);
+
+    if (slug.empty () || target == playlists.end ()) {
+	return PendingSwitch::Nothing;
+    }
+
+    schedule.pending.clear ();
+    bindLane (lane, slug, target->second, lane.enabled, now);
+    return show () ? PendingSwitch::Shown : PendingSwitch::Failed;
 }
 
 nlohmann::json WallpaperEngine::Api::toJson (const Schedule& schedule) {
