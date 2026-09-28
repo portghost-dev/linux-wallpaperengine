@@ -56,11 +56,11 @@ def _row(key: str) -> str:
 
 
 def _authored_cc(wid: str) -> str:
-    """The authored look: derive_cc over the project's preset block, else its raw keys."""
+    """The authored look: derive_cc over the project's preset block, else its raw keys, read from the
+    wallpaper's own folder as the show resolver reads it (a preset's own, not its base's)."""
     from ...discovery import project
-    from ...library import catalog
-    folder = catalog.render_dir(wid)
-    raw = project.read(folder).get("raw") if folder else {}
+    from ...engine import resolve
+    raw = project.read(resolve._identity_dir(wid, resolve._wallpapers_dir())).get("raw")
     raw = raw if isinstance(raw, dict) else {}
     preset = raw.get("preset")
     return project.derive_cc(preset if isinstance(preset, dict) else raw)
@@ -247,9 +247,10 @@ def _unset(ctx: Context, pick, name: str) -> int:
                     return {k: None for k in ("CC", "CC_MODE") if k in raw}
                 if raw.get("CC_MODE") in ("none", "preset"):
                     return {}
+                authored = _channels(_authored_cc(wid))
                 chans = _channels(cc)
-                chans[row.field] = _NEUTRAL[row.field]
-                if chans == _channels(_authored_cc(wid)):
+                chans[row.field] = authored[row.field]
+                if chans == authored:
                     return {k: None for k in ("CC", "CC_MODE") if k in raw}
                 new = " ".join(values.format_number(c) for c in chans)
                 return {} if cc == new else {"CC": new}

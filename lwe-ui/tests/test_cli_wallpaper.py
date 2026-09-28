@@ -2,8 +2,9 @@
 words objects.py runs, called in process against tests/_fake_engine.py on the sandbox socket.
 
 One scratch store holds a scene with an authored grading (preset wec_ keys), a plain scene with its
-own values, a scene whose RENDER_RESOLUTION word is sharpfx, and a scene with an alias; the playlist
-main holds the first two and is the saved active playlist, so it is engine-held. Each test rewrites
+own values, a scene whose RENDER_RESOLUTION word is sharpfx, a scene with an alias, and a preset whose own
+project carries a grading while its BG names a base with none; the playlist main holds the first two and is
+the saved active playlist, so it is engine-held. Each test rewrites
 the wallpaper files and removes the sync marker first. A PySide6-poisoned child with an environment
 built from nothing reads one value.
 
@@ -29,16 +30,18 @@ sys.path.insert(0, str(TESTS.parent / "src"))
 import _fake_engine  # noqa: E402
 from lwe_ui.cli import Context, select  # noqa: E402
 from lwe_ui.cli.verbs import wallpaper  # noqa: E402
-from lwe_ui.engine import marker  # noqa: E402
+from lwe_ui.engine import marker, resolve  # noqa: E402
 from lwe_ui.storage import lock, paths, settings, tags, tier_a  # noqa: E402
 
 LIB = _ROOT / "lib"
 GRADED, PLAIN, SHARP, OTHER = "1200000001", "1200000002", "1200000003", "1200000004"
+PRESET, BASE = "1200000005", "1200000006"
 FILES = {
     GRADED: "",
     PLAIN: "FIT_ZOOM=1.5\nCC=1.1 1 1 0\nCC_MODE=custom\nFULLSCREEN_PAUSE=false\nPROP_rain=0.5\n",
     SHARP: "RENDER_RESOLUTION=sharpfx\nCLAMPCOMPOSITES=2\n",
     OTHER: "ALIAS=Harbor\n",
+    PRESET: f"BG={BASE}\nCC=1.2 1 1 0\nCC_MODE=custom\n",
 }
 
 
@@ -64,6 +67,8 @@ def setUpModule() -> None:
                                                                           "value": 0.2, "min": 0, "max": 1}}}})
     _project(SHARP, "Sharp Hills")
     _project(OTHER, "Harbor Night")
+    _project(BASE, "Plain Base")
+    _project(PRESET, "Preset Dunes", {"dependency": BASE, "preset": {"wec_brs": 60, "wec_con": 75}})
     paths.playlist_file("main").write_text(f"NAME=Main\nMEMBERS={GRADED} {PLAIN}\nMODE=shuffle\nINTERVAL=900\n",
                                            encoding="utf-8")
 
@@ -169,9 +174,43 @@ class WallpaperTest(unittest.TestCase):
         paths.wp_file(GRADED).write_text("CC=1.2 1 1 0\nCC_MODE=custom\n", encoding="utf-8")
         code, out, _err = _run(GRADED, "unset", "brightness")
         self.assertEqual(code, 0)
-        self.assertEqual(_conf(GRADED), {"CC": "1 1 1 0", "CC_MODE": "custom"})
+        self.assertEqual(_conf(GRADED), {"CC": "1.2 1 1 0", "CC_MODE": "custom"})
         self.assertEqual(_run(GRADED, "contrast")[1], _pick(GRADED) + "1\n")
         self.assertNotIn(wallpaper.COLOR_REMOVED, out)
+
+    def _reads(self, wid: str) -> list[str]:
+        return [_run(wid, word)[1].splitlines()[-1] for word in ("brightness", "contrast", "saturation", "hue")]
+
+    def test_unset_brightness_returns_it_to_the_authored_value_and_keeps_the_others(self) -> None:
+        self.assertEqual(_run(GRADED, "contrast", "1")[0], 0)
+        self.assertEqual(_run(GRADED, "brightness", "1.5")[0], 0)
+        self.assertEqual(_conf(GRADED), {"CC": "1.5 1 1 0", "CC_MODE": "custom"})
+        self.assertEqual(_run(GRADED, "unset", "brightness")[0], 0)
+        self.assertEqual(_conf(GRADED), {"CC": "1.2 1 1 0", "CC_MODE": "custom"})
+        self.assertEqual(self._reads(GRADED), ["1.2", "1", "1", "0"])
+
+    def test_an_unset_that_brings_all_four_back_to_the_authored_look_removes_cc_and_cc_mode(self) -> None:
+        self.assertEqual(_run(GRADED, "brightness", "1.5")[0], 0)
+        self.assertEqual(_conf(GRADED), {"CC": "1.5 1.5 1 0", "CC_MODE": "custom"})
+        code, out, _err = _run(GRADED, "unset", "brightness")
+        self.assertEqual(code, 0)
+        self.assertEqual(_conf(GRADED), {})
+        self.assertIn(wallpaper.COLOR_REMOVED, out)
+        self.assertEqual(self._reads(GRADED), ["1.2", "1.5", "1", "0"])
+
+    def test_unset_on_a_preset_compares_with_the_preset_s_own_look(self) -> None:
+        code, out, _err = _run(PRESET, "unset", "brightness")
+        self.assertEqual(code, 0)
+        self.assertEqual(_conf(PRESET), {"BG": BASE, "CC": "1.2 1 1 0", "CC_MODE": "custom"})
+        self.assertEqual(resolve.resolve_show_args(PRESET)[1]["cc"], [1.2, 1.0, 1.0, 0.0])
+        self.assertEqual(self._reads(PRESET), ["1.2", "1", "1", "0"])
+        self.assertNotIn(wallpaper.COLOR_REMOVED, out)
+
+    def test_a_color_set_on_a_preset_seeds_from_the_preset_s_own_look(self) -> None:
+        paths.wp_file(PRESET).write_text(f"BG={BASE}\n", encoding="utf-8")
+        self.assertEqual(_run(PRESET, "saturation", "0.8")[0], 0)
+        self.assertEqual(_conf(PRESET), {"BG": BASE, "CC": "1.2 1.5 0.8 0", "CC_MODE": "custom"})
+        self.assertEqual(resolve.resolve_show_args(PRESET)[1]["cc"], [1.2, 1.5, 0.8, 0.0])
 
     def test_unset_on_a_conf_the_editor_saved_as_none_changes_nothing(self) -> None:
         body = "CC=1.2 1.5 1 0\nCC_MODE=none\n"
