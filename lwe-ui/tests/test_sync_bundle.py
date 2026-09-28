@@ -12,8 +12,8 @@ skips it, another pid empties the list, a stale generation records nothing, a re
 never recorded, a started transfer runs to its last part past the budget, and a command run
 ignores both. sync_all makes a marker with a fresh generation when none exists, and a failed run
 keeps it; a writer that raises the generation during a run that ends all ok keeps the marker too.
-A reload's run re-shows whatever the marker holds when it starts, and beside an older drain it
-shows once and loses no CURRENT. Two drains never send at once, and an engine-only action holds
+A reload's run re-shows whatever the marker holds when it starts, also when a window reload's
+budget stops its bundle, and beside an older drain it shows once and loses no CURRENT. Two drains never send at once, and an engine-only action holds
 sync. The engine is an api_client recorder with a scripted status unless a test names the socket
 server.
 
@@ -238,6 +238,16 @@ class SyncBundleTest(unittest.TestCase):
             self.assertEqual(second, push.Outcome("applied"))
             self.assertEqual(rec.playlists(), ["extra"])
             self.assertEqual(marker.read()["classes"], [])
+
+    def test_a_window_reloads_reshow_goes_out_when_the_budget_stops_its_bundle(self) -> None:
+        clock = Clock()
+        with mock.patch.object(push, "time", clock):
+            with self.engine(status()) as rec, self.assertLogs("lwe_ui.engine.push", "WARNING"):
+                rec.hooks["playlist_set"] = lambda: clock.sleep(5)
+                outcome = push.sync_all("window", ("BUNDLE", "CURRENT"))
+        self.assertEqual((outcome.kind, outcome.reason), ("pending", "budget"))
+        self.assertEqual(rec.verbs().count("show"), 1, rec.verbs())
+        self.assertEqual(marker.read()["classes"], ["BUNDLE", "CURRENT"])
 
     def test_another_pid_empties_the_list_and_a_stale_generation_records_nothing(self) -> None:
         settings.update({"SCHEDULE": "07:00=night;20:00=extra"})

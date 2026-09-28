@@ -532,7 +532,7 @@ class SettingsBridge(QObject):
         try:
             outcome = push.run_change(
                 ("rules",), lambda: rules.modify("pause-blacklist.txt", lambda text: change(text or header)),
-                [("verb", "pause-blacklist.txt")])
+                [("verb", "pause-blacklist.txt")], defer_current=self._backend.delivery_due())
         except OSError:
             return False
         if outcome.kind != "applied":
@@ -578,7 +578,7 @@ class SettingsBridge(QObject):
         try:
             outcome = push.run_change(
                 ("rules",), lambda: rules.modify("app-condition.txt", lambda text: change(text or header)),
-                [("verb", "app-condition.txt")])
+                [("verb", "app-condition.txt")], defer_current=self._backend.delivery_due())
         except OSError:
             return False
         if outcome.kind != "applied":

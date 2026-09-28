@@ -496,10 +496,18 @@ def _holds_current() -> bool:
 
 
 def _bundle(run: _Run, derived: str | None, reshow: bool, reload: bool = False) -> None:
-    """sync_all's steps 2 to 7 on the run's generation and status. A window run records each
-    playlist it transferred in the marker and skips the ones an earlier run of this generation
-    recorded for the same engine pid. Step 7 re-shows when the marker holds CURRENT, and for a
-    reload's run whatever the marker holds, since that re-show is the reload's own action."""
+    """sync_all's requests on the run's generation and status. It re-shows when the
+    marker holds CURRENT, and for a reload's run whatever the marker holds, since that re-show is
+    the reload's own action and goes out after a budget stop as a change's own rows do."""
+    _bundle_steps(run, derived)
+    wid = _on_screen(run.status)
+    if reshow and wid and (run.ended is None if reload else not run.halted() and _holds_current()):
+        _reshow(run, wid)
+
+
+def _bundle_steps(run: _Run, derived: str | None) -> None:
+    """Steps 2 to 6. A window run records each playlist it transferred in the marker and skips
+    the ones an earlier run of this generation recorded for the same engine pid."""
     scheduled = _scheduled()
     pid = run.status.get("pid")
     skip: set[str] = set()
@@ -554,8 +562,6 @@ def _bundle(run: _Run, derived: str | None, reshow: bool, reload: bool = False) 
     else:
         run.send(api_client.set_fullscreen, resolve_fullscreen_behavior(s))
         run.send(api_client.set_tuning, **resolved_tuning(""))
-    if reshow and wid and not run.halted() and (reload or _holds_current()):
-        _reshow(run, wid)
 
 
 _MEMBER_KEYS = (None, "MEMBERS", "NAME")
@@ -683,12 +689,16 @@ def _synced(stack: contextlib.ExitStack, wait_s: float, env: str | None) -> dict
     return status
 
 
-def _finish(run: _Run, env: str | None = None) -> Outcome:
-    """Clear the marker when every request ended ok, and name the outcome."""
+def _finish(run: _Run, env: str | None = None, keep_current: bool = False) -> Outcome:
+    """Clear the marker when every request ended ok, CURRENT kept when `keep_current`, and name
+    the outcome."""
     warning = None
     if run.all_ok and not run.stopped:
         try:
-            marker.clear(run.generation)
+            if keep_current:
+                marker.clear(run.generation, ("CURRENT",))
+            else:
+                marker.clear(run.generation)
         except OSError as exc:
             warning = f"the sync marker could not be cleared: {exc}"
     seen: dict[str, Any] = {"env": env, "clock": run.clock, "refused_verb": run.refused_verb}
@@ -705,7 +715,7 @@ def _finish(run: _Run, env: str | None = None) -> Outcome:
     return Outcome("applied", warning=warning, **seen)
 
 
-def _deliver(ticket: Ticket) -> Outcome:
+def _deliver(ticket: Ticket, defer_current: bool = False) -> Outcome:
     if ticket.generation is None:
         return Outcome("applied", reason="no engine side", env=ticket.env)
     with contextlib.ExitStack() as stack:
@@ -716,11 +726,21 @@ def _deliver(ticket: Ticket) -> Outcome:
         derived = derived_active(status)[0]
         rows = [row for row, _key in ticket.rows]
         reshow = bool(ticket.wid) and ticket.wid == _on_screen(status) and "wp_build" in rows
+        if reshow:
+            _adopt_current(run)
         if ticket.existed or "reload" in rows:
-            _bundle(run, derived, reshow=not reshow, reload="reload" in rows)
+            _bundle(run, derived, reshow=not reshow and not defer_current, reload="reload" in rows)
         if run.ended is None:
             _rows(run, ticket, derived, reshow)
-        return _finish(run, ticket.env)
+        return _finish(run, ticket.env, keep_current=defer_current and not reshow)
+
+
+def _adopt_current(run: _Run) -> None:
+    """A delivery that re-shows the wallpaper on screen serves a marker left holding only CURRENT
+    by a deferred re-show, so it clears that marker's generation."""
+    state = marker.read()
+    if state["classes"] == ["CURRENT"]:
+        run.generation = state["generation"]
 
 
 @contextlib.contextmanager
@@ -782,6 +802,13 @@ def save_change(locks: Iterable[str], write: Callable[[], Any], rows: Iterable[t
         return _write_step(rows, write, wid, slug, run, first)
 
 
+def burst_existed(tickets: list[Ticket]) -> bool:
+    """Whether a burst of saved changes delivered as one owes the bundle first: its first change
+    found a marker when it set its own, or another writer raised the generation between two of its
+    changes, so the marker may hold a change the burst's own rows do not carry."""
+    return tickets[0].existed or any(b.generation != a.generation + 1 for a, b in zip(tickets, tickets[1:]))
+
+
 def deliver(ticket: Ticket) -> Outcome:
     """The second half of run_change for a saved change: sync, the status and version check inside it,
     the bundle first when a marker existed, the change's push, and the clear when every request
@@ -791,7 +818,8 @@ def deliver(ticket: Ticket) -> Outcome:
 
 def run_change(locks: Iterable[str], write: Callable[[], Any], rows: Iterable[tuple[str, str | None]],
                *, wid: str | None = None, slug: str | None = None, manual: bool = False,
-               status: tuple[str, dict[str, Any] | None] | None = None, run: str = "window") -> Outcome:
+               status: tuple[str, dict[str, Any] | None] | None = None, run: str = "window",
+               defer_current: bool = False) -> Outcome:
     """One change from any caller. rows are (row, key) pairs: the row from SETTING_ROWS,
     WP_ROWS or active, policy, members, reload and none; the key the verb, live, tuning and
     wallpaper rows name (None where a row names none). A members row's key names its playlist, so
@@ -803,11 +831,15 @@ def run_change(locks: Iterable[str], write: Callable[[], Any], rows: Iterable[tu
     store locks are released, highest rank first; then sync, the status and version check inside
     it, the bundle first when a marker existed, this change's push with each row's own verb last,
     also after a bundle the window's budget stopped, and the clear when every request ended ok. An
-    exception from write() reaches the caller with nothing sent, and a marker already set stays."""
-    return _deliver(save_change(locks, write, rows, wid=wid, slug=slug, manual=manual, status=status, run=run))
+    exception from write() reaches the caller with nothing sent, and a marker already set stays.
+    defer_current, set while a window delivery is due, leaves the bundle's re-show to that
+    delivery and keeps CURRENT in the marker for it to clear."""
+    return _deliver(save_change(locks, write, rows, wid=wid, slug=slug, manual=manual, status=status, run=run),
+                    defer_current)
 
 
-def sync_all(run: str, classes: Iterable[str] = ("BUNDLE",), wait_s: float = 2.0) -> Outcome:
+def sync_all(run: str, classes: Iterable[str] = ("BUNDLE",), wait_s: float = 2.0,
+             defer_current: bool = False) -> Outcome:
     """Rebuild the engine from the store under one sync hold. The marker is ensured first,
     keeping an existing generation unless `classes` adds a class it did not hold; a status that is
     not ok, or another build's engine, returns pending with nothing sent. Then every engine-held
@@ -815,7 +847,8 @@ def sync_all(run: str, classes: Iterable[str] = ("BUNDLE",), wait_s: float = 2.0
     with speed left out while the engine reports 0, and a re-show when the marker holds CURRENT or
     `classes` names CURRENT (a reload's run); the marker clears when every request ended ok. A
     "window" run keeps an 8 s budget and records its progress in the marker; a "command" run has
-    neither."""
+    neither. defer_current leaves the re-show and CURRENT to a window delivery that is due, as
+    run_change does."""
     classes = tuple(classes)
     generation = marker.ensure(classes)
     with contextlib.ExitStack() as stack:
@@ -823,5 +856,5 @@ def sync_all(run: str, classes: Iterable[str] = ("BUNDLE",), wait_s: float = 2.0
         if isinstance(status, Outcome):
             return status
         r = _Run(run, generation, status)
-        _bundle(r, derived_active(status)[0], reshow=True, reload="CURRENT" in classes)
-        return _finish(r)
+        _bundle(r, derived_active(status)[0], reshow=not defer_current, reload="CURRENT" in classes)
+        return _finish(r, keep_current=defer_current)

@@ -581,7 +581,8 @@ class Backend(QObject):
     def _change(self, what: str, locks: tuple[str, ...], write: Any, rows: list, **kwargs: Any) -> Any:
         """One window change through the change runner; its Outcome, or None when nothing was saved.
         A refused switch or a store refusal logs one warning; any other failure returns None."""
-        return self._guarded(what, lambda: push.run_change(locks, write, rows, **kwargs),
+        return self._guarded(what, lambda: push.run_change(locks, write, rows, defer_current=self.delivery_due(),
+                                                           **kwargs),
                              schedule=any(row == "schedule" for row, _key in rows))
 
     def _guarded(self, what: str, change: Any, schedule: bool = False) -> Any:
@@ -908,8 +909,9 @@ class Backend(QObject):
             pass
 
     def drain_now(self) -> Any:
-        """The window's bundle now (sync_all), its marker ensured first so the run is recorded."""
-        outcome = push.sync_all("window")
+        """The window's bundle now (sync_all), its marker ensured first so the run is recorded; its
+        re-show is left to a bridge delivery that is due."""
+        outcome = push.sync_all("window", defer_current=self.delivery_due())
         self._note(outcome, schedule=True)
         return outcome
 
@@ -1135,7 +1137,7 @@ class Backend(QObject):
             if keys:
                 push.run_change(("settings",),
                                 lambda: settings.modify(lambda now: {k: False for k in keys if now.get(k)}),
-                                [(push.SETTING_ROWS[k], k) for k in keys])
+                                [(push.SETTING_ROWS[k], k) for k in keys], defer_current=self.delivery_due())
         except Exception:
             return
 
@@ -1263,7 +1265,8 @@ class Backend(QObject):
             except Exception as exc:
                 logging.getLogger(__name__).warning("engine env file not rebuilt after the reset: %s", exc)
         try:
-            self._note(push.run_change(("settings", "env"), write, [("reload", None)]), schedule=True)
+            self._note(push.run_change(("settings", "env"), write, [("reload", None)],
+                                       defer_current=self.delivery_due()), schedule=True)
         except Exception:
             return False
         self.settingsChanged.emit()
@@ -1457,7 +1460,8 @@ class Backend(QObject):
         restart row), the store write, then the key's row. settingsChanged fires after the write."""
         row = push.SETTING_ROWS.get(key, "none")
         outcome = push.run_change(("settings", "env") if row in ("tuning", "restart") else ("settings",),
-                                  lambda: settings.update({key: value}), [(row, key)])
+                                  lambda: settings.update({key: value}), [(row, key)],
+                                  defer_current=self.delivery_due())
         self.settingsChanged.emit()
         self._note(outcome, schedule=row == "schedule")
         return outcome
@@ -1697,7 +1701,8 @@ class Backend(QObject):
                         # on boot, and an automatic re-push (or re-show) here would
                         # defeat its crash-loop guard by feeding the loop.
                         try:
-                            self._note(push.sync_all("window", wait_s=0), schedule=True)
+                            self._note(push.sync_all("window", wait_s=0, defer_current=self.delivery_due()),
+                                       schedule=True)
                         except OSError:
                             pass
                 if not first_sight:

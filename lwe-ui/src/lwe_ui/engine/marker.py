@@ -131,16 +131,16 @@ def generation() -> int | None:
         return _load()["generation"]
 
 
-def clear(generation: int) -> bool:
-    """Only while the marker's generation is `generation`: no classes, an empty sent, the
-    generation kept. Returns whether the generation matched. A failed write puts the previous
-    record back, best effort, and raises OSError, so a failed clear never leaves a visibly
-    cleared marker."""
+def clear(generation: int, keep: Iterable[str] = ()) -> bool:
+    """Only while the marker's generation is `generation`: no classes but those of `keep` it
+    holds, an empty sent, the generation kept. Returns whether the generation matched. A failed
+    write puts the previous record back, best effort, and raises OSError, so a failed clear
+    never leaves a visibly cleared marker."""
     with lock.held("marker"):
         state = _load()
         if not _matches(state, generation):
             return False
-        cleared = _state(generation, ())
+        cleared = _state(generation, (c for c in state["classes"] if c in keep))
         if cleared != state:
             try:
                 _write(cleared)

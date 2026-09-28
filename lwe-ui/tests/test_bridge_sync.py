@@ -11,9 +11,12 @@ the unit. Two build-key edits within the debounce send one entry refresh and one
 kept; a burst carries every edit's rows, so an earlier SPEED still goes out after the re-show; a poll
 while a burst waits sends nothing. A child that exits after its save leaves BUNDLE and CURRENT, and
 the next drain re-shows. A refused wallpaper write sends nothing. A slider preview sends nothing
-while sync is held elsewhere. The editor's global dial is saved before its set-tuning. The engine
-is an api_client recorder with a scripted status; the child process gets an environment built from
-scratch.
+while sync is held elsewhere. The editor's global dial is saved before its set-tuning. A burst that
+spans another change's pending record bundles it before its own push. A burst goes out by itself
+600 ms after its last edit, a later edit restarting the delay. A live change or a first-sight bundle
+inside a burst's debounce leaves the re-show to the burst, which clears the marker. A backup restore
+records BUNDLE and CURRENT before its store writes. The engine is an api_client recorder with a
+scripted status; the child process gets an environment built from scratch.
 
 Run: PYTHONPATH=src python3 tests/test_bridge_sync.py
 """
@@ -26,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -367,6 +371,118 @@ class BridgeSyncTest(unittest.TestCase):
                     self.backend.status()
                 self.assertEqual(rec.verbs().count("show"), 1, rec.verbs())
                 self.assertEqual(marker.read()["classes"], [])
+
+    def test_a_burst_that_spans_another_pending_change_bundles_it_before_its_own_push(self) -> None:
+        with self.engine(status()) as rec:
+            ed = editor.EditorBridge(self.backend)
+            ed.open("111")
+            page = settings_bridge.SettingsBridge(self.backend)
+            failed: list = []
+            page.commitFailed.connect(lambda keys, reason: failed.append((list(keys), reason)))
+            self.assertTrue(ed.setScalingValue("fill"))
+            with self.held_elsewhere("sync"):
+                self.assertTrue(page.commit("ENGINE_VOLUME", 40))
+            self.assertEqual((failed, marker.read()["classes"]), ([], ["BUNDLE", "CURRENT"]))
+            self.assertTrue(ed.setTextureDetailValue("full"))
+            ed._reshow.stop()
+            ed._fire_reshow()
+            self.assertEqual([args for verb, args, _k in rec.calls if verb == "set_volume"], [(40,)])
+            self.assertEqual(rec.verbs().count("show"), 1, rec.verbs())
+            self.assertEqual(marker.read()["classes"], [])
+
+    def test_a_burst_goes_out_by_itself_600_ms_after_the_last_edit(self) -> None:
+        ed = editor.EditorBridge(self.backend)
+        ed.open("111")
+        popup = deck_popup.DeckPopupBridge(self.backend)
+        popup.syncCurrent("111")
+
+        def pump(until: float) -> None:
+            while time.monotonic() < until:
+                _APP.processEvents()
+                time.sleep(0.005)
+
+        for name, first, second in (
+                ("editor", lambda: ed.setScalingValue("fill"), lambda: ed.setRenderResolutionValue("sharpfx")),
+                ("deck", lambda: popup.setScaling("stretch"), lambda: popup.setScaling("fit"))):
+            with self.subTest(door=name):
+                with self.engine(status()) as rec:
+                    start = time.monotonic()
+                    self.assertTrue(first())
+                    pump(start + 0.4)
+                    self.assertEqual(rec.verbs(), [], "nothing goes out inside the debounce")
+                    restart = time.monotonic()
+                    self.assertTrue(second())
+                    pump(restart + 0.45)
+                    self.assertEqual(rec.verbs(), [], "a later edit restarts the delay")
+                    pump(restart + 0.9)
+                self.assertEqual(rec.verbs().count("show"), 1, rec.verbs())
+                self.assertEqual(marker.read()["classes"], [])
+
+    def _live_doors(self):
+        ed = editor.EditorBridge(self.backend)
+        ed.open("111")
+        popup = deck_popup.DeckPopupBridge(self.backend)
+        popup.syncCurrent("111")
+        return (("editor, the wallpaper's volume", ed, lambda: ed.setScalingValue("fill"), lambda: ed.setVolumeValue(25)),
+                ("editor, the wallpaper's volume again", ed, lambda: ed.setScalingValue("fill"),
+                 lambda: ed.setVolumeValue(77)),
+                ("deck, the global volume", popup, lambda: popup.setScaling("stretch"),
+                 lambda: popup.setGlobalVolume(30)),
+                ("deck, the wallpaper's volume", popup, lambda: popup.setScaling("fill"),
+                 lambda: popup._write_wp({"VOLUME": 77})))
+
+    def test_a_live_change_inside_a_burst_leaves_the_reshow_to_the_burst(self) -> None:
+        self.backend._engine_pid_seen = 4242
+        for name, bridge, build, live in self._live_doors():
+            with self.subTest(door=name):
+                marker.clear(marker.read()["generation"])
+                with self.engine(status()) as rec:
+                    self.assertTrue(build())
+                    self.assertTrue(self.backend.delivery_due())
+                    self.assertTrue(live())
+                    self.assertEqual(rec.verbs().count("show"), 0, rec.verbs())
+                    self.assertEqual(marker.read()["classes"], ["CURRENT"])
+                    bridge._reshow.stop()
+                    bridge._fire_reshow()
+                    self.backend.status()
+                self.assertEqual(rec.verbs().count("show"), 1, rec.verbs())
+                self.assertEqual(marker.read()["classes"], [])
+
+    def test_a_first_sight_bundle_inside_a_burst_leaves_the_reshow_to_the_burst(self) -> None:
+        for name, bridge, build, _live in self._live_doors()[1::2]:
+            with self.subTest(door=name):
+                self.backend._engine_pid_seen = None
+                marker.clear(marker.read()["generation"])
+                with self.engine(status()) as rec:
+                    self.assertTrue(build())
+                    self.backend.status()
+                    self.assertEqual(rec.verbs().count("show"), 0, rec.verbs())
+                    bridge._reshow.stop()
+                    bridge._fire_reshow()
+                self.assertEqual(rec.verbs().count("show"), 1, rec.verbs())
+                self.assertEqual(marker.read()["classes"], [])
+
+    def test_backup_store_write_has_prior_pending_intent(self) -> None:
+        wp.update_set("111", {"SCALING": "fill"})
+        settings.update({"ENGINE_FPS": "90"})
+        archive = self.home / "review.lwebackup"
+        backup.export_to(archive)
+        wp.update_set("111", {"SCALING": "fit"})
+        settings.update({"ENGINE_FPS": "30"})
+        page = settings_bridge.SettingsBridge(self.backend)
+        real_apply = backup.apply
+
+        def interrupted_after_store(plan):
+            receipt = real_apply(plan)
+            self.assertFalse(receipt.get("refused"), receipt)
+            raise SystemExit("injected death after store writes and before push")
+
+        with self.engine(status()) as rec, mock.patch.object(backup, "apply", interrupted_after_store):
+            with self.assertRaises(SystemExit):
+                page.importBackup(str(archive))
+        self.assertEqual((settings.load()["ENGINE_FPS"], wp.load_set("111")["SCALING"], rec.verbs()),
+                         (90, "fill", []))
+        self.assertEqual(marker.read()["classes"], ["BUNDLE", "CURRENT"])
 
     def test_the_editors_global_dial_is_saved_before_its_set_tuning(self) -> None:
         ed = editor.EditorBridge(self.backend)

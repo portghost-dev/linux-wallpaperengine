@@ -495,7 +495,8 @@ class DeckPopupBridge(QObject):
                 self._hold_delivery(True)
                 self._reshow.start()
                 return True
-            outcome = push.run_change(("overrides",), lambda: wp.update_set(wid, changes), rows, wid=wid)
+            outcome = push.run_change(("overrides",), lambda: wp.update_set(wid, changes), rows, wid=wid,
+                                      defer_current=self._backend is not None and self._backend.delivery_due())
         except Exception:
             self.commitFailed.emit(sorted(changes))
             return False
@@ -522,7 +523,8 @@ class DeckPopupBridge(QObject):
     def _fire_reshow(self) -> None:
         """Deliver the coalesced build-class edits as one burst: its entry refresh, then one
         re-show of the current wallpaper, freeze kept. The burst carries every change's rows, its
-        first change's marker state and its last change's generation."""
+        last change's generation, and the bundle first when push.burst_existed says another change
+        may be pending in the marker."""
         keys = sorted(self._pending)
         self._pending.clear()
         tickets, self._tickets = self._tickets, []
@@ -531,7 +533,7 @@ class DeckPopupBridge(QObject):
             return
         rows = tuple(dict.fromkeys(row for t in tickets for row in t.rows))
         try:
-            outcome = push.deliver(replace(tickets[-1], existed=tickets[0].existed, rows=rows))
+            outcome = push.deliver(replace(tickets[-1], existed=push.burst_existed(tickets), rows=rows))
         except Exception:
             outcome = None
         if outcome is None or outcome.kind in ("refused", "uncertain"):

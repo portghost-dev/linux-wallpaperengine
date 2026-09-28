@@ -95,7 +95,8 @@ class TargetedWriteTest(unittest.TestCase):
             self.addCleanup(patcher.stop)
         return settings_bridge.SettingsBridge(types.SimpleNamespace(
             _fullscreen_ignore_ids=push._fullscreen_ignore_ids,
-            _app_condition_names=push._app_condition_names))
+            _app_condition_names=push._app_condition_names,
+            delivery_due=lambda: False))
 
     def test_a_settings_update_changes_only_its_own_line(self) -> None:
         p = paths.settings_file()

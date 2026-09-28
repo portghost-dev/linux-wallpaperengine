@@ -64,6 +64,7 @@ class DeckPopupSessionTests(unittest.TestCase):
             _sync_engine=lambda: None,
             showNow=lambda wid: True,
             hold_delivery=lambda owner, due: None,
+            delivery_due=lambda: False,
         )
         self.popup = self.popup_mod.DeckPopupBridge(self.backend)
         self.failures: list[list] = []

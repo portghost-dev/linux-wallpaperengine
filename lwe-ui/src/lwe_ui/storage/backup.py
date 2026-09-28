@@ -227,8 +227,10 @@ def snapshot(r: dict[str, Any]) -> bool:
 
 def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
     """Write a preflight's plan through this build's stores, after a snapshot of what is
-    there now. Returns the receipt with the plan removed and any write failure added to
-    errors; the receipt is refused only when nothing was written."""
+    there now and after the sync marker records BUNDLE and CURRENT with a raised generation,
+    so the engine side is owed before any store changes. Returns the receipt with the plan
+    removed and any write failure added to errors; the receipt is refused only when nothing
+    was written."""
     r = dict(plan_receipt)
     plan = r.pop("plan", None) or {}
     if r.get("refused"):
@@ -243,6 +245,14 @@ def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
             r["refused"] = True
             return r
         if not snapshot(r):
+            return r
+        from ..engine import marker
+        try:
+            with marker.writing(("BUNDLE", "CURRENT")):
+                pass
+        except OSError as exc:
+            r["errors"].append({"file": "sync-pending", "reason": f"The sync marker could not be written: {exc}"})
+            r["refused"] = True
             return r
         written = 0
         for st in registry.STORES:
