@@ -6,8 +6,9 @@ and nothing is made. playlist <p> saves only the ACTIVE_PLAYLIST line and sends 
 lanes-set with the playlist and manual, whether or not the engine's schedule is on, and the receipt names
 the next start time. With the schedule on in the store and the engine away it exits 2 with nothing saved
 and no marker; with it off, the switch is saved and pending; an engine lost after the status read
-leaves it saved, pending and not made. The playlist already playing sends nothing; one the store names
-while the engine is bound elsewhere under the schedule gets the manual bind with nothing written.
+leaves it saved, pending and not made. The playlist already playing gets one lanes-set naming it with
+manual and nothing else, so an engine held after a refused restore releases, with nothing written; one the
+store names while the engine is bound elsewhere under the schedule gets the manual bind with nothing written.
 playlist load binds the saved playlist without manual. A name shared by two files exits 1 listing both,
 and the words list and load win over playlists with those names.
 
@@ -59,6 +60,14 @@ SWITCHED = "Switched to {}; the next wallpaper comes from it.\n"
 
 def lanes(enabled: bool) -> tuple:
     return ("lanes-set", {"lanes": [{"id": "all", "enabled": enabled}]})
+
+
+def releases(calls) -> bool:
+    """Whether these requests carry the engine's release (Application/BootGuard.cpp::release): a show, next or
+    prev without "automatic": true, or a lanes-set with a lane whose "manual" is true."""
+    return any((cmd in ("show", "next", "prev") and args.get("automatic") is not True)
+               or (cmd == "lanes-set" and any(lane.get("manual") is True for lane in args.get("lanes", [])))
+               for cmd, args in calls)
 
 
 def tearDownModule() -> None:
@@ -398,12 +407,20 @@ class PlaylistVerbTest(unittest.TestCase):
         engine.stop()
         self.assertEqual(self.lwe("playlist", "load"), (2, "", "the service is not running\n"))
 
-    def test_the_playing_playlist_sends_nothing_and_a_stored_one_bound_elsewhere_gets_the_manual_bind(self) -> None:
+    def test_the_playing_playlist_gets_one_manual_lanes_set_and_a_stored_one_bound_elsewhere_the_manual_bind(
+            self) -> None:
         self.four()
         before = self.snapshot()
         engine = self.engine(schedule=SCHEDULE_ON, lanes=[{"id": "all", "playlist": "night"}])
-        self.assertEqual(self.lwe("playlist", "night"), (0, "Night (4) is already playing.\n", ""))
-        self.assertEqual(engine.calls, [("status", {})])
+        rebind = ("lanes-set", {"lanes": [{"id": "all", "playlist": "night", "manual": True}]})
+        got = []
+        for held in (True, False):
+            engine.set(restore_refused=held)
+            engine.calls.clear()
+            self.assertEqual(self.lwe("playlist", "night"), (0, "Night (4) is already playing.\n", ""))
+            got.append((held, self.sent(engine), releases(engine.calls)))
+        self.assertEqual(got, [(True, [rebind], True), (False, [rebind], True)])
+        engine.calls.clear()
         self.assertEqual(self.lwe("playlist", "main"), (0, SWITCHED.format("Main (3)"), ""))
         self.assertEqual(self.sent(engine), [("playlist-set", "main", "shuffle", 900, 1, 1, 2),
                                              ("lanes-set", {"lanes": [{"id": "all", "playlist": "main",

@@ -367,9 +367,9 @@ def _load(ctx: Context, name: str) -> int:
 
 
 def _reshow_load(ctx: Context, name: str) -> int:
-    """resclamp, effectclamp, texturecache or texturedetail load: one re-show of the wallpaper on screen
-    keeping the speed status reported, plus the restart line when the saved value differs from the
-    engine's start value."""
+    """resclamp, effectclamp, texturecache or texturedetail load: one re-show of the wallpaper on screen,
+    marked automatic as a side effect that must not release a held engine, keeping the speed status
+    reported, plus the restart line when the saved value differs from the engine's start value."""
     from ... import api_client, version
     from ...engine import push, resolve
     from ...storage import lock, settings
@@ -392,7 +392,7 @@ def _reshow_load(ctx: Context, name: str) -> int:
         return DONE
     speed = status.get("speed")
     with lock.held("sync"):
-        reply = push.show_final(screen)
+        reply = push.show_final(screen, automatic=True)
         skips = resolve.resolve_show_args(screen)[1].get("skip_objects")
         if skips:
             api_client.set_skip(skips)

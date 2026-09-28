@@ -295,6 +295,15 @@ def engine_only() -> contextlib.AbstractContextManager[None]:
     return lock.held("sync")
 
 
+def rebind(slug: str) -> dict[str, Any] | None:
+    """The user's pick of the playlist already playing: one lanes-set naming `slug` with manual, under
+    the sync hold, so an engine held after a refused restore releases. It leaves the lane's enabled
+    out, and the engine rebinds only a new playlist or a new enabled, so an engine that is not held
+    changes nothing. Returns the reply, None when the engine never answered."""
+    with engine_only():
+        return api_client.lanes_set([{"id": "all", "playlist": slug, "manual": True}])
+
+
 @contextlib.contextmanager
 def restart_hold() -> Iterator[None]:
     """The window restart's sync hold, which lasts through the wait for the new engine and its sync.

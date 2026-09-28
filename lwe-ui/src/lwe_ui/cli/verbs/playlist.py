@@ -94,6 +94,12 @@ def _send(ctx: Context, slug: str, bind: bool, manual: bool = False) -> int | No
         else:
             lane = {"id": "all", "playlist": slug, "enabled": enabled} if bind else {"id": "all", "enabled": enabled}
             reply = api_client.lanes_set([{**lane, "manual": True} if manual else lane])
+    return _answered(ctx, reply)
+
+
+def _answered(ctx: Context, reply: dict | None) -> int | None:
+    """The exit code of the last request when it did not end ok, named on stderr, else None."""
+    from ... import api_client
     cls = api_client.last_class()
     if cls == "away":
         return _refuse(ctx, NOT_RUNNING, ENGINE_DOWN)
@@ -258,10 +264,11 @@ def _list(ctx: Context) -> int:
 
 
 def _switch(ctx: Context, word: str) -> int:
-    """playlist <p>: steps 1 and 2 here (the pick, one status read, the version check and the
-    schedule's state), then ACTIVE_PLAYLIST through the change runner, which binds p, manual while
-    the schedule is on. The playlist already playing sends nothing; when only the store names p, the
-    manual bind is sent under the sync lock with no store change."""
+    """playlist <p>: the pick and one status read here (the version check and the schedule's
+    state), then ACTIVE_PLAYLIST through the change runner, which binds p with manual. The
+    playlist already playing gets push.rebind's one manual lanes-set while status answers, so a held
+    engine releases, with no store change; when only the store names p, the manual bind is sent under
+    the sync lock with no store change."""
     from ...engine import push
     from ...storage import paths, playlists, settings
     from .. import select
@@ -279,6 +286,10 @@ def _switch(ctx: Context, word: str) -> int:
         return _refuse(ctx, SWITCH_AWAY, ENGINE_DOWN)
     title = f"{pick.name or pick.slug} ({pick.number})"
     if settings_table.derived_active_playlist(status)[0] == pick.slug:
+        if first[0] == "ok":
+            code = _answered(ctx, push.rebind(pick.slug))
+            if code is not None:
+                return code
         if ctx.json:
             _print_json(ctx, {"playlist": pick.name, "setting": "playlist", "value": pick.name, "saved": False,
                               "outcome": None, "reason": ""})

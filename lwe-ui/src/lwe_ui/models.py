@@ -630,9 +630,19 @@ class Backend(QObject):
 
     @Slot(str)
     def setActivePlaylist(self, slug: str) -> None:
+        """The user's own pick of a playlist. The one already playing gets push.rebind's manual
+        lanes-set while status answers, so a held engine releases, with no store change; any other is
+        switched through the change runner, bound with manual."""
+        first = push.read_status()
+        if first[0] == "ok" and push.derived_active(first[1])[0] == slug:
+            try:
+                push.rebind(slug)
+            except lock.StoreBusy as exc:
+                logging.getLogger(__name__).warning("playlist pick not sent: %s", exc)
+            return
         # the user's own switch: under a schedule the engine holds it until the next boundary
         if self._change("playlist switch", ("playlists", "settings"), lambda: playlists.set_active(slug),
-                        [("active", "ACTIVE_PLAYLIST")], slug=slug, manual=True) is None:
+                        [("active", "ACTIVE_PLAYLIST")], slug=slug, manual=True, status=first) is None:
             return
         self._after_playlist_change()
 

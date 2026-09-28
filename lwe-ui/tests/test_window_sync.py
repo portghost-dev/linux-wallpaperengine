@@ -19,8 +19,9 @@ pid that changes between polls, or one that arrives after the marker was cleared
 and is then recorded as served. While the engine reports that it refused its restore, a new window's first
 sight still sends its lanes-set as configured, enabled included; an explicit show, next or prev, from the
 window or the tray, carries no automatic flag and nothing follows it; the window's playlist switch sends
-manual with the schedule off; and a re-show the engine held sends no tail and never counts against the
-drain's retries. After a suspend the polls send the same engine nothing,
+manual with the schedule off, and its pick of the playlist already playing sends one lanes-set naming it with
+manual and nothing else, which releases a held engine; and a re-show the engine held sends no tail and never
+counts against the drain's retries. After a suspend the polls send the same engine nothing,
 a bundle that takes 6 s serves its engine once, an engine whose status gives no uptime stays unserved but
 gets only the bounded retries, and a deferred first sight followed by a build edit of another wallpaper
 shows once. An engine that reuses the pid of one whose window bundle stopped at its budget gets the
@@ -925,6 +926,24 @@ class WindowSyncTest(unittest.TestCase):
             self.backend.setActivePlaylist("night")
         self.assertEqual([lane for verb, args, _k in rec.calls if verb == "lanes_set" for lane in args[0]],
                          [{"id": "all", "playlist": "night", "enabled": True, "manual": True}])
+
+    def test_the_windows_pick_of_the_playing_playlist_sends_one_manual_lanes_set_and_releases_a_held_engine(
+            self) -> None:
+        got = []
+        for held in (True, False):
+            with self.engine(status(restore_refused=held)) as rec:
+
+                def release() -> None:
+                    if any(lane.get("manual") is True for lane in rec.calls[-1][1][0]):
+                        rec.status_reply["restore_refused"] = False
+                rec.hooks["lanes_set"] = release
+                before = marker.read()
+                self.backend.setActivePlaylist("main")
+            lanes = [lane for verb, args, _k in rec.calls if verb == "lanes_set" for lane in args[0]]
+            got.append((held, rec.verbs(), lanes, rec.status_reply["restore_refused"], marker.read() == before))
+        lane = {"id": "all", "playlist": "main", "manual": True}
+        self.assertEqual(got, [(True, ["lanes_set"], [lane], False, True), (False, ["lanes_set"], [lane], False, True)])
+        self.assertEqual(settings.load()["ACTIVE_PLAYLIST"], "main")
 
     def test_a_held_reshow_never_counts_against_the_drains_retries(self) -> None:
         self.backend._engine_pid_seen = 4242

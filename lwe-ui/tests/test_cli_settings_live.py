@@ -1,8 +1,9 @@
 """The live and next-wallpaper setting commands: each saves one line of settings.conf and sends the
 key's targeted push through the change runner, with the runner's outcome as the receipt; speed 0 and
-audiosmoothing go to the engine under sync and are never saved. A re-show the engine held, marked automatic
-and followed by no tail, in a bundle that ended applied prints the brake note through the command's output,
-one {"note": ...} line on stderr under -j, and one in a bundle that did not end applied prints none.
+audiosmoothing go to the engine under sync and are never saved; a restart-class load's re-show is marked
+automatic. A re-show the engine held, marked automatic and followed by no tail, in a bundle that ended
+applied prints the brake note through the command's output, one {"note": ...} line on stderr under -j, and
+one in a bundle that did not end applied prints none.
 
 Each form runs through cli.main in this process with HOME and the XDG folders at scratch
 (_cli_env.scratch_home), daemon_unit's subprocess call replaced by a recorder, one screen faked and a
@@ -288,6 +289,11 @@ class LiveSettingTest(unittest.TestCase):
                          (0, "texturedetail auto: the wallpaper on screen was shown again with it; nothing written.\n",
                           ""), "no restart line when the engine started with the saved value")
         self.assertEqual(self.conf.read_bytes(), before)
+
+    def test_a_restart_class_load_marks_its_reshow_automatic(self) -> None:
+        engine = self.engine(config={"LWE_SSFACTOR": {"value": "1"}})
+        self.assertEqual(self.lwe("resclamp", "load")[0], 0)
+        self.assertEqual([args.get("automatic") for cmd, args in self.sent(engine) if cmd == "show"], [True])
 
     def test_a_running_engine_from_another_build_refuses_and_writes_nothing(self) -> None:
         engine = self.engine(version="0.0.1-other")
