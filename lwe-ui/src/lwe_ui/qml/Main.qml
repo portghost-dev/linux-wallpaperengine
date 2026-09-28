@@ -71,6 +71,19 @@ ApplicationWindow {
     }
 
     property string currentView: "library"
+    // the view left closes its open entry as it hides; focus moves to the view shown only after
+    // that, and stays where it is when the header, the deck or a popup holds it
+    onCurrentViewChanged: Qt.callLater(window.focusCurrentView)
+    function focusCurrentView() {
+        for (var p = window.activeFocusItem; p; p = p.parent) {
+            if (p === header || p === deck || p === window.Overlay.overlay)
+                return;
+        }
+        var shown = { library: library, workshop: workshopView, settings: settingsView,
+                      editor: editorView, developer: developerView }[window.currentView];
+        if (shown)
+            shown.forceActiveFocus();
+    }
 
     // approve/trash/import all emit settingsChanged - the badge answers immediately
     // instead of on the 5s poll (review F13)
@@ -168,6 +181,7 @@ ApplicationWindow {
 
     Library {
         id: library
+        objectName: "libraryView"
         anchors.left: rail.right
         anchors.right: parent.right
         anchors.top: header.bottom
@@ -184,6 +198,7 @@ ApplicationWindow {
     }
 
     WorkshopView {
+        id: workshopView
         anchors.left: rail.right
         anchors.right: parent.right
         anchors.top: header.bottom
@@ -196,6 +211,7 @@ ApplicationWindow {
     }
 
     SettingsView {
+        id: settingsView
         anchors.left: rail.right
         anchors.right: parent.right
         anchors.top: header.bottom
@@ -205,6 +221,7 @@ ApplicationWindow {
     }
 
     EditorView {
+        id: editorView
         anchors.left: rail.right
         anchors.right: parent.right
         anchors.top: header.bottom
@@ -215,6 +232,7 @@ ApplicationWindow {
     }
 
     DeveloperView {
+        id: developerView
         anchors.left: rail.right
         anchors.right: parent.right
         anchors.top: header.bottom

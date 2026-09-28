@@ -68,7 +68,17 @@ ComboBox {
             font.pixelSize: cb.font.pixelSize
             verticalAlignment: Text.AlignVCenter
             selectByMouse: true
-            onVisibleChanged: if (visible) { text = cb.entryText; openedWith = text; selectAll(); forceActiveFocus(); }
+            // hidden while open, as when the view is left, it closes as Escape does
+            onVisibleChanged: {
+                if (!visible) {
+                    cb.finish("cancel");
+                    return;
+                }
+                text = cb.entryText;
+                openedWith = text;
+                selectAll();
+                forceActiveFocus();
+            }
             Keys.onReturnPressed: cb.finish("enter")
             Keys.onEnterPressed: cb.finish("enter")
             Keys.onShortcutOverride: function(event) { event.accepted = event.key === Qt.Key_Escape }

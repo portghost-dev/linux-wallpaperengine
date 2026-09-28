@@ -48,6 +48,8 @@ Rectangle {
             Keys.onReturnPressed: field.entered(input.text)
             Keys.onEnterPressed: field.entered(input.text)
             Keys.onEscapePressed: { input.text = field.storeText; input.focus = false; }
+            // hidden with focus, as when the view is left: closes as Escape does
+            onVisibleChanged: if (!visible && activeFocus) { input.text = field.storeText; input.focus = false; }
             onActiveFocusChanged: if (!activeFocus) field.entered(input.text)
         }
         Label {

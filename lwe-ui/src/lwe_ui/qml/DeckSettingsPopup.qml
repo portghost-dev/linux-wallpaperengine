@@ -376,6 +376,8 @@ Popup {
         }
         HoverHandler { cursorShape: Qt.IBeamCursor }
         TapHandler {
+            // a click inside an open entry leaves its typed text alone
+            enabled: !chip.editing
             onTapped: {
                 chipEdit.text = chip.text;
                 chipEdit.openedWith = chip.text;
@@ -480,6 +482,8 @@ Popup {
             anchors.bottom: parent.bottom
             HoverHandler { cursorShape: drop.editable ? Qt.IBeamCursor : Qt.PointingHandCursor }
             TapHandler {
+                // a click inside an open entry reaches the entry and leaves its typed text alone
+                enabled: !drop.editing
                 onTapped: {
                     if (drop.editable) {
                         dropEdit.text = drop.display;

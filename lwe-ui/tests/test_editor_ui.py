@@ -602,6 +602,18 @@ def main() -> None:
             (opened, shown, after)
         assert esc() == "library", "after another box's menu closes, Escape leaves the editor"
         to_view("editor")
+        tap(ss)
+        opened = (ss.property("editing"), entry(ss).hasActiveFocus())
+        tap(scaling)
+        QTest.qWait(150)
+        first = esc()
+        QTest.qWait(250)
+        holder = win.activeFocusItem()
+        after = (first, scaling_menu.property("visible"), entry(ss).hasActiveFocus(),
+                 holder.objectName() if holder is not None else None)
+        assert (opened, after) == ((True, True), ("editor", False, False, "editorView")), (opened, after)
+        assert esc() == "library", "after another box's menu closes over a drop box entry, Escape leaves the editor"
+        to_view("editor")
         assert win.isActive(), "the editor's window must be active before the tap"
         tap(zoom)
         other.requestActivate()
@@ -628,8 +640,8 @@ def main() -> None:
         print("OK closed entries - Return, the keypad's Enter, another box's menu or another window "
               "closes an entry and the next Escape leaves the editor")
 
-        # a blank chip entry with Enter returns the row to Global; an untouched tap left sends
-        # nothing; a typed value with Enter saves
+        # a chip's entry opens on its label: an untouched Enter sends nothing, a cleared entry with
+        # Enter returns the row to Global, and a typed value with Enter saves
         editor.open("synthwp_lo")
         to_view("editor")
         editor.setSpeedValue(2.0)
@@ -644,9 +656,7 @@ def main() -> None:
         QTest.keyClick(win, Qt.Key.Key_Return)
         QTest.qWait(120)
         entered = _wp.load_set("synthwp_lo").get("SPEED")
-        assert (opened, left, entered) == ((True, "", "2.0x"), 2.0, None), (opened, left, entered)
-        editor.setSpeedValue(2.0)
-        QTest.qWait(120)
+        assert (opened, left, entered) == ((True, "2.0x", "2.0x"), 2.0, 2.0), (opened, left, entered)
         tap(speed_chip)
         QTest.keyClick(win, Qt.Key.Key_X)
         QTest.keyClick(win, Qt.Key.Key_Backspace)
@@ -676,8 +686,48 @@ def main() -> None:
             QTest.qWait(120)
             blanks[key] = (kept is not None, _wp.load_set("synthwp_lo").get(key))
         assert blanks == dict.fromkeys(("VOLUME", "FIT_ZOOM", "FIT_PAN_X"), (True, None)), blanks
-        print("OK blank chip - Enter on a blank entry returns SPEED, VOLUME and the fit rows to Global; "
-              "a tap left untouched keeps them; a typed value saves")
+        # rows that inherit, and a chip with no Global: an untouched Enter changes, marks and fails
+        # nothing; only a cleared Enter marks the failure
+        editor.open("synthwp_props")
+        to_view("editor")
+        conf_before = _wp.load_set("synthwp_props")
+        settings_before = paths.settings_file().read_bytes()
+        failures.clear()
+        edits.clear()
+        quiet = {}
+        for key in ("VOLUME", "FIT_PAN_Y", "ENGINE_VOLUME"):
+            item = chip(key)
+            tap(item)
+            shown = entry(item).property("text") == item.property("text")
+            QTest.keyClick(win, Qt.Key.Key_Return)
+            QTest.qWait(120)
+            quiet[key] = (shown, editor.isMarked(key))
+        untouched = (quiet, list(edits), list(failures), _wp.load_set("synthwp_props") == conf_before,
+                     paths.settings_file().read_bytes() == settings_before)
+        item = chip("ENGINE_VOLUME")
+        tap(item)
+        entry(item).setProperty("text", "")
+        QTest.keyClick(win, Qt.Key.Key_Return)
+        QTest.qWait(120)
+        cleared = (list(failures), paths.settings_file().read_bytes() == settings_before)
+        assert (untouched, cleared) == \
+            ((dict.fromkeys(("VOLUME", "FIT_PAN_Y", "ENGINE_VOLUME"), (True, False)), [], [], True, True),
+             ([["ENGINE_VOLUME"]], True)), (untouched, cleared)
+        # a cancelled entry's typed text is gone when the chip opens again
+        editor.setFit("zoom", "1.2")
+        QTest.qWait(120)
+        zoom_chip = chip("FIT_ZOOM")
+        tap(zoom_chip)
+        entry(zoom_chip).setProperty("text", "1.8")
+        QTest.keyClick(win, Qt.Key.Key_Escape)
+        QTest.qWait(80)
+        tap(zoom_chip)
+        reopened = (entry(zoom_chip).property("text"), zoom_chip.property("text"))
+        QTest.keyClick(win, Qt.Key.Key_Return)
+        QTest.qWait(120)
+        assert (reopened, _wp.load_set("synthwp_props").get("FIT_ZOOM")) == (("1.20", "1.20"), 1.2), reopened
+        print("OK chip entries - a chip opens on its label, an untouched Enter changes nothing, a cleared Enter "
+              "returns the row to Global, and a reopened chip shows its label")
 
         # the property filter is an entry: Escape drops its focus and keeps the filter
         editor.open("synthwp_props")
@@ -798,6 +848,98 @@ def main() -> None:
         print("OK Settings - a combo entry closed by Escape, Return, another window or the deck popup gives "
               "focus back; the next Escape leaves Settings and no other view inherits the focus")
 
+        # a view switch closes the left view's open entry as Escape does and gives focus to the view
+        # shown: nothing typed before or after the switch is saved, and Escape reaches the new view
+        def focus_name():
+            h = win.activeFocusItem()
+            return h.objectName() if h is not None else None
+
+        editor.open("synthwp_lo")
+        editor.clearOverride("speed")
+        to_view("editor")
+        speed_chip = chip("SPEED")
+        tap(speed_chip)
+        entry(speed_chip).setProperty("text", "4")
+        to_view("library")
+        f1 = (focus_name(), entry(speed_chip).hasActiveFocus(), speed_chip.property("editing"))
+        QTest.keyClick(win, Qt.Key.Key_5)
+        QTest.keyClick(win, Qt.Key.Key_Return)
+        QTest.qWait(120)
+        f1 += (_wp.load_set("synthwp_lo").get("SPEED"),)
+        ss_box = box("SSFACTOR")
+        clamp = _wp.load_set("synthwp_lo").get("SSFACTOR")
+        to_view("editor")
+        tap(ss_box)
+        entry(ss_box).setProperty("text", "1.75")
+        to_view("library")
+        boxed = (focus_name(), entry(ss_box).hasActiveFocus(), _wp.load_set("synthwp_lo").get("SSFACTOR") == clamp)
+        to_view("settings")
+        settings_view = win.findChild(QQuickItem, "settingsView")
+        settings_view.setProperty("pageIndex", 1)
+        QTest.qWait(200)
+        combo = next(i for i in walk(settings_view) if i.property("objectName") == "settingsSsfactorCombo")
+        combo_entry = next(i for i in walk(combo) if i.metaObject().className().startswith("QQuickTextInput"))
+        stored = paths.settings_file().read_bytes()
+        combo.setProperty("editing", True)
+        QTest.qWait(80)
+        combo_entry.setProperty("text", "3")
+        to_view("library")
+        f2 = (focus_name(), combo_entry.hasActiveFocus(), combo.property("editing"))
+        QTest.keyClick(win, Qt.Key.Key_2)
+        QTest.keyClick(win, Qt.Key.Key_Return)
+        QTest.qWait(120)
+        f2 += (paths.settings_file().read_bytes() == stored,)
+        to_view("editor")
+        zoom_chip = chip("FIT_ZOOM")
+        tap(zoom_chip)
+        to_view("settings")
+        f3 = (focus_name(), esc())
+        to_view("editor")
+        title_entry = next(i for i in walk(view_item) if "TextField" in i.metaObject().className()
+                           and i.property("text") == "synthwp_lo")
+        tap(title_entry)
+        title_entry.setProperty("text", "Switched")
+        to_view("library")
+        titled = (focus_name(), title_entry.hasActiveFocus(), title_entry.property("text"),
+                  _meta.get("synthwp_lo").get("title"))
+        editor.open("synthwp_props")
+        to_view("editor")
+        QTest.qWait(200)
+        props_before = dict(_wp.load_set("synthwp_props")["props"])
+        for shown, text in ((lambda t: t.startswith("#"), "#00ff00"), (lambda t: t in ("hi", "bye"), "zzz")):
+            to_view("editor")
+            typed_entry = next(i for i in walk(view_item) if i.metaObject().className().startswith("QQuickTextInput")
+                               and shown(str(i.property("text"))))
+            tap(typed_entry)
+            typed_entry.setProperty("text", text)
+            to_view("library")
+        propped = (focus_name(), dict(_wp.load_set("synthwp_props")["props"]) == props_before)
+        assert settings_bridge.commit("DETECT_MODE", "interval")
+        to_view("settings")
+        settings_view.setProperty("pageIndex", 2)
+        QTest.qWait(300)
+        field = next(i for i in walk(settings_view) if i.metaObject().className().startswith("SettingsField"))
+        field_entry = next(i for i in walk(field) if i.metaObject().className().startswith("QQuickTextInput"))
+        interval = settings.load().get("DETECT_INTERVAL_SEC")
+        tap(field_entry)
+        field_entry.setProperty("text", "77")
+        to_view("library")
+        fielded = (focus_name(), field_entry.hasActiveFocus(), settings.load().get("DETECT_INTERVAL_SEC") == interval)
+        settings_view.setProperty("pageIndex", 1)
+        # focus held outside the views stays there: the deck popup keeps its Escape across a switch
+        QMetaObject.invokeMethod(popup_root, "open")
+        QTest.qWait(300)
+        to_view("settings")
+        kept = (popup_root.property("activeFocus"), esc(), popup_root.property("visible"))
+        QTest.qWait(200)
+        assert (f1, boxed, f2, f3, titled, propped, fielded, kept) == \
+            (("libraryView", False, False, None), ("libraryView", False, True), ("libraryView", False, False, True),
+             ("settingsView", "library"), ("libraryView", False, "synthwp_lo", None), ("libraryView", True),
+             ("libraryView", False, True), (True, "settings", False)), \
+            (f1, boxed, f2, f3, titled, propped, fielded, kept)
+        print("OK view switch - an entry open when the view changes closes without saving, and the view shown "
+              "takes focus and the next Escape")
+
         # the deck popup's own entries keep the same rules. Its 2 s status poll would walk it onto
         # the engine's wallpaper (none here) mid-test, so the poll is held still
         polls = [t for t in win.findChildren(QObject)
@@ -901,6 +1043,58 @@ def main() -> None:
         QTest.qWait(200)
         print("OK deck popup - an untouched chip or text entry sends nothing, a blank chip entry returns its row "
               "to Global, Escape cancels and keeps the popup, and a closed entry leaves the next Escape to it")
+
+        # a click inside an open entry, on its text or its margin, leaves the typed text alone
+        def click_at(item, x):
+            at = item.mapToScene(QPointF(x, item.height() / 2)).toPoint()
+            QTest.mouseClick(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, at)
+            QTest.qWait(80)
+
+        to_view("library")
+        editor.open("synthwp_lo")
+        editor.clearOverride("speed")
+        to_view("editor")
+        clicked = []
+        for item, typed, x, key in ((chip("SPEED"), "3", 12, "SPEED"), (chip("SPEED"), "4", 3, "SPEED"),
+                                    (box("SSFACTOR"), "1.25", 20, "SSFACTOR")):
+            tap(item)
+            entry(item).setProperty("text", typed)
+            click_at(item, x)
+            kept = (entry(item).property("text"), item.property("editing"))
+            QTest.keyClick(win, Qt.Key.Key_Return)
+            QTest.qWait(120)
+            clicked.append((kept, _wp.load_set("synthwp_lo").get(key)))
+        assert clicked == [(("3", True), 3.0), (("4", True), 4.0), (("1.25", True), 1.25)], clicked
+        to_view("library")
+        for poll in win.findChildren(QObject):
+            if poll.metaObject().className() == "QQmlTimer" and poll.property("interval") == 2000:
+                poll.setProperty("running", False)
+        _wp.update_set("synthwp_hi", {"FIT_ZOOM": None})
+        deck_popup.syncCurrent("synthwp_hi")
+        QMetaObject.invokeMethod(popup_root, "open")
+        QTest.qWait(400)
+        deck_content = popup_root.property("contentItem")
+        deck_zoom = next(i for i in walk(deck_content) if i.property("ckey") == "FIT_ZOOM"
+                         and i.property("editing") is not None and i.property("display") is None and i.isVisible())
+        deck_fps = next(i for i in walk(deck_content) if i.property("ckey") == "ENGINE_FPS"
+                        and i.property("editable") is True and i.isVisible())
+        deck_clicked = []
+        for item, typed, x, read in ((deck_zoom, "1.7", 3, lambda: _wp.load_set("synthwp_hi").get("FIT_ZOOM")),
+                                     (deck_fps, "45", 15, lambda: settings.load().get("ENGINE_FPS"))):
+            at = item.mapToScene(QPointF(min(15.0, item.width() / 2), item.height() / 2)).toPoint()
+            QTest.mouseClick(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, at)
+            QTest.qWait(60)
+            entry(item).setProperty("text", typed)
+            click_at(item, x)
+            kept = (entry(item).property("text"), item.property("editing"))
+            QTest.keyClick(win, Qt.Key.Key_Return)
+            QTest.qWait(120)
+            deck_clicked.append((kept, read()))
+        QMetaObject.invokeMethod(popup_root, "close")
+        QTest.qWait(200)
+        assert deck_clicked == [(("1.7", True), 1.7), (("45", True), 45)], deck_clicked
+        print("OK click inside - a click on an open entry's text or margin keeps what was typed, in the editor "
+              "and the deck popup")
     finally:
         for k, v in orig.items():
             if v is None:

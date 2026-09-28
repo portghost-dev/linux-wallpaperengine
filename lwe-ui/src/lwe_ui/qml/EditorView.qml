@@ -373,19 +373,17 @@ Rectangle {
         border.width: view.isFailed(ckey) ? 1.5 : 1
         border.color: view.isFailed(ckey) ? view.failColor
                     : (view.isMarked(ckey) ? view.markColor : Theme.border)
-        // Enter sends a changed text, and a blank one always: a blank entry returns the row to
-        // what it inherits. Leaving sends a changed text; Escape sends nothing. A close by key
-        // gives focus to the view, so the next Escape reaches it and not the hidden entry
+        // the entry opens on the chip's text, so a cleared entry is a change and returns the row
+        // to what it inherits. Enter or leaving sends a changed text; Escape sends nothing. A
+        // close by key gives focus to the view, so the next Escape reaches it
         function finish(how) {
             if (!chip.editing)
                 return;
             chip.editing = false;
-            var t = chipEdit.text;
             if (how !== "leave")
                 view.forceActiveFocus();
-            if (how === "enter" ? (t !== chipEdit.openedWith || t.trim() === "")
-                                : (how === "leave" && t !== chipEdit.openedWith))
-                chip.entered(t);
+            if (how !== "cancel" && chipEdit.text !== chipEdit.openedWith)
+                chip.entered(chipEdit.text);
         }
         Label {
             id: chipLabel
@@ -418,12 +416,16 @@ Rectangle {
                 else if (!chip.editing)
                     view.forceActiveFocus();
             }
+            // hidden while open, as when the view is left: closes as Escape does
+            onVisibleChanged: if (!visible) chip.finish("cancel")
         }
         HoverHandler { cursorShape: Qt.IBeamCursor }
         TapHandler {
+            // a click inside an open entry leaves its typed text alone
+            enabled: !chip.editing
             onTapped: {
-                // click the box and type; a blank entry returns the row to what it inherits
-                chipEdit.openedWith = chipEdit.text;
+                chipEdit.text = chip.text;
+                chipEdit.openedWith = chip.text;
                 chip.editing = true;
                 chipEdit.forceActiveFocus();
                 chipEdit.selectAll();
@@ -530,6 +532,8 @@ Rectangle {
                 else if (!drop.editing)
                     view.forceActiveFocus();
             }
+            // hidden while open, as when the view is left: closes as Escape does
+            onVisibleChanged: if (!visible) drop.finish("cancel")
         }
         Item {
             id: caret
@@ -562,6 +566,8 @@ Rectangle {
             anchors.bottom: parent.bottom
             HoverHandler { cursorShape: drop.editable ? Qt.IBeamCursor : Qt.PointingHandCursor }
             TapHandler {
+                // a click inside an open entry reaches the entry and leaves its typed text alone
+                enabled: !drop.editing
                 onTapped: {
                     if (drop.editable) {
                         dropEdit.text = drop.display;
@@ -1910,10 +1916,13 @@ Rectangle {
                                 border.color: parent.activeFocus ? Theme.borderStrong : Theme.border }
                             onActiveFocusChanged: if (activeFocus) openedWith = text
                             Keys.onShortcutOverride: function(event) { event.accepted = event.key === Qt.Key_Escape }
-                            Keys.onEscapePressed: {
+                            function cancelEntry() {
                                 titleField.text = Qt.binding(function() { return editor.title; });
                                 titleField.focus = false;
                             }
+                            Keys.onEscapePressed: titleField.cancelEntry()
+                            // hidden with focus, as when the view is left: closes as Escape does
+                            onVisibleChanged: if (!visible && activeFocus) titleField.cancelEntry()
                             onEditingFinished: {
                                 if (titleField.text === titleField.openedWith)
                                     return;
