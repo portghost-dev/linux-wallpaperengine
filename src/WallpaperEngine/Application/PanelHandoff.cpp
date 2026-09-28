@@ -36,7 +36,7 @@ std::optional<std::string> findPanelLauncher (
 	start = colon + 1;
     }
 
-    if (!home.empty ()) {
+    if (home.starts_with ('/')) {
 	candidates.push_back (home + "/.local/bin/lwe-ui");
 	candidates.push_back (home + "/.local/share/lwe-ui/venv/bin/lwe-ui");
     }

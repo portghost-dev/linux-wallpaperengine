@@ -657,7 +657,8 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/FullscreenPolicy.cpp
         src/WallpaperEngine/Testing/Cases/LweCommand.cpp
         src/WallpaperEngine/Testing/Cases/CommandClient.cpp
-        src/WallpaperEngine/Testing/Cases/PanelHandoff.cpp)
+        src/WallpaperEngine/Testing/Cases/PanelHandoff.cpp
+        src/WallpaperEngine/Testing/Cases/RunPath.cpp)
 endif()
 
 add_library(
@@ -873,8 +874,8 @@ install(TARGETS linux-wallpaperengine-lib
 )
 
 # Install everything else from the output directory (CEF resources and the like).
-# Every binary of our own is excluded here because install(TARGETS) already placed it
-# with its install RPATH and permissions, and a directory copy would overwrite that.
+# The binaries are excluded because install(TARGETS) already placed them with their
+# permissions, and a directory copy would give them none.
 # Everything of ours is in component lwe; the vendored projects' own install rules
 # are skipped by installing only that component.
 install(DIRECTORY ${TARGET_OUTPUT_DIRECTORY}/ DESTINATION . COMPONENT lwe
