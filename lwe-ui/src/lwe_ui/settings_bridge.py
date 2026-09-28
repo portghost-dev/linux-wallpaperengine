@@ -272,6 +272,11 @@ class SettingsBridge(QObject):
         self.commitFailed.emit([key], reason)
         return False
 
+    @Slot(str)
+    def refuseRange(self, key: str) -> None:
+        """The out-of-range refusal for a value a row's own narrower range refuses before commit."""
+        self._fail(str(key), "That value is outside the allowed range.")
+
     @Slot(str, "QVariant", result=bool)
     def commit(self, key: str, value: Any) -> bool:
         """Validate, then save through the change runner, which sends the key's push resolved

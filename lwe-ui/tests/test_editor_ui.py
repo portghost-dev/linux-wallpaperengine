@@ -344,6 +344,11 @@ def main() -> None:
             return next(i for i in walk(win.contentItem())
                         if i.property("ckey") == key and i.property("editable") is not None)
 
+        def chip(key):
+            return next(i for i in walk(win.contentItem())
+                        if i.property("ckey") == key and i.property("entries") is not None
+                        and i.property("editable") is None)
+
         def entry(item):
             return next(i for i in walk(item) if i.metaObject().className().startswith("QQuickTextInput"))
 
@@ -364,7 +369,7 @@ def main() -> None:
         failures, edits = [], []
         editor.commitFailed.connect(lambda keys: failures.append(list(keys)))
         editor.edited.connect(lambda: edits.append(1))
-        ss, cc, fps = box("SSFACTOR"), box("CLAMPCOMPOSITES"), box("ENGINE_FPS")
+        ss, cc, fps = chip("SSFACTOR"), chip("CLAMPCOMPOSITES"), box("ENGINE_FPS")
         conf = paths.wp_file("synthwp_lo")
         tap(ss)
         opened = (ss.property("editing"), entry(ss).property("text"), entry(ss).hasActiveFocus())
@@ -388,7 +393,7 @@ def main() -> None:
         opened = entry(ss).property("text")
         QTest.keyClick(win, Qt.Key.Key_Return)
         QTest.qWait(80)
-        assert opened == editor.clampValue("SSFACTOR"), (opened, editor.clampValue("SSFACTOR"))
+        assert opened == "1.50", opened
         assert (failures, edits, editor._reshow.isActive(), conf.read_text(encoding="utf-8")) == \
             ([], [], False, before), "an own number entered unchanged saves nothing and re-shows nothing"
         tap(ss)
@@ -396,29 +401,22 @@ def main() -> None:
         QTest.keyClick(win, Qt.Key.Key_Return)
         QTest.qWait(80)
         assert (_wp.load_set("synthwp_lo").get("SSFACTOR"), edits, editor._reshow.isActive()) == (2.0, [1], True)
-        print("OK clamp and FPS boxes - a tap left or entered unchanged sends nothing; a changed entry saves")
-        QMetaObject.invokeMethod(cc, "picked", Qt.ConnectionType.DirectConnection, Q_ARG("QString", "1"))
-        QMetaObject.invokeMethod(ss, "picked", Qt.ConnectionType.DirectConnection, Q_ARG("QString", "0"))
+        print("OK clamp chips and FPS box - a tap left or entered unchanged sends nothing; a changed entry saves")
+        assert editor.setClampValue("CLAMPCOMPOSITES", "1") and editor.setClampValue("SSFACTOR", "0")
         QTest.qWait(80)
         stored = _wp.load_set("synthwp_lo")
-        assert (stored.get("SSFACTOR"), stored.get("CLAMPCOMPOSITES")) == (0.0, 1.0), stored
+        picked = ((stored.get("SSFACTOR"), stored.get("CLAMPCOMPOSITES")), ss.property("text"), cc.property("text"))
         assert editor.setClampValue("CLAMPCOMPOSITES", "0.5")
         QTest.qWait(80)
-        shown = (ss.property("display"), cc.property("display"))
-        assert shown == (editor.clampValue("SSFACTOR"), editor.clampValue("CLAMPCOMPOSITES")) \
-            and shown[0] != shown[1], shown
-        print("OK clamp rows - each menu pick saves and each box displays its own key")
+        shown = (ss.property("text"), cc.property("text"))
+        assert (picked, shown) == (((0.0, 1.0), "Off", "1.00"), ("Off", "0.50")), (picked, shown)
+        print("OK clamp rows - each chip shows its own key's value")
 
         # the value chips: a tap, then a move away with nothing typed, sends nothing; a typed change
         # saves. Escape in an open entry cancels it and the view stays on the editor; with no entry
         # open, Escape still leaves the editor
         from PySide6.QtQuick import QQuickItem
         view_item = win.findChild(QQuickItem, "editorView")
-
-        def chip(key):
-            return next(i for i in walk(win.contentItem())
-                        if i.property("ckey") == key and i.property("entries") is not None
-                        and i.property("editable") is None)
 
         zoom, speed = chip("FIT_ZOOM"), chip("ENGINE_TIMESCALE")
         assert editor.setFit("zoom", "1.25")
@@ -568,7 +566,7 @@ def main() -> None:
 
         editor.open("synthwp_lo")
         to_view("editor")
-        ss, fps, zoom = box("SSFACTOR"), box("ENGINE_FPS"), chip("FIT_ZOOM")
+        ss, fps, zoom = chip("SSFACTOR"), box("ENGINE_FPS"), chip("FIT_ZOOM")
         answers = []
         for item, typed, key in ((ss, "2", Qt.Key.Key_Return), (fps, None, Qt.Key.Key_Return),
                                  (zoom, "1.5", Qt.Key.Key_Return), (zoom, "1.6", Qt.Key.Key_Enter),
@@ -603,14 +601,14 @@ def main() -> None:
             (opened, shown, after)
         assert esc() == "library", "after another box's menu closes, Escape leaves the editor"
         to_view("editor")
-        tap(ss)
-        opened = (ss.property("editing"), entry(ss).hasActiveFocus())
+        tap(fps)
+        opened = (fps.property("editing"), entry(fps).hasActiveFocus())
         tap(scaling)
         QTest.qWait(150)
         first = esc()
         QTest.qWait(250)
         holder = win.activeFocusItem()
-        after = (first, scaling_menu.property("visible"), entry(ss).hasActiveFocus(),
+        after = (first, scaling_menu.property("visible"), entry(fps).hasActiveFocus(),
                  holder.objectName() if holder is not None else None)
         assert (opened, after) == ((True, True), ("editor", False, False, "editorView")), (opened, after)
         assert esc() == "library", "after another box's menu closes over a drop box entry, Escape leaves the editor"
@@ -627,16 +625,16 @@ def main() -> None:
             (away, back)
         assert esc() == "library", "after another window took the focus, Escape leaves the editor"
         # the caret closes an open entry by the same rule, also while its menu will not reopen
-        ss_menu = next(o for o in ss.findChildren(QObject) if o.inherits("QQuickMenu"))
+        fps_menu = next(o for o in fps.findChildren(QObject) if o.inherits("QQuickMenu"))
         to_view("editor")
-        tap(ss)
-        opened = (ss.property("editing"), entry(ss).hasActiveFocus())
-        ss_menu.setProperty("justClosed", True)
-        at = ss.mapToScene(QPointF(ss.width() - 8, ss.height() / 2)).toPoint()
+        tap(fps)
+        opened = (fps.property("editing"), entry(fps).hasActiveFocus())
+        fps_menu.setProperty("justClosed", True)
+        at = fps.mapToScene(QPointF(fps.width() - 8, fps.height() / 2)).toPoint()
         QTest.mouseClick(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, at)
         QTest.qWait(80)
-        closed = (ss.property("editing"), ss_menu.property("visible"), entry(ss).hasActiveFocus())
-        ss_menu.setProperty("justClosed", False)
+        closed = (fps.property("editing"), fps_menu.property("visible"), entry(fps).hasActiveFocus())
+        fps_menu.setProperty("justClosed", False)
         assert (opened, closed, esc()) == ((True, True), (False, False, False), "library"), (opened, closed)
         print("OK closed entries - Return, the keypad's Enter, another box's menu or another window "
               "closes an entry and the next Escape leaves the editor")
@@ -816,7 +814,7 @@ def main() -> None:
             sview = win.findChild(QQuickItem, "settingsView")
             sview.setProperty("pageIndex", 1)
             QTest.qWait(200)
-            combo = next(i for i in walk(sview) if i.property("objectName") == "settingsSsfactorCombo")
+            combo = next(i for i in walk(sview) if i.property("objectName") == "settingsSsfactorChip")
             return combo, next(i for i in walk(combo) if i.metaObject().className().startswith("QQuickTextInput"))
 
         combo, combo_entry = ss_combo()
@@ -882,18 +880,18 @@ def main() -> None:
         QTest.keyClick(win, Qt.Key.Key_Return)
         QTest.qWait(120)
         f1 += (_wp.load_set("synthwp_lo").get("SPEED"),)
-        ss_box = box("SSFACTOR")
-        clamp = _wp.load_set("synthwp_lo").get("SSFACTOR")
+        fps_box = next(i for i in walk(view_item) if i.property("ckey") == "ENGINE_FPS" and i.property("editable"))
+        fps_stored = paths.settings_file().read_bytes()
         to_view("editor")
-        tap(ss_box)
-        entry(ss_box).setProperty("text", "1.75")
+        tap(fps_box)
+        entry(fps_box).setProperty("text", "45")
         to_view("library")
-        boxed = (focus_name(), entry(ss_box).hasActiveFocus(), _wp.load_set("synthwp_lo").get("SSFACTOR") == clamp)
+        boxed = (focus_name(), entry(fps_box).hasActiveFocus(), paths.settings_file().read_bytes() == fps_stored)
         to_view("settings")
         settings_view = win.findChild(QQuickItem, "settingsView")
         settings_view.setProperty("pageIndex", 1)
         QTest.qWait(200)
-        combo = next(i for i in walk(settings_view) if i.property("objectName") == "settingsSsfactorCombo")
+        combo = next(i for i in walk(settings_view) if i.property("objectName") == "settingsSsfactorChip")
         combo_entry = next(i for i in walk(combo) if i.metaObject().className().startswith("QQuickTextInput"))
         stored = paths.settings_file().read_bytes()
         combo.setProperty("editing", True)
@@ -1162,16 +1160,18 @@ def main() -> None:
         editor.clearOverride("speed")
         to_view("editor")
         clicked = []
-        for item, typed, x, key in ((chip("SPEED"), "3", 12, "SPEED"), (chip("SPEED"), "4", 3, "SPEED"),
-                                    (box("SSFACTOR"), "1.25", 20, "SSFACTOR")):
+        speed_read = (lambda: _wp.load_set("synthwp_lo").get("SPEED"))
+        for item, typed, x, read in ((chip("SPEED"), "3", 12, speed_read), (chip("SPEED"), "4", 3, speed_read),
+                                     (next(i for i in walk(view_item) if i.property("ckey") == "ENGINE_FPS" and i.property("editable")),
+                                      "50", 20, lambda: None)):
             tap(item)
             entry(item).setProperty("text", typed)
             click_at(item, x)
             kept = (entry(item).property("text"), item.property("editing"))
             QTest.keyClick(win, Qt.Key.Key_Return)
             QTest.qWait(120)
-            clicked.append((kept, _wp.load_set("synthwp_lo").get(key)))
-        assert clicked == [(("3", True), 3.0), (("4", True), 4.0), (("1.25", True), 1.25)], clicked
+            clicked.append((kept, read()))
+        assert clicked == [(("3", True), 3.0), (("4", True), 4.0), (("50", True), None)], clicked
         to_view("library")
         for poll in win.findChildren(QObject):
             if poll.metaObject().className() == "QQmlTimer" and poll.property("interval") == 2000:

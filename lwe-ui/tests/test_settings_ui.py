@@ -242,8 +242,8 @@ def _test_released_halts_are_actually_built() -> None:
         (engine, "Wayland layer", ["Background", "Overlay"]),
         (engine, "Video decode", ["Software", "Hardware when available"]),
         (engine, "Texture detail", ["Automatic", "Full"]),
-        (engine, "Resolution clamp", []),
-        (engine, "Effect clamp", []),
+        (engine, "Render resolution limit", []),
+        (engine, "Effect resolution limit", []),
         (library, "Detect new items", ["On launch", "On a timer"]),
     ):
         assert f'label: "{label}"' in text, f"{label} row must be built"
@@ -451,6 +451,10 @@ Window { width: 1400; height: 620; visible: true
             assert rows, f"page {page_index} must have rows"
             for r in rows:
                 want = 40 if r.property("caption") else 34
+                if r.property("captionWraps"):
+                    # a caption read whole wraps, and the row holds its lines
+                    col = next(c for c in r.childItems() if cls(c) == "QQuickColumn")
+                    want = col.implicitHeight() + 8
                 if r.property("label") == "Interface scale":
                     want = 63.5   # the one tall row on the page: glyphs over the track
                 got = rect(r)[3]
@@ -737,35 +741,38 @@ Window { width: 1400; height: 620; visible: true
             return subprocess.CompletedProcess(args, 1, "", "")
         with mock.patch.object(daemon_unit, "enumerate_outputs", lambda: ["DP-1"]), \
                 mock.patch.object(daemon_unit.subprocess, "run", run):
-            for key, name in (("SSFACTOR", "settingsSsfactorCombo"),
-                              ("CLAMPCOMPOSITES", "settingsClampCompositesCombo")):
-                combo = next(i for i in walk(engine_page) if i.property("objectName") == name)
-                for stored, text, index in ((0, "0", 0), (1, "1", 1), (1.5, "1.5", -1)):
+            reasons = []
+            sb.commitFailed.connect(lambda keys, reason: reasons.append((list(keys), reason)))
+            for key, name in (("SSFACTOR", "Ssfactor"), ("CLAMPCOMPOSITES", "ClampComposites")):
+                chip_item = next(i for i in walk(engine_page) if i.property("objectName") == f"settings{name}Chip")
+                slider = next(i for i in walk(engine_page) if i.property("objectName") == f"settings{name}Slider")
+                for stored, text, typed, knob in ((0, "Off", "0", 0.0), (1, "1.00", "1", 1.0),
+                                                  (1.5, "1.50", "1.5", 1.5), (3.5, "3.50", "3.5", 2.0)):
                     assert sb.commit(key, stored) is True
                     QTest.qWait(120)
-                    shown = (combo.property("displayText"), combo.property("entryText"),
-                             combo.property("currentIndex"))
-                    assert shown == (text, text, index), f"{key} stored {stored}: {shown}"
-                assert sb.commit(key, 1) is True
-                QMetaObject.invokeMethod(combo, "entered", Qt.ConnectionType.DirectConnection,
-                                         Q_ARG("QString", "1.5"))
-                QTest.qWait(120)
-                assert settings.load()[key] == 1.5, settings.load()[key]
-                QMetaObject.invokeMethod(combo, "entered", Qt.ConnectionType.DirectConnection,
-                                         Q_ARG("QString", "5"))
-                QTest.qWait(50)
-                assert (settings.load()[key], combo.property("failed")) == (1.5, True)
+                    shown = (chip_item.property("displayText"), chip_item.property("entryText"),
+                             round(slider.property("value"), 6))
+                    assert shown == (text, typed, knob), f"{key} stored {stored}: {shown}"
                 other = "CLAMPCOMPOSITES" if key == "SSFACTOR" else "SSFACTOR"
                 kept = settings.load()[other]
-                QMetaObject.invokeMethod(combo, "activated", Qt.ConnectionType.DirectConnection,
-                                         Q_ARG("int", 2))
-                QTest.qWait(120)
-                assert (settings.load()[key], settings.load()[other]) == (2.0, kept), \
-                    f"{key}: the menu's 2 commits its own key only"
+                for entered, want in (("1.5", 1.5), ("OFF", 0.0), ("2", 2.0)):
+                    QMetaObject.invokeMethod(chip_item, "entered", Qt.ConnectionType.DirectConnection,
+                                             Q_ARG("QString", entered))
+                    QTest.qWait(80)
+                    assert (settings.load()[key], settings.load()[other]) == (want, kept), (key, entered)
+                reasons.clear()
+                for refused in ("3", "-0.5", "wide"):
+                    QMetaObject.invokeMethod(chip_item, "entered", Qt.ConnectionType.DirectConnection,
+                                             Q_ARG("QString", refused))
+                    QTest.qWait(50)
+                assert (settings.load()[key], chip_item.property("failed"), reasons) == \
+                    (2.0, True, [([key], "That value is outside the allowed range."),
+                                 ([key], "That value is outside the allowed range."),
+                                 ([key], "That is not a number.")]), (key, reasons)
             # an entry opened and left with the text it opened with, by Enter or by moving to
             # another entry, commits nothing; a changed entry saves
             ss_combo, cc_combo = (next(i for i in walk(engine_page) if i.property("objectName") == name)
-                                  for name in ("settingsSsfactorCombo", "settingsClampCompositesCombo"))
+                                  for name in ("settingsSsfactorChip", "settingsClampCompositesChip"))
             ss_entry = next(i for i in walk(ss_combo) if i.metaObject().className().startswith("QQuickTextInput"))
             changed, failed = [], []
             sb.changed.connect(lambda: changed.append(1))
@@ -795,7 +802,7 @@ Window { width: 1400; height: 620; visible: true
                 assert (opened, left, changed, failed, reached) == (("1.5", True), (False, False), [], [], 1), \
                     f"{finish}: {(opened, left, changed, failed, reached)}"
             assert paths.settings_file().read_bytes() == before, "an unchanged entry writes nothing"
-            for key, typed in ((Qt.Key.Key_Return, "2.5"), (Qt.Key.Key_Enter, "2")):
+            for key, typed in ((Qt.Key.Key_Return, "1.25"), (Qt.Key.Key_Enter, "2")):
                 ss_combo.setProperty("editing", True)
                 QTest.qWait(60)
                 ss_entry.setProperty("text", typed)
@@ -817,9 +824,9 @@ Window { width: 1400; height: 620; visible: true
             QTest.qWait(80)
             assert win.property("escapes") - escapes == 1, "with no entry open the window's Escape shortcut acts"
         assert ran == [], f"the clamp rows ran a subprocess: {ran}"
-        print("OK clamp rows: 0, 1 and 1.5 read back from the store; a typed 1.5 saves, 5 is refused; "
-              "the menu's 2 commits its own key; an unchanged entry commits nothing and a changed one saves; "
-              "Escape in an open entry cancels it before the window's shortcut")
+        print("OK resolution limit rows: Off, 1.00, 1.50 and a stored 3.50 read back (the knob pinned at 2); typed 0 to "
+              "2 or off saves its own key, 3, -0.5 and a word are refused; an unchanged entry commits nothing and a "
+              "changed one saves; Escape in an open entry cancels it before the window's shortcut")
     finally:
         for k, v in orig.items():
             if v is None:

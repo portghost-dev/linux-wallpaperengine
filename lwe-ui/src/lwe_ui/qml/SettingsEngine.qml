@@ -79,6 +79,33 @@ Column {
         return ((r < 10 && r === Math.round(r)) ? r.toFixed(1) : String(r)) + "x";
     }
 
+    // --- resolution limits: 0 is off; the slider snaps to 0 and holds a mild detent at 1.00 ----
+    function clampStored(key) { var v = Number(page.val(key)); return isNaN(v) ? 1 : v }
+    function clampSnap(v) {
+        if (v < 0.05) return 0;
+        if (Math.abs(v - 1) < 0.03) return 1;
+        return Math.round(v * 100) / 100;
+    }
+    // "1.00 (screen)" does not fit the compact chip, so 1.00 reads as the bare number here
+    function clampText(v) { return v <= 0 ? "Off" : Number(v).toFixed(2) }
+    // a slider left where it stood sends nothing; a value stored above 2 pins the knob at 2
+    function commitClamp(key, v, stored) {
+        var snapped = page.clampSnap(v);
+        if (snapped !== page.clampSnap(Math.min(2, stored)))
+            settingsBridge.commit(key, String(snapped));
+    }
+    // typing takes 0 to 2 or "off"; a plain number outside that is refused here, and anything
+    // else goes to the commit path, which refuses what is not a number
+    function enterClamp(key, t) {
+        var s = String(t).trim();
+        if (s.toLowerCase() === "off")
+            s = "0";
+        if (/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(s) && (Number(s) < 0 || Number(s) > 2))
+            settingsBridge.refuseRange(key);
+        else
+            settingsBridge.commit(key, s);
+    }
+
     PSection { label: "Rendering"; first: true }
 
     SettingsRow {
@@ -574,8 +601,11 @@ Column {
     }
 
     SettingsRow {
-        label: "Resolution clamp"
-        caption: "1 is your screen size; 0 is no cap"
+        id: ssfactorRow
+        captionWraps: true
+        label: "Render resolution limit"
+        caption: "Off is no limit. 1.00 renders at your screen's resolution; 2.00 renders above it. Below 1.00 trades away quality fast."
+        readonly property real current: page.clampStored("SSFACTOR")
         Row {
             spacing: Theme.spacingSm
             RestartVerb {
@@ -584,27 +614,36 @@ Column {
                 restartRev: page.restartRev
                 anchors.verticalCenter: parent.verticalCenter
             }
+            SettingsSlider {
+                id: ssfactorSlider
+                objectName: "settingsSsfactorSlider"
+                anchors.verticalCenter: parent.verticalCenter
+                from: 0; to: 2; stepSize: 0.01
+                tickAt: 0.5
+                storeValue: ssfactorRow.current
+                onCommit: function(v) { page.commitClamp("SSFACTOR", v, ssfactorRow.current) }
+            }
             SettingsCombo {
-                objectName: "settingsSsfactorCombo"
+                objectName: "settingsSsfactorChip"
+                anchors.verticalCenter: parent.verticalCenter
                 compact: true
                 freeEntry: true
                 failed: page.isFailed("SSFACTOR")
-                model: ["0", "1", "2"]
-                displayText: {
-                    var v = page.val("SSFACTOR");
-                    return v === undefined || v === null ? "" : String(v);
-                }
-                entryText: displayText
-                currentIndex: model.indexOf(displayText)
-                onActivated: function(i) { settingsBridge.commit("SSFACTOR", model[i]); }
-                onEntered: function(t) { settingsBridge.commit("SSFACTOR", t); }
+                model: []
+                entryText: String(ssfactorRow.current)
+                displayText: page.clampText(ssfactorSlider.pressed ? page.clampSnap(ssfactorSlider.value)
+                                                                 : ssfactorRow.current)
+                onEntered: function(t) { page.enterClamp("SSFACTOR", t) }
             }
         }
     }
 
     SettingsRow {
-        label: "Effect clamp"
-        caption: "1 is your screen size; 0 is no cap"
+        id: clampCompositesRow
+        captionWraps: true
+        label: "Effect resolution limit"
+        caption: "Off is no limit. 1.00 renders scene effect layers at your screen's resolution; 2.00 renders above it. Below 1.00 trades away quality fast."
+        readonly property real current: page.clampStored("CLAMPCOMPOSITES")
         Row {
             spacing: Theme.spacingSm
             RestartVerb {
@@ -613,20 +652,26 @@ Column {
                 restartRev: page.restartRev
                 anchors.verticalCenter: parent.verticalCenter
             }
+            SettingsSlider {
+                id: clampCompositesSlider
+                objectName: "settingsClampCompositesSlider"
+                anchors.verticalCenter: parent.verticalCenter
+                from: 0; to: 2; stepSize: 0.01
+                tickAt: 0.5
+                storeValue: clampCompositesRow.current
+                onCommit: function(v) { page.commitClamp("CLAMPCOMPOSITES", v, clampCompositesRow.current) }
+            }
             SettingsCombo {
-                objectName: "settingsClampCompositesCombo"
+                objectName: "settingsClampCompositesChip"
+                anchors.verticalCenter: parent.verticalCenter
                 compact: true
                 freeEntry: true
                 failed: page.isFailed("CLAMPCOMPOSITES")
-                model: ["0", "1", "2"]
-                displayText: {
-                    var v = page.val("CLAMPCOMPOSITES");
-                    return v === undefined || v === null ? "" : String(v);
-                }
-                entryText: displayText
-                currentIndex: model.indexOf(displayText)
-                onActivated: function(i) { settingsBridge.commit("CLAMPCOMPOSITES", model[i]); }
-                onEntered: function(t) { settingsBridge.commit("CLAMPCOMPOSITES", t); }
+                model: []
+                entryText: String(clampCompositesRow.current)
+                displayText: page.clampText(clampCompositesSlider.pressed ? page.clampSnap(clampCompositesSlider.value)
+                                                                 : clampCompositesRow.current)
+                onEntered: function(t) { page.enterClamp("CLAMPCOMPOSITES", t) }
             }
         }
     }

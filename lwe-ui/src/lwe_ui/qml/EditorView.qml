@@ -149,6 +149,44 @@ Rectangle {
         return parseFloat(s);
     }
 
+    // --- resolution limits: 0 is off; the slider snaps to 0 and holds a mild detent at 1.00 ----
+    // the wallpaper's own limit, else the global one it inherits
+    function clampShown(key) {
+        var raw = (view.rev, editor.clampValue(key));
+        return Number(raw === "" ? editor.globalDefaultFor(key) : raw);
+    }
+    // the detent at 1.00 is the slider's own (detentAt), held while the knob is dragged
+    function clampSnap(v) {
+        if (v < 0.05) return 0;
+        return Math.round(v * 100) / 100;
+    }
+    // "1.00 (screen)" would widen the chip past its neighbors and shift the slider under a drag,
+    // so 1.00 reads as the bare number here too
+    function clampText(v) { return v <= 0 ? "Off" : Number(v).toFixed(2) }
+    function clampChipText(key, slider) {
+        if (slider.pressed)
+            return view.clampText(view.clampSnap(slider.value));
+        var raw = (view.rev, editor.clampValue(key));
+        return raw === "" ? "Global" : view.clampText(Number(raw));
+    }
+    // a slider left where it stood sends nothing; a value stored above 2 pins the knob at 2
+    function commitClamp(key, v) {
+        var snapped = view.clampSnap(v);
+        if (snapped !== view.clampSnap(Math.min(2, view.clampShown(key))))
+            editor.setClampValue(key, String(snapped));
+    }
+    // a cleared chip returns the row to Global; typing takes 0 to 2 or "off", a plain number
+    // outside that is refused here, and the commit path refuses what is not a number
+    function enterClamp(key, t) {
+        var s = String(t).trim();
+        if (s.toLowerCase() === "off")
+            s = "0";
+        if (/^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(s) && (Number(s) < 0 || Number(s) > 2))
+            editor.reportFailure([key]);
+        else
+            editor.setClampValue(key, s);
+    }
+
     function speedText(v) {
         var r = Number(Number(v).toPrecision(2));
         return ((r < 10 && r === Math.round(r)) ? r.toFixed(1) : String(r)) + "x";
@@ -1820,45 +1858,55 @@ Rectangle {
                     Item { width: parent.width; height: Theme.spacingMd }
                     PRule { label: "Quality and memory" }
                     PRow {
-                        label: "Resolution clamp"
-                        PDrop {
-                            compact: true
-                            editable: true
-                            ckey: "SSFACTOR"
-                            entries: [
-                                { label: "Global (" + (view.rev, editor.globalDefaultFor("SSFACTOR")) + ")",
-                                  value: "" },
-                                { label: "0", value: "0" },
-                                { label: "1", value: "1" },
-                                { label: "2", value: "2" }
-                            ]
-                            display: {
-                                var v = (view.rev, editor.clampValue("SSFACTOR"));
-                                return v === "" ? "Global" : v;
+                        label: "Render resolution limit"
+                        Row {
+                            spacing: Theme.spacingSm
+                            PSlider {
+                                id: editorSsfactor
+                                objectName: "editorSsfactorSlider"
+                                anchors.verticalCenter: parent.verticalCenter
+                                from: 0
+                                to: 2
+                                stepSize: 0.01
+                                tickAt: 0.5
+                                detentAt: 1
+                                detentBand: 0.03
+                                storeValue: view.clampShown("SSFACTOR")
+                                onCommit: function(v) { view.commitClamp("SSFACTOR", v) }
                             }
-                            onPicked: function(v) { editor.setClampValue("SSFACTOR", v) }
-                            onEntered: function(t) { editor.setClampValue("SSFACTOR", t) }
+                            PChip {
+                                objectName: "editorSsfactorChip"
+                                anchors.verticalCenter: parent.verticalCenter
+                                ckey: "SSFACTOR"
+                                text: view.clampChipText("SSFACTOR", editorSsfactor)
+                                onEntered: function(t) { view.enterClamp("SSFACTOR", t) }
+                            }
                         }
                     }
                     PRow {
-                        label: "Effect clamp"
-                        PDrop {
-                            compact: true
-                            editable: true
-                            ckey: "CLAMPCOMPOSITES"
-                            entries: [
-                                { label: "Global (" + (view.rev, editor.globalDefaultFor("CLAMPCOMPOSITES")) + ")",
-                                  value: "" },
-                                { label: "0", value: "0" },
-                                { label: "1", value: "1" },
-                                { label: "2", value: "2" }
-                            ]
-                            display: {
-                                var v = (view.rev, editor.clampValue("CLAMPCOMPOSITES"));
-                                return v === "" ? "Global" : v;
+                        label: "Effect resolution limit"
+                        Row {
+                            spacing: Theme.spacingSm
+                            PSlider {
+                                id: editorClampComposites
+                                objectName: "editorClampCompositesSlider"
+                                anchors.verticalCenter: parent.verticalCenter
+                                from: 0
+                                to: 2
+                                stepSize: 0.01
+                                tickAt: 0.5
+                                detentAt: 1
+                                detentBand: 0.03
+                                storeValue: view.clampShown("CLAMPCOMPOSITES")
+                                onCommit: function(v) { view.commitClamp("CLAMPCOMPOSITES", v) }
                             }
-                            onPicked: function(v) { editor.setClampValue("CLAMPCOMPOSITES", v) }
-                            onEntered: function(t) { editor.setClampValue("CLAMPCOMPOSITES", t) }
+                            PChip {
+                                objectName: "editorClampCompositesChip"
+                                anchors.verticalCenter: parent.verticalCenter
+                                ckey: "CLAMPCOMPOSITES"
+                                text: view.clampChipText("CLAMPCOMPOSITES", editorClampComposites)
+                                onEntered: function(t) { view.enterClamp("CLAMPCOMPOSITES", t) }
+                            }
                         }
                     }
                     PRow {

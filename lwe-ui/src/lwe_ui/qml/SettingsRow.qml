@@ -22,6 +22,8 @@ Item {
     property string label: ""
     property string caption: ""
     property bool dim: false
+    // a caption that must be read whole wraps instead of eliding, and the row grows to hold it
+    property bool captionWraps: false
     // real-typed: font.pixelSize is an int property, so a 12.5 literal is a
     // type error while a real-typed binding converts (as Theme.fontMicro does)
     readonly property real fontRow: 12.5
@@ -32,7 +34,8 @@ Item {
     // own implicit height plus breathing room lands at 42 for a two-line row, which is the
     // kind of drift that makes a 16-row page 30px taller than the drawing; the caption is a
     // single elided line, so the drawn number is the right number.
-    implicitHeight: Math.max(caption !== "" ? 40 : 34, holder.childrenRect.height)
+    implicitHeight: Math.max(caption === "" ? 34 : (captionWraps ? labelCol.implicitHeight + 8 : 40),
+                             holder.childrenRect.height)
     opacity: dim ? 0.5 : 1.0
 
     Column {
@@ -58,7 +61,8 @@ Item {
             text: srow.caption
             color: Theme.textTertiary
             font.pixelSize: Theme.fontMicro
-            elide: Text.ElideRight
+            wrapMode: srow.captionWraps ? Text.WordWrap : Text.NoWrap
+            elide: srow.captionWraps ? Text.ElideNone : Text.ElideRight
         }
     }
 

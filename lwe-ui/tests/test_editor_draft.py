@@ -660,15 +660,19 @@ class TestEditorSurfaceContract(unittest.TestCase):
         self.assertNotIn("Rectangle { width: parent.width; height: 1; color: Theme.border }", tail)
 
     def test_L3_quality_rule_sits_above_metadata(self) -> None:
-        """The order is the rule: Quality and memory, its four rows, then Metadata; each row is a
-        PDrop on its conf key with a Global entry, and the old clamp row's three words are gone."""
+        """The order is the rule: Quality and memory, its four rows, then Metadata. The two
+        resolution limits are a slider and a chip on their conf key; the texture rows are a PDrop
+        with a Global entry; the old clamp row's three words are gone."""
         text = self._editor_text()
         q = text.index('PRule { label: "Quality and memory" }')
         m = text.index('PRule { label: "Metadata" }')
         self.assertLess(q, m)
         block = text[q:m]
-        for label, key in (("Resolution clamp", "SSFACTOR"), ("Effect clamp", "CLAMPCOMPOSITES"),
-                           ("Texture compression", "TEXCOMP"), ("Texture detail", "TEXTURE_DETAIL")):
+        for label, key in (("Render resolution limit", "SSFACTOR"), ("Effect resolution limit", "CLAMPCOMPOSITES")):
+            self.assertIn(f'label: "{label}"', block)
+            self.assertIn(f'ckey: "{key}"', block)
+            self.assertIn(f'storeValue: view.clampShown("{key}")', block)
+        for label, key in (("Texture compression", "TEXCOMP"), ("Texture detail", "TEXTURE_DETAIL")):
             self.assertIn(f'label: "{label}"', block)
             self.assertIn(f'ckey: "{key}"', block)
             self.assertIn(f'editor.globalDefaultFor("{key}")', block)
