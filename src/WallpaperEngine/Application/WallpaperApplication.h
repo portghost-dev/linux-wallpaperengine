@@ -6,6 +6,7 @@
 #include <random>
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
+#include "WallpaperEngine/Application/BootGuard.h"
 #include "WallpaperEngine/Assets/AssetLocator.h"
 
 #include "WallpaperEngine/Render/CWallpaper.h"
@@ -247,6 +248,7 @@ private:
     /** true only when THIS boot appended a history entry; the survived flip must never
      *  touch a previous boot's record */
     bool m_bootHistoryArmed = false;
+    BootGuard m_bootGuard;
     bool apiRotationAdvance (std::string& error);
     [[nodiscard]] size_t apiRotationPick ();
 

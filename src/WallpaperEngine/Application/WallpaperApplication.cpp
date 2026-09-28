@@ -534,6 +534,8 @@ void WallpaperApplication::advancePlaylist (
 
 	this->m_context.settings.general.screenBackgrounds[screen] = nextPath;
 	loaded = true;
+	// applyShowCore clears this as well: every other show passes through it
+	this->m_bootGuard.wallpaperShown ();
     } catch (const std::exception& e) {
 	sLog.error ("Failed to advance playlist on ", screen, ": ", e.what ());
     }
@@ -1866,6 +1868,7 @@ nlohmann::json WallpaperApplication::apiStatus () const {
     result["version"] = LWE_VERSION;
     result["pid"] = getpid ();
     result["uptime_s"] = uptime.count ();
+    result["restore_refused"] = this->m_bootGuard.restoreRefused ();
     result["screens"] = screens;
     result["manual_pause"] = this->m_manualPauseRequested.load ();
     result["classic_k"] = g_LweClassicDivisor;
@@ -2395,6 +2398,8 @@ bool WallpaperApplication::applyShowCore (
     }
 
     this->captureLook (this->lane (), args);
+    // advancePlaylist clears this as well: the legacy playlist timer does not pass through here
+    this->m_bootGuard.wallpaperShown ();
     return true;
 }
 
@@ -3095,9 +3100,7 @@ void WallpaperApplication::restoreRuntimeState () {
 	history = nlohmann::json::array ();
     }
 
-    const size_t n = history.size ();
-    const bool crashLooping = n >= 2 && history[n - 1].is_object () && history[n - 2].is_object ()
-	&& !history[n - 1].value ("survived", true) && !history[n - 2].value ("survived", true);
+    const bool crashLooping = this->m_bootGuard.evaluate (history);
 
     history.push_back ({ { "t", static_cast<int64_t> (std::time (nullptr)) }, { "survived", false } });
 

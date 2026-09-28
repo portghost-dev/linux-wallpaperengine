@@ -342,6 +342,8 @@ set(COMMON_SOURCES
 
     src/WallpaperEngine/Application/ApplicationContext.cpp
     src/WallpaperEngine/Application/ApplicationContext.h
+    src/WallpaperEngine/Application/BootGuard.cpp
+    src/WallpaperEngine/Application/BootGuard.h
     src/WallpaperEngine/Application/Config.cpp
     src/WallpaperEngine/Application/DebugSwitches.cpp
     src/WallpaperEngine/Application/DebugSwitches.h
@@ -658,7 +660,8 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/LweCommand.cpp
         src/WallpaperEngine/Testing/Cases/CommandClient.cpp
         src/WallpaperEngine/Testing/Cases/PanelHandoff.cpp
-        src/WallpaperEngine/Testing/Cases/RunPath.cpp)
+        src/WallpaperEngine/Testing/Cases/RunPath.cpp
+        src/WallpaperEngine/Testing/Cases/BootGuard.cpp)
 endif()
 
 add_library(
