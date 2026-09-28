@@ -15,6 +15,30 @@ ComboBox {
 
     property bool editing: false
 
+    // a closed entry gives focus to the Settings view rather than the combo, whose arrow keys
+    // would pick a value, so the next Escape reaches the view and not the hidden entry
+    function returnFocus() {
+        for (var p = cb.parent; p; p = p.parent) {
+            if (p.objectName === "settingsView") {
+                p.forceActiveFocus();
+                break;
+            }
+        }
+        entry.focus = false;
+    }
+    // Enter or leaving commits a changed text; Escape reverts to store truth and commits nothing
+    function finish(how) {
+        if (!cb.editing)
+            return;
+        cb.editing = false;
+        if (how !== "leave")
+            cb.returnFocus();
+        else
+            entry.focus = false;
+        if (how !== "cancel" && entry.text !== entry.openedWith)
+            cb.entered(entry.text);
+    }
+
     implicitWidth: compact ? 78 : 150
     implicitHeight: compact ? 24 : 26
     width: implicitWidth
@@ -45,15 +69,16 @@ ComboBox {
             verticalAlignment: Text.AlignVCenter
             selectByMouse: true
             onVisibleChanged: if (visible) { text = cb.entryText; openedWith = text; selectAll(); forceActiveFocus(); }
-            // commit a changed text on Enter or blur; Escape reverts to store truth and commits nothing
-            Keys.onReturnPressed: { cb.editing = false; if (entry.text !== entry.openedWith) cb.entered(entry.text); }
-            Keys.onEnterPressed: { cb.editing = false; if (entry.text !== entry.openedWith) cb.entered(entry.text); }
+            Keys.onReturnPressed: cb.finish("enter")
+            Keys.onEnterPressed: cb.finish("enter")
             Keys.onShortcutOverride: function(event) { event.accepted = event.key === Qt.Key_Escape }
-            Keys.onEscapePressed: cb.editing = false
-            onActiveFocusChanged: if (!activeFocus && cb.editing) {
-                cb.editing = false;
-                if (entry.text !== entry.openedWith)
-                    cb.entered(entry.text);
+            Keys.onEscapePressed: cb.finish("cancel")
+            // a closed entry never keeps focus: a popup or the window can hand it back later
+            onActiveFocusChanged: {
+                if (!activeFocus)
+                    cb.finish("leave");
+                else if (!cb.editing)
+                    cb.returnFocus();
             }
         }
     }

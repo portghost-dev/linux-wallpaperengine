@@ -775,39 +775,47 @@ Window { width: 1400; height: 620; visible: true
             QTest.qWait(150)
             changed.clear()
             before = paths.settings_file().read_bytes()
-            for finish in ("Enter", "another entry"):
+            # the keypad's Enter closes an entry as Return does; after either, the next Escape
+            # reaches the window's shortcut
+            for finish, key in (("Enter", Qt.Key.Key_Return), ("keypad Enter", Qt.Key.Key_Enter),
+                                ("another entry", Qt.Key.Key_Return)):
                 ss_combo.setProperty("editing", True)
                 QTest.qWait(60)
                 opened = (ss_entry.property("text"), ss_entry.hasActiveFocus())
                 if finish == "another entry":
                     cc_combo.setProperty("editing", True)
                     QTest.qWait(60)
-                QTest.keyClick(win, Qt.Key.Key_Return)
+                QTest.keyClick(win, key)
                 QTest.qWait(80)
                 left = (ss_combo.property("editing"), cc_combo.property("editing"))
-                assert (opened, left, changed, failed) == (("1.5", True), (False, False), [], []), \
-                    f"{finish}: {(opened, left, changed, failed)}"
+                escapes = win.property("escapes")
+                QTest.keyClick(win, Qt.Key.Key_Escape)
+                QTest.qWait(80)
+                reached = win.property("escapes") - escapes
+                assert (opened, left, changed, failed, reached) == (("1.5", True), (False, False), [], [], 1), \
+                    f"{finish}: {(opened, left, changed, failed, reached)}"
             assert paths.settings_file().read_bytes() == before, "an unchanged entry writes nothing"
-            ss_combo.setProperty("editing", True)
-            QTest.qWait(60)
-            ss_entry.setProperty("text", "2")
-            QTest.keyClick(win, Qt.Key.Key_Return)
-            QTest.qWait(120)
-            assert (settings.load()["SSFACTOR"], bool(changed), failed) == (2.0, True, []), \
-                (settings.load()["SSFACTOR"], changed, failed)
+            for key, typed in ((Qt.Key.Key_Return, "2.5"), (Qt.Key.Key_Enter, "2")):
+                ss_combo.setProperty("editing", True)
+                QTest.qWait(60)
+                ss_entry.setProperty("text", typed)
+                QTest.keyClick(win, key)
+                QTest.qWait(120)
+                assert (settings.load()["SSFACTOR"], bool(changed), failed) == (float(typed), True, []), \
+                    (key, settings.load()["SSFACTOR"], changed, failed)
             # Escape in an open entry cancels it before the window's Escape shortcut can act; with
             # no entry open the shortcut still acts
+            escapes = win.property("escapes")
             ss_combo.setProperty("editing", True)
             QTest.qWait(60)
             ss_entry.setProperty("text", "3")
             QTest.keyClick(win, Qt.Key.Key_Escape)
             QTest.qWait(80)
-            assert (ss_combo.property("editing"), settings.load()["SSFACTOR"], win.property("escapes")) == \
+            assert (ss_combo.property("editing"), settings.load()["SSFACTOR"], win.property("escapes") - escapes) == \
                 (False, 2.0, 0), (ss_combo.property("editing"), settings.load()["SSFACTOR"], win.property("escapes"))
-            view.forceActiveFocus()
             QTest.keyClick(win, Qt.Key.Key_Escape)
             QTest.qWait(80)
-            assert win.property("escapes") == 1, "with no entry open the window's Escape shortcut acts"
+            assert win.property("escapes") - escapes == 1, "with no entry open the window's Escape shortcut acts"
         assert ran == [], f"the clamp rows ran a subprocess: {ran}"
         print("OK clamp rows: 0, 1 and 1.5 read back from the store; a typed 1.5 saves, 5 is refused; "
               "the menu's 2 commits its own key; an unchanged entry commits nothing and a changed one saves; "

@@ -51,6 +51,11 @@ Rectangle {
             view.rev++; view.propRev++; view.objRev++;
             view.activeWorkspace = 0;
             view.reseedControls();
+            // an open title entry takes the arriving title as its baseline and closes without
+            // committing, so a switch never saves that title as the user's own
+            titleField.openedWith = titleField.text;
+            if (titleField.activeFocus)
+                view.forceActiveFocus();
         }
         // values moved under the controls (revert, defaults, a global commit): re-seed the
         // static controls, but leave every filter, search and collapse state alone.
@@ -368,6 +373,20 @@ Rectangle {
         border.width: view.isFailed(ckey) ? 1.5 : 1
         border.color: view.isFailed(ckey) ? view.failColor
                     : (view.isMarked(ckey) ? view.markColor : Theme.border)
+        // Enter sends a changed text, and a blank one always: a blank entry returns the row to
+        // what it inherits. Leaving sends a changed text; Escape sends nothing. A close by key
+        // gives focus to the view, so the next Escape reaches it and not the hidden entry
+        function finish(how) {
+            if (!chip.editing)
+                return;
+            chip.editing = false;
+            var t = chipEdit.text;
+            if (how !== "leave")
+                view.forceActiveFocus();
+            if (how === "enter" ? (t !== chipEdit.openedWith || t.trim() === "")
+                                : (how === "leave" && t !== chipEdit.openedWith))
+                chip.entered(t);
+        }
         Label {
             id: chipLabel
             visible: !chip.editing
@@ -389,13 +408,15 @@ Rectangle {
             font.pixelSize: Theme.fontMeta
             selectByMouse: true
             Keys.onShortcutOverride: function(event) { event.accepted = event.key === Qt.Key_Escape }
-            Keys.onEscapePressed: { chip.editing = false; chipEdit.focus = false }
-            onEditingFinished: {
-                if (!chip.editing)
-                    return;
-                chip.editing = false;
-                if (chipEdit.text !== chipEdit.openedWith)
-                    chip.entered(chipEdit.text);
+            Keys.onEscapePressed: chip.finish("cancel")
+            Keys.onReturnPressed: chip.finish("enter")
+            Keys.onEnterPressed: chip.finish("enter")
+            // a closed entry never keeps focus: a popup or the window can hand it back later
+            onActiveFocusChanged: {
+                if (!activeFocus)
+                    chip.finish("leave");
+                else if (!chip.editing)
+                    view.forceActiveFocus();
             }
         }
         HoverHandler { cursorShape: Qt.IBeamCursor }
@@ -463,6 +484,17 @@ Rectangle {
         border.width: view.isFailed(ckey) ? 1.5 : 1
         border.color: view.isFailed(ckey) ? view.failColor
                     : (view.isMarked(ckey) ? view.markColor : Theme.border)
+        // Enter or leaving sends a changed text; Escape sends nothing. A close by key gives
+        // focus to the view, so the next Escape reaches it and not the hidden entry
+        function finish(how) {
+            if (!drop.editing)
+                return;
+            drop.editing = false;
+            if (how !== "leave")
+                view.forceActiveFocus();
+            if (how !== "cancel" && dropEdit.text !== dropEdit.openedWith)
+                drop.entered(dropEdit.text);
+        }
         Label {
             id: dropLabel
             visible: !drop.editing
@@ -488,13 +520,15 @@ Rectangle {
             font.pixelSize: drop.compact ? Theme.fontMeta : Theme.fontControl
             selectByMouse: true
             Keys.onShortcutOverride: function(event) { event.accepted = event.key === Qt.Key_Escape }
-            Keys.onEscapePressed: { drop.editing = false; dropEdit.focus = false }
-            onEditingFinished: {
-                if (!drop.editing)
-                    return;
-                drop.editing = false;
-                if (dropEdit.text !== dropEdit.openedWith)
-                    drop.entered(dropEdit.text);
+            Keys.onEscapePressed: drop.finish("cancel")
+            Keys.onReturnPressed: drop.finish("enter")
+            Keys.onEnterPressed: drop.finish("enter")
+            // a closed entry never keeps focus: a popup or the window can hand it back later
+            onActiveFocusChanged: {
+                if (!activeFocus)
+                    drop.finish("leave");
+                else if (!drop.editing)
+                    view.forceActiveFocus();
             }
         }
         Item {
@@ -514,7 +548,8 @@ Rectangle {
             HoverHandler { cursorShape: Qt.PointingHandCursor }
             TapHandler {
                 onTapped: {
-                    drop.editing = false;
+                    // closes an open entry by the same rule, also when the menu does not open
+                    drop.finish("cancel");
                     if (dropMenu.visible) dropMenu.close();
                     else if (!dropMenu.justClosed) dropMenu.open();
                 }
@@ -891,6 +926,10 @@ Rectangle {
                     font.family: Theme.monoFamily
                     background: Rectangle { color: Theme.inputWell; radius: Theme.radiusXs
                         border.width: 1; border.color: parent.activeFocus ? Theme.borderStrong : Theme.border }
+                    // an entry like the rest: Escape drops its focus and keeps the filter, and
+                    // the next Escape leaves the view
+                    Keys.onShortcutOverride: function(event) { event.accepted = event.key === Qt.Key_Escape }
+                    Keys.onEscapePressed: view.forceActiveFocus()
                 }
                 Flickable {
                     id: propFlick

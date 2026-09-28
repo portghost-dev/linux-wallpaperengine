@@ -40,7 +40,7 @@ from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
 
 from . import api_client
 from . import constants as C
-from .cli.values import UsageError, parse_factor
+from .cli.values import UsageError, _plain_number, parse_factor
 from .engine import daemon_unit, push
 from .storage import backup, paths, rules, settings, tags
 
@@ -117,13 +117,14 @@ class SettingsBridge(QObject):
                 return True, n, ""
             if t == "float":
                 if key in C.CLAMP_KEYS:
+                    # the command door's spelling rule decides what is a number; only a number
+                    # can be outside the range
+                    if _plain_number(str(value)) is None:
+                        return False, None, "That is not a number."
                     try:
                         return True, parse_factor(str(value)), ""
                     except UsageError:
-                        f = float(str(value))
-                        if math.isfinite(f) and f > spec["max"]:
-                            return False, None, "That value is outside the allowed range."
-                        return False, None, "That is not a number."
+                        return False, None, "That value is outside the allowed range."
                 f = float(str(value).strip())
                 if not math.isfinite(f):
                     return False, None, "That is not a number."

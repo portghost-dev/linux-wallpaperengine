@@ -328,6 +328,17 @@ Popup {
         border.width: pop.isFailed(ckey) ? 1.5 : 1
         border.color: pop.isFailed(ckey) ? pop.failColor
                     : (pop.isMarked(ckey) ? pop.markColor : Theme.border)
+        // the entry opens on the chip's text, so a blank entry is a change and returns the row to
+        // what it inherits. Enter or leaving sends a changed text; Escape sends nothing. A closed
+        // entry gives focus to the popup, so its next Escape closes it
+        function finish(how) {
+            if (!chip.editing)
+                return;
+            chip.editing = false;
+            chipEdit.focus = false;
+            if (how !== "cancel" && chipEdit.text !== chipEdit.openedWith)
+                chip.entered(chipEdit.text);
+        }
         Label {
             id: chipLabel
             visible: !chip.editing
@@ -338,6 +349,7 @@ Popup {
         }
         TextInput {
             id: chipEdit
+            property string openedWith: ""
             visible: chip.editing
             anchors.fill: parent
             anchors.leftMargin: 8
@@ -351,18 +363,22 @@ Popup {
             color: Theme.textPrimary
             font.pixelSize: Theme.fontMeta
             selectByMouse: true
-            Keys.onEscapePressed: { chip.editing = false; chipEdit.focus = false }
-            onEditingFinished: {
-                if (!chip.editing)
-                    return;
-                chip.editing = false;
-                chip.entered(chipEdit.text);
+            Keys.onEscapePressed: chip.finish("cancel")
+            Keys.onReturnPressed: chip.finish("enter")
+            Keys.onEnterPressed: chip.finish("enter")
+            // a closed entry never keeps focus: a popup or the window can hand it back later
+            onActiveFocusChanged: {
+                if (!activeFocus)
+                    chip.finish("leave");
+                else if (!chip.editing)
+                    chipEdit.focus = false;
             }
         }
         HoverHandler { cursorShape: Qt.IBeamCursor }
         TapHandler {
             onTapped: {
                 chipEdit.text = chip.text;
+                chipEdit.openedWith = chip.text;
                 chip.editing = true;
                 chipEdit.forceActiveFocus();
                 chipEdit.selectAll();
@@ -389,6 +405,16 @@ Popup {
         border.width: pop.isFailed(ckey) ? 1.5 : 1
         border.color: pop.isFailed(ckey) ? pop.failColor
                     : (pop.isMarked(ckey) ? pop.markColor : Theme.border)
+        // Enter or leaving sends a changed text; Escape sends nothing. A closed entry gives
+        // focus to the popup, so its next Escape closes it
+        function finish(how) {
+            if (!drop.editing)
+                return;
+            drop.editing = false;
+            dropEdit.focus = false;
+            if (how !== "cancel" && dropEdit.text !== dropEdit.openedWith)
+                drop.entered(dropEdit.text);
+        }
         Label {
             id: dropLabel
             visible: !drop.editing
@@ -402,6 +428,7 @@ Popup {
         }
         TextInput {
             id: dropEdit
+            property string openedWith: ""
             visible: drop.editing
             anchors.left: parent.left
             anchors.leftMargin: drop.compact ? 8 : 10
@@ -411,12 +438,15 @@ Popup {
             color: Theme.textPrimary
             font.pixelSize: drop.compact ? Theme.fontMeta : Theme.fontControl
             selectByMouse: true
-            Keys.onEscapePressed: { drop.editing = false; dropEdit.focus = false }
-            onEditingFinished: {
-                if (!drop.editing)
-                    return;
-                drop.editing = false;
-                drop.entered(dropEdit.text);
+            Keys.onEscapePressed: drop.finish("cancel")
+            Keys.onReturnPressed: drop.finish("enter")
+            Keys.onEnterPressed: drop.finish("enter")
+            // a closed entry never keeps focus: a popup or the window can hand it back later
+            onActiveFocusChanged: {
+                if (!activeFocus)
+                    drop.finish("leave");
+                else if (!drop.editing)
+                    dropEdit.focus = false;
             }
         }
         Item {
@@ -436,7 +466,8 @@ Popup {
             HoverHandler { cursorShape: Qt.PointingHandCursor }
             TapHandler {
                 onTapped: {
-                    drop.editing = false;
+                    // closes an open entry by the same rule, also when the menu does not open
+                    drop.finish("cancel");
                     if (dropMenu.visible) dropMenu.close();
                     else if (!dropMenu.justClosed) dropMenu.open();
                 }
@@ -452,6 +483,7 @@ Popup {
                 onTapped: {
                     if (drop.editable) {
                         dropEdit.text = drop.display;
+                        dropEdit.openedWith = drop.display;
                         drop.editing = true;
                         dropEdit.forceActiveFocus();
                         dropEdit.selectAll();
@@ -1171,6 +1203,7 @@ Popup {
                                                                                                : Theme.border)
                                             TextInput {
                                                 id: propText
+                                                property string openedWith: ""
                                                 anchors.fill: parent
                                                 anchors.leftMargin: 8
                                                 anchors.rightMargin: 8
@@ -1181,13 +1214,21 @@ Popup {
                                                 selectByMouse: true
                                                 text: String(propRow.modelData.value === undefined
                                                              ? "" : propRow.modelData.value)
+                                                // commits only a changed text; Escape puts the row's
+                                                // value back, bound again, and commits nothing
+                                                onActiveFocusChanged: if (activeFocus) openedWith = text
                                                 Keys.onEscapePressed: {
-                                                    propText.text = String(propRow.modelData.value === undefined
-                                                                           ? "" : propRow.modelData.value);
+                                                    propText.text = Qt.binding(function() {
+                                                        return String(propRow.modelData.value === undefined
+                                                                      ? "" : propRow.modelData.value); });
                                                     propText.focus = false;
                                                 }
-                                                onEditingFinished:
-                                                    deckPopup.setProp(propRow.modelData.name, propText.text)
+                                                onEditingFinished: {
+                                                    if (propText.text === propText.openedWith)
+                                                        return;
+                                                    deckPopup.setProp(propRow.modelData.name, propText.text);
+                                                    propText.openedWith = propText.text;
+                                                }
                                             }
                                         }
                                     }

@@ -304,6 +304,17 @@ def _test_a_refused_clamp_number_says_why(sb) -> None:
                              ("CLAMPCOMPOSITES", "wide", "That is not a number.")):
         assert sb.commit(key, bad) is False, (key, bad)
         assert fails[-1] == ([key], reason), (key, bad, fails[-1])
+    # the door reads a spelling as the command door's parse_factor does: a spelling it refuses as
+    # no plain number is not a number here, whatever float() makes of it and however large
+    from lwe_ui.cli.values import UsageError, parse_factor
+    for bad in ("5_0", "\u0665", " 5 ", "0_1"):
+        try:
+            parse_factor(bad)
+            raise AssertionError(("parse_factor accepted", bad))
+        except UsageError:
+            pass
+        assert sb.commit("SSFACTOR", bad) is False, bad
+        assert fails[-1] == (["SSFACTOR"], "That is not a number."), (bad, fails[-1])
     print("OK a refused clamp number says why: above 4 is out of range, anything else is not a number")
 
 
