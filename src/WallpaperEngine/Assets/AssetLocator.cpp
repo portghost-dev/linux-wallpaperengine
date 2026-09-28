@@ -5,6 +5,9 @@
 #include "WallpaperEngine/FileSystem/Adapters/MediaCover.h"
 #include "WallpaperEngine/Media/MediaSource.h"
 
+#include <mutex>
+#include <set>
+
 using namespace WallpaperEngine::Assets;
 
 AssetLocator::AssetLocator (ContainerUniquePtr filesystem) : m_filesystem (std::move (filesystem)) { }
@@ -100,6 +103,46 @@ std::filesystem::path AssetLocator::physicalPath (const std::filesystem::path& p
     }
 }
 
+namespace {
+bool packageInsideFolder (const std::filesystem::path& folder, const std::filesystem::path& package) {
+    std::error_code error;
+    const auto status = std::filesystem::symlink_status (package, error);
+
+    if (error || !std::filesystem::exists (status)) {
+	return false;
+    }
+
+    std::string reason;
+
+    if (std::filesystem::is_symlink (status)) {
+	reason = "it is a symbolic link";
+    } else if (!std::filesystem::is_regular_file (status)) {
+	reason = "it is not a regular file";
+    } else {
+	std::error_code folderError;
+	std::error_code packageError;
+	const auto base = std::filesystem::canonical (folder, folderError);
+	const auto relative = std::filesystem::canonical (package, packageError).lexically_relative (base);
+
+	if (!folderError && !packageError && !relative.empty () && *relative.begin () != "..") {
+	    return true;
+	}
+
+	reason = "it resolves outside the wallpaper folder";
+    }
+
+    static std::mutex loggedLock;
+    static std::set<std::filesystem::path> logged;
+    const std::lock_guard lock (loggedLock);
+
+    if (logged.insert (package).second) {
+	sLog.error ("Not mounting ", package.filename ().string (), " for ", folder.string (), ": ", reason);
+    }
+
+    return false;
+}
+} // namespace
+
 AssetLocatorUniquePtr WallpaperEngine::Assets::setupAssetLocator (
     const std::string& bg, const std::filesystem::path& assetsPath, Media::MediaSource& mediaSource
 ) {
@@ -113,7 +156,7 @@ AssetLocatorUniquePtr WallpaperEngine::Assets::setupAssetLocator (
 
     std::error_code packageError;
     for (const auto& entry : std::filesystem::directory_iterator (path, packageError)) {
-	if (entry.path ().extension () != ".pkg") {
+	if (entry.path ().extension () != ".pkg" || !packageInsideFolder (path, entry.path ())) {
 	    continue;
 	}
 
@@ -321,7 +364,7 @@ WallpaperEngine::Assets::setupWebAssetLocator (const std::string& bg, const std:
 
     container->mount (path, "/");
 
-    if (std::error_code packageError; std::filesystem::exists (path / "scene.pkg", packageError)) {
+    if (packageInsideFolder (path, path / "scene.pkg")) {
 	try {
 	    container->mount (path / "scene.pkg", "/");
 	} catch (std::runtime_error&) { }
