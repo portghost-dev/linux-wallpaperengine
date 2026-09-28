@@ -570,20 +570,15 @@ class SettingsBridge(QObject):
     def exceptionCount(self) -> int:
         return len(self.exceptions())
 
-    def _write_exceptions(self, change: Callable[[list[str]], list[str]]) -> bool:
+    def _write_exceptions(self, change: Callable[[str], str]) -> bool:
         header = "# fullscreen app_ids exempt from pause, one per line; e.g. steam\n"
-        entries: list[str] = []
-
-        def rewrite(_text: str) -> str:
-            entries[:] = change(self.exceptions())
-            return header + "".join(e + "\n" for e in entries)
         try:
-            rules.modify("pause-blacklist.txt", rewrite)
+            rules.modify("pause-blacklist.txt", lambda text: change(text or header))
         except OSError:
             return False
         try:
             if api_client.available():
-                api_client.set_fullscreen_ignore(entries)
+                api_client.set_fullscreen_ignore(self.exceptions())
         except Exception:
             pass
         self.truthRefreshed.emit()
@@ -596,14 +591,14 @@ class SettingsBridge(QObject):
             return self._fail("Exceptions", "That is not an app id.")
         if entry in self.exceptions():
             return True
-        if not self._write_exceptions(lambda current: current if entry in current else current + [entry]):
+        if not self._write_exceptions(lambda text: rules.add_entry(text, entry)):
             return self._fail("Exceptions", "The exceptions file could not be written.")
         return True
 
     @Slot(str, result=bool)
     def removeException(self, app_id: str) -> bool:
         entry = str(app_id).strip()
-        if not self._write_exceptions(lambda current: [e for e in current if e != entry]):
+        if not self._write_exceptions(lambda text: rules.remove_entry(text, entry)):
             return self._fail("Exceptions", "The exceptions file could not be written.")
         return True
 
@@ -621,22 +616,17 @@ class SettingsBridge(QObject):
     def appEntryCount(self) -> int:
         return len(self.appEntries())
 
-    def _write_app_list(self, change: Callable[[list[str]], list[str]]) -> bool:
+    def _write_app_list(self, change: Callable[[str], str]) -> bool:
         header = "# processes that trigger the running-apps rule, one comm name per line\n"
-        entries: list[str] = []
-
-        def rewrite(_text: str) -> str:
-            entries[:] = change(self.appEntries())
-            return header + "".join(e + "\n" for e in entries)
         try:
-            rules.modify("app-condition.txt", rewrite)
+            rules.modify("app-condition.txt", lambda text: change(text or header))
         except OSError:
             return False
         # the engine owns the poll now: a list edit must reach it live, not wait for
         # the next reconnect push
         try:
             api_client.set_app_conditions(
-                entries, str(self._load().get("APP_CONDITION_BEHAVIOR") or "off"))
+                self.appEntries(), str(self._load().get("APP_CONDITION_BEHAVIOR") or "off"))
         except Exception:
             pass
         self.truthRefreshed.emit()
@@ -653,14 +643,14 @@ class SettingsBridge(QObject):
             return self._fail("Apps", "That is not a process name.")
         if entry in self.appEntries():
             return True
-        if not self._write_app_list(lambda current: current if entry in current else current + [entry]):
+        if not self._write_app_list(lambda text: rules.add_entry(text, entry)):
             return self._fail("Apps", "The app list file could not be written.")
         return True
 
     @Slot(str, result=bool)
     def removeAppEntry(self, name: str) -> bool:
         entry = str(name).strip()
-        if not self._write_app_list(lambda current: [e for e in current if e != entry]):
+        if not self._write_app_list(lambda text: rules.remove_entry(text, entry)):
             return self._fail("Apps", "The app list file could not be written.")
         return True
 

@@ -28,16 +28,34 @@ def save(name: str, text: str) -> None:
 
 
 def modify(name: str, fn: Callable[[str], str]) -> str:
-    """Under the rules lock: fn receives the file's current text ("" when it is missing or
-    unreadable) and returns the text to write. Returns what was written."""
+    """Under the rules lock: fn receives the file's current text ("" when there is no file)
+    and returns the text it should hold; the file is written only when that text differs.
+    Returns the text. A file that exists but cannot be read raises."""
     with lock.held("rules"):
         try:
-            text = file_for(name).read_text(encoding="utf-8")
-        except OSError:
+            text = file_for(name).read_bytes().decode("utf-8")
+        except FileNotFoundError:
             text = ""
         new = fn(text)
-        save(name, new)
+        if new != text:
+            save(name, new)
         return new
+
+
+def add_entry(text: str, entry: str) -> str:
+    """The list with `entry` appended as one line, unless a line already reads `entry` once
+    stripped; an unterminated last line is terminated first. Every other line stays."""
+    lines = text.splitlines(keepends=True)
+    if any(line.strip() == entry for line in lines):
+        return text
+    if lines and lines[-1].splitlines()[0] == lines[-1]:
+        text += "\n"
+    return text + entry + "\n"
+
+
+def remove_entry(text: str, entry: str) -> str:
+    """The list without every line that reads `entry` once stripped. Every other line stays."""
+    return "".join(line for line in text.splitlines(keepends=True) if line.strip() != entry)
 
 
 def _entries(text: str, name: str = "", r: dict[str, Any] | None = None) -> str:

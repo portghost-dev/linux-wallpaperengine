@@ -333,7 +333,9 @@ def write_files(outputs: list[str] | None = None) -> tuple[str, str]:
             existing = env_path.read_text(encoding="utf-8")
         except OSError:
             existing = None
-        atomic.atomic_write_text(env_path, build_env_content(outputs, existing))
+        env_text = build_env_content(outputs, existing)
+        if env_text != existing:
+            atomic.atomic_write_text(env_path, env_text)
 
         unit_dir = os.path.expanduser("~/.config/systemd/user")
         os.makedirs(unit_dir, exist_ok=True)
@@ -346,8 +348,14 @@ def write_files(outputs: list[str] | None = None) -> tuple[str, str]:
         if '"' in engine_bin or "\n" in engine_bin:
             raise ValueError(f"engine path {engine_bin!r} cannot be written into a unit file")
         # quoted ExecStart handles spaces; % is a systemd specifier and must be doubled
-        atomic.atomic_write_text(unit_path, _UNIT_TEMPLATE.format(
-            env_name=ENV_FILE_NAME, engine_bin=engine_bin.replace("%", "%%")))
+        unit_text = _UNIT_TEMPLATE.format(env_name=ENV_FILE_NAME,
+                                          engine_bin=engine_bin.replace("%", "%%"))
+        try:
+            unit_same = Path(unit_path).read_text(encoding="utf-8") == unit_text
+        except OSError:
+            unit_same = False
+        if not unit_same:
+            atomic.atomic_write_text(unit_path, unit_text)
 
     try:
         reload_proc = subprocess.run(["systemctl", "--user", "daemon-reload"],

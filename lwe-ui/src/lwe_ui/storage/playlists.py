@@ -111,13 +111,25 @@ def save(slug: str, d: dict[str, Any]) -> None:
 
 
 def modify(slug: str, fn: Callable[[dict[str, Any]], dict[str, Any] | None]) -> dict[str, Any]:
-    """Under the playlists lock: load the playlist fresh, pass it to fn, and write the keys fn
-    returns over it. Returns those keys; nothing is written when there are none."""
+    """Under the playlists lock: load the playlist fresh, pass it to fn, and apply the keys fn
+    returns to the file's own lines: a value sets its key, None deletes it, every other line
+    stays. A playlist with no file is written whole. Returns those keys; the file is written
+    only when its text changes."""
     with lock.held("playlists"):
+        p = paths.playlist_file(slug)
         current = load(slug)
         changes = fn(dict(current)) or {}
-        if changes:
+        if changes and not p.exists():
             save(slug, {**current, **changes})
+        elif changes:
+            text = p.read_bytes().decode("utf-8")
+            sets = {k: v for k, v in changes.items() if v is not None}
+            valid = _validate({**current, **sets})
+            flat: dict[str, str | None] = {k: str(valid[k]) for k in sets if k in C.PLAYLIST_SCHEMA}
+            flat.update({k: None for k, v in changes.items() if v is None and k in C.PLAYLIST_SCHEMA})
+            new = tier_a.edit(text, flat)
+            if new != text:
+                atomic.atomic_write_text(p, new)
         return changes
 
 

@@ -24,7 +24,7 @@ def _read_raw(path) -> str:
     """The conf text, or "" when there is no file. A file that exists but cannot be read
     raises, so no caller mistakes an unreadable conf for an empty one."""
     try:
-        return Path(path).read_text(encoding="utf-8")
+        return Path(path).read_bytes().decode("utf-8")
     except FileNotFoundError:
         return ""
 
@@ -142,9 +142,10 @@ def update_set_path(path, changes: dict[str, Any]) -> None:
 
     The counterpart to load_set. save() rewrites the whole file from a materialised dict,
     so it cannot express "this key is absent" for a non-optional schema key; this reads
-    the raw file, applies exactly the named changes, and writes the rest back byte-for-byte
-    (same Tier A serialization). Keys not named are never touched - BG and TYPE in
-    particular survive every edit, since they are identity, not override.
+    the raw file and applies exactly the named changes to its own lines (tier_a.edit), so
+    every other line, comments and blank lines included, stays byte for byte. Keys not named
+    are never touched - BG and TYPE in particular survive every edit, since they are
+    identity, not override.
 
     Path-based so the same presence-preserving edit can be aimed at any conf on the same
     Tier A schema, not only the one wp/<id>.conf that load()/save() resolve by id.
@@ -156,22 +157,24 @@ def update_set_path(path, changes: dict[str, Any]) -> None:
     changes would drop every other key, so the edit must fail instead.
     """
     with lock.held("overrides"):
-        flat = tier_a.parse(_read_raw(path))
+        text = _read_raw(path)
+        edits: dict[str, str | None] = {}
         for key, val in changes.items():
             if not tier_a.is_valid_key(key):
                 warnings.warn(f"wp: {key!r} is not a shell identifier; skipping it")
                 continue
             if val is None:
-                flat.pop(key, None)
+                edits[key] = None
                 continue
             sval = _bool_str(val) if isinstance(val, bool) else str(val)
             if "\n" in sval or "\r" in sval:
                 warnings.warn(f"wp: value for {key!r} has a newline; skipping it")
                 continue
-            flat[key] = sval
+            edits[key] = sval
         stem = Path(path).stem
-        atomic.atomic_write_text(
-            path, tier_a.serialize(flat, header=f"lwe wallpaper override {stem} (Tier A)"))
+        new = tier_a.edit(text, edits, header=f"lwe wallpaper override {stem} (Tier A)")
+        if new != text:
+            atomic.atomic_write_text(path, new)
 
 
 #: keys that are the wallpaper's identity, never inherited, always written
@@ -237,7 +240,8 @@ def sparsify_overrides() -> dict[str, list[str]]:
             continue
         with lock.held("overrides"):
             try:
-                raw = tier_a.parse(conf.read_text(encoding="utf-8"))
+                text = conf.read_bytes().decode("utf-8")
+                raw = tier_a.parse(text)
             except (OSError, ValueError):
                 continue
             removed = [k for k, v in raw.items()
@@ -245,9 +249,8 @@ def sparsify_overrides() -> dict[str, list[str]]:
                        and _coerce(C.WP_SCHEMA[k], v) == C.WP_SCHEMA[k]["default"]]
             if not removed:
                 continue
-            kept = {k: v for k, v in raw.items() if k not in removed}
             try:
-                atomic.atomic_write_text(conf, tier_a.serialize(kept, header=f"lwe wallpaper override {wid} (Tier A)"))
+                atomic.atomic_write_text(conf, tier_a.edit(text, dict.fromkeys(removed)))
             except OSError:
                 continue
         report[wid] = removed

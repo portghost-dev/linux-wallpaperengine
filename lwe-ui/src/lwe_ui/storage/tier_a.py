@@ -88,3 +88,44 @@ def parse(text: str) -> dict[str, str]:
             continue
         out[m.group(1)] = _unquote(m.group(2))
     return out
+
+
+def _assigned_key(line: str) -> str | None:
+    """The key a line assigns, read the way parse() reads it, or None."""
+    s = line.strip()
+    if not s or s.startswith("#"):
+        return None
+    m = _LINE_RE.match(s)
+    return m.group(1) if m else None
+
+
+def edit(text: str, changes: dict[str, str | None], *, header: str | None = None) -> str:
+    """`text` with `changes` applied line by line. A value replaces the last assignment of its
+    key in place, keeping that line's indentation and line ending, or is appended as a new
+    line when the key has none; None deletes every assignment of the key. Every other line
+    stays as it was. `header` starts the text only when `text` is empty."""
+    lines = text.splitlines(keepends=True)
+    keys = [_assigned_key(line) for line in lines]
+    out: list[str | None] = list(lines)
+    tail: list[str] = []
+    for key, value in changes.items():
+        if not _KEY_RE.match(key):
+            raise ValueError(f"invalid shell key: {key!r}")
+        at = [i for i, k in enumerate(keys) if k == key]
+        if value is None:
+            for i in at:
+                out[i] = None
+            continue
+        assignment = f"{key}={quote(str(value))}"
+        if at:
+            old = lines[at[-1]]
+            body = old.splitlines()[0]
+            out[at[-1]] = body[:len(body) - len(body.lstrip())] + assignment + old[len(body):]
+        else:
+            tail.append(assignment + "\n")
+    kept = [line for line in out if line is not None]
+    if not text and header:
+        kept = [(f"# {ln}" if ln else "#") + "\n" for ln in header.splitlines()]
+    if tail and kept and kept[-1].splitlines()[0] == kept[-1]:
+        kept[-1] += "\n"
+    return "".join(kept + tail)
