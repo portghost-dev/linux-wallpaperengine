@@ -30,7 +30,7 @@ import logging
 import os
 import re
 import subprocess
-from typing import Any
+from typing import Any, Callable
 
 from time import monotonic
 
@@ -39,7 +39,7 @@ from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
 from . import api_client
 from . import constants as C
 from .engine import daemon_unit
-from .storage import atomic, backup, paths, settings, tags
+from .storage import backup, paths, rules, settings, tags
 
 _REGENERATE_KEYS = C.REACH_SERVICE_RESTART
 
@@ -570,11 +570,15 @@ class SettingsBridge(QObject):
     def exceptionCount(self) -> int:
         return len(self.exceptions())
 
-    def _write_exceptions(self, entries: list[str]) -> bool:
-        path = paths.config_dir() / "pause-blacklist.txt"
+    def _write_exceptions(self, change: Callable[[list[str]], list[str]]) -> bool:
         header = "# fullscreen app_ids exempt from pause, one per line; e.g. steam\n"
+        entries: list[str] = []
+
+        def rewrite(_text: str) -> str:
+            entries[:] = change(self.exceptions())
+            return header + "".join(e + "\n" for e in entries)
         try:
-            atomic.atomic_write_text(path, header + "".join(e + "\n" for e in entries))
+            rules.modify("pause-blacklist.txt", rewrite)
         except OSError:
             return False
         try:
@@ -590,18 +594,16 @@ class SettingsBridge(QObject):
         entry = str(app_id).strip()[:128]
         if not entry or entry.startswith("#"):
             return self._fail("Exceptions", "That is not an app id.")
-        current = self.exceptions()
-        if entry in current:
+        if entry in self.exceptions():
             return True
-        if not self._write_exceptions(current + [entry]):
+        if not self._write_exceptions(lambda current: current if entry in current else current + [entry]):
             return self._fail("Exceptions", "The exceptions file could not be written.")
         return True
 
     @Slot(str, result=bool)
     def removeException(self, app_id: str) -> bool:
         entry = str(app_id).strip()
-        remaining = [e for e in self.exceptions() if e != entry]
-        if not self._write_exceptions(remaining):
+        if not self._write_exceptions(lambda current: [e for e in current if e != entry]):
             return self._fail("Exceptions", "The exceptions file could not be written.")
         return True
 
@@ -619,11 +621,15 @@ class SettingsBridge(QObject):
     def appEntryCount(self) -> int:
         return len(self.appEntries())
 
-    def _write_app_list(self, entries: list[str]) -> bool:
+    def _write_app_list(self, change: Callable[[list[str]], list[str]]) -> bool:
         header = "# processes that trigger the running-apps rule, one comm name per line\n"
+        entries: list[str] = []
+
+        def rewrite(_text: str) -> str:
+            entries[:] = change(self.appEntries())
+            return header + "".join(e + "\n" for e in entries)
         try:
-            atomic.atomic_write_text(
-                paths.config_dir() / "app-condition.txt", header + "".join(e + "\n" for e in entries))
+            rules.modify("app-condition.txt", rewrite)
         except OSError:
             return False
         # the engine owns the poll now: a list edit must reach it live, not wait for
@@ -645,18 +651,16 @@ class SettingsBridge(QObject):
         entry = str(name).strip()[:15]
         if not entry or entry.startswith("#"):
             return self._fail("Apps", "That is not a process name.")
-        current = self.appEntries()
-        if entry in current:
+        if entry in self.appEntries():
             return True
-        if not self._write_app_list(current + [entry]):
+        if not self._write_app_list(lambda current: current if entry in current else current + [entry]):
             return self._fail("Apps", "The app list file could not be written.")
         return True
 
     @Slot(str, result=bool)
     def removeAppEntry(self, name: str) -> bool:
         entry = str(name).strip()
-        remaining = [e for e in self.appEntries() if e != entry]
-        if not self._write_app_list(remaining):
+        if not self._write_app_list(lambda current: [e for e in current if e != entry]):
             return self._fail("Apps", "The app list file could not be written.")
         return True
 

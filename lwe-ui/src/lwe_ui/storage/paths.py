@@ -57,6 +57,10 @@ def data_dir() -> Path:
     return _xdg("XDG_DATA_HOME", ".local/share") / "lwe"
 
 
+def locks_dir() -> Path:
+    return config_dir() / "locks"
+
+
 # --- the state tree: logs/<subsystem>/, panel/, engine/, probes/ under the state dir.
 # The engine moves its own files (engine-state.json, boot-history.json, texcache, cef.log,
 # its dumps) at boot; this module never moves an engine file.

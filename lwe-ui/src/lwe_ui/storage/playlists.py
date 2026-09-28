@@ -16,10 +16,10 @@ import re
 import time
 import warnings
 import zipfile
-from typing import Any
+from typing import Any, Callable
 
 from .. import constants as C
-from . import atomic, foreign, migrate, paths, settings, tier_a
+from . import atomic, foreign, lock, migrate, paths, settings, tier_a
 from .store import Store
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -106,7 +106,24 @@ def save(slug: str, d: dict[str, Any]) -> None:
     flat = {k: str(valid[k]) for k in C.PLAYLIST_SCHEMA}
     text = tier_a.serialize(flat, header="lwe playlist (Tier A) - managed by LWE Control Panel")
     paths.ensure_dirs()
-    atomic.atomic_write_text(paths.playlist_file(slug), text)
+    with lock.held("playlists"):
+        atomic.atomic_write_text(paths.playlist_file(slug), text)
+
+
+def modify(slug: str, fn: Callable[[dict[str, Any]], dict[str, Any] | None]) -> dict[str, Any]:
+    """Under the playlists lock: load the playlist fresh, pass it to fn, and write the keys fn
+    returns over it. Returns those keys; nothing is written when there are none."""
+    with lock.held("playlists"):
+        current = load(slug)
+        changes = fn(dict(current)) or {}
+        if changes:
+            save(slug, {**current, **changes})
+        return changes
+
+
+def update(slug: str, changes: dict[str, Any]) -> dict[str, Any]:
+    """Set these keys of one playlist under the playlists lock, over a fresh load."""
+    return modify(slug, lambda _current: dict(changes))
 
 
 def list_playlists() -> list[dict[str, Any]]:
@@ -124,26 +141,26 @@ def list_playlists() -> list[dict[str, Any]]:
 
 def create(name: str, members: list[str] | None = None, mode: str = "shuffle",
            interval: int = 900, unit: str = "min") -> str:
-    slug = _unique_slug(name)
-    save(slug, {"NAME": name.strip() or slug, "MODE": mode, "INTERVAL": interval,
-                "UNIT": unit, "MEMBERS": " ".join(members or [])})
+    with lock.held("playlists"):
+        slug = _unique_slug(name)
+        save(slug, {"NAME": name.strip() or slug, "MODE": mode, "INTERVAL": interval,
+                    "UNIT": unit, "MEMBERS": " ".join(members or [])})
     return slug
 
 
 def rename(slug: str, new_name: str) -> None:
     """Display-name change only - the slug (and every pointer to it) stays stable."""
-    d = load(slug)
-    d["NAME"] = new_name.strip() or slug
-    save(slug, d)
+    update(slug, {"NAME": new_name.strip() or slug})
 
 
 def delete(slug: str) -> None:
     """Tombstone to legacy/playlists/ (recoverable). Reassigns the active pointer."""
-    src = paths.playlist_file(slug)
-    if src.exists():
-        dst_dir = paths.legacy_playlists_dir()
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        src.replace(dst_dir / f"{slug}.conf.{time.strftime('%Y%m%d-%H%M%S')}")
+    with lock.held("playlists"):
+        src = paths.playlist_file(slug)
+        if src.exists():
+            dst_dir = paths.legacy_playlists_dir()
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            src.replace(dst_dir / f"{slug}.conf.{time.strftime('%Y%m%d-%H%M%S')}")
     if active_slug(validate=False) == slug:
         remaining = list_playlists()
         set_active(remaining[0]["slug"] if remaining else "")
@@ -155,31 +172,27 @@ def members(slug: str) -> list[str]:
 
 def toggle_member(slug: str, wid: str) -> bool:
     """Add/remove `wid` from the playlist. Returns True if it is a member AFTER the call."""
-    d = load(slug)
-    ids = d["MEMBERS"].split()
-    if wid in ids:
-        ids.remove(wid)  # removal always allowed, even for a legacy-unsafe id already stored
-        now = False
-    elif paths.is_safe_wid(wid):
-        ids.append(wid)
-        now = True
-    else:
-        return False  # never ADD an id that would split or glob in the shell MEMBERS list
-    d["MEMBERS"] = " ".join(ids)
-    save(slug, d)
-    return now
+    def toggle(d: dict[str, Any]) -> dict[str, Any]:
+        ids = d["MEMBERS"].split()
+        if wid in ids:
+            ids.remove(wid)  # removal always allowed, even for a legacy-unsafe id already stored
+        elif paths.is_safe_wid(wid):
+            ids.append(wid)
+        else:
+            return {}  # never ADD an id that would split or glob in the shell MEMBERS list
+        return {"MEMBERS": " ".join(ids)}
+    return wid in modify(slug, toggle).get("MEMBERS", "").split()
 
 
 def reorder(slug: str, ids: list[str]) -> list[str]:
     """Store `ids` as the playlist's order. Members left out keep their old relative order
     at the end; ids that are not members are ignored. Ordering never adds or removes."""
-    d = load(slug)
-    current = d["MEMBERS"].split()
-    wanted = [w for w in dict.fromkeys(ids) if w in current]
-    rest = [w for w in current if w not in wanted]
-    d["MEMBERS"] = " ".join(wanted + rest)
-    save(slug, d)
-    return wanted + rest
+    def order(d: dict[str, Any]) -> dict[str, Any]:
+        current = d["MEMBERS"].split()
+        wanted = [w for w in dict.fromkeys(ids) if w in current]
+        rest = [w for w in current if w not in wanted]
+        return {"MEMBERS": " ".join(wanted + rest)}
+    return modify(slug, order)["MEMBERS"].split()
 
 
 def insert_member(slug: str, wid: str, index: int) -> int:
@@ -188,15 +201,14 @@ def insert_member(slug: str, wid: str, index: int) -> int:
     that cannot be stored."""
     if not paths.is_safe_wid(wid):
         return -1
-    d = load(slug)
-    ids = d["MEMBERS"].split()
-    if wid in ids:
-        ids.remove(wid)
-    index = max(0, min(int(index), len(ids)))
-    ids.insert(index, wid)
-    d["MEMBERS"] = " ".join(ids)
-    save(slug, d)
-    return index
+
+    def insert(d: dict[str, Any]) -> dict[str, Any]:
+        ids = d["MEMBERS"].split()
+        if wid in ids:
+            ids.remove(wid)
+        ids.insert(max(0, min(int(index), len(ids))), wid)
+        return {"MEMBERS": " ".join(ids)}
+    return modify(slug, insert)["MEMBERS"].split().index(wid)
 
 
 def active_slug(validate: bool = True) -> str:
@@ -207,9 +219,7 @@ def active_slug(validate: bool = True) -> str:
 
 
 def set_active(slug: str) -> None:
-    s = settings.load()
-    s["ACTIVE_PLAYLIST"] = slug
-    settings.save(s)
+    settings.update({"ACTIVE_PLAYLIST": slug})
 
 
 def ensure_default() -> str:

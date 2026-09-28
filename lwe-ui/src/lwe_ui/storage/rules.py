@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from . import atomic, paths
+from . import atomic, lock, paths
 from .store import Store
 
 FILES = ("app-condition.txt", "pause-blacklist.txt", "pause-whitelist.txt")
@@ -23,7 +23,21 @@ def file_for(name: str) -> Path:
 
 
 def save(name: str, text: str) -> None:
-    atomic.atomic_write_text(file_for(name), text)
+    with lock.held("rules"):
+        atomic.atomic_write_text(file_for(name), text)
+
+
+def modify(name: str, fn: Callable[[str], str]) -> str:
+    """Under the rules lock: fn receives the file's current text ("" when it is missing or
+    unreadable) and returns the text to write. Returns what was written."""
+    with lock.held("rules"):
+        try:
+            text = file_for(name).read_text(encoding="utf-8")
+        except OSError:
+            text = ""
+        new = fn(text)
+        save(name, new)
+        return new
 
 
 def _entries(text: str, name: str = "", r: dict[str, Any] | None = None) -> str:

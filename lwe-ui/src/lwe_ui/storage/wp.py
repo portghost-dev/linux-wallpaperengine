@@ -10,10 +10,10 @@ import os
 import warnings
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .. import constants as C
-from . import atomic, foreign, migrate, paths, tier_a
+from . import atomic, foreign, lock, migrate, paths, tier_a
 from .store import Store
 
 # Keys whose empty value means "unset / inherit" and must NOT be written.
@@ -155,22 +155,23 @@ def update_set_path(path, changes: dict[str, Any]) -> None:
     Raises when the file exists but cannot be read: a rewrite from nothing plus the
     changes would drop every other key, so the edit must fail instead.
     """
-    flat = tier_a.parse(_read_raw(path))
-    for key, val in changes.items():
-        if not tier_a.is_valid_key(key):
-            warnings.warn(f"wp: {key!r} is not a shell identifier; skipping it")
-            continue
-        if val is None:
-            flat.pop(key, None)
-            continue
-        sval = _bool_str(val) if isinstance(val, bool) else str(val)
-        if "\n" in sval or "\r" in sval:
-            warnings.warn(f"wp: value for {key!r} has a newline; skipping it")
-            continue
-        flat[key] = sval
-    stem = Path(path).stem
-    atomic.atomic_write_text(
-        path, tier_a.serialize(flat, header=f"lwe wallpaper override {stem} (Tier A)"))
+    with lock.held("overrides"):
+        flat = tier_a.parse(_read_raw(path))
+        for key, val in changes.items():
+            if not tier_a.is_valid_key(key):
+                warnings.warn(f"wp: {key!r} is not a shell identifier; skipping it")
+                continue
+            if val is None:
+                flat.pop(key, None)
+                continue
+            sval = _bool_str(val) if isinstance(val, bool) else str(val)
+            if "\n" in sval or "\r" in sval:
+                warnings.warn(f"wp: value for {key!r} has a newline; skipping it")
+                continue
+            flat[key] = sval
+        stem = Path(path).stem
+        atomic.atomic_write_text(
+            path, tier_a.serialize(flat, header=f"lwe wallpaper override {stem} (Tier A)"))
 
 
 #: keys that are the wallpaper's identity, never inherited, always written
@@ -203,8 +204,26 @@ def facts_to_keys(d: dict[str, Any]) -> dict[str, str]:
 def write_keys(wid: str, flat: dict[str, str]) -> None:
     """Write wp/<wid>.conf as exactly these keys: the sparse whole-file writer."""
     paths.ensure_dirs()
-    atomic.atomic_write_text(paths.wp_file(wid),
-                             tier_a.serialize(flat, header=f"lwe wallpaper override {wid} (Tier A)"))
+    with lock.held("overrides"):
+        atomic.atomic_write_text(paths.wp_file(wid),
+                                 tier_a.serialize(flat, header=f"lwe wallpaper override {wid} (Tier A)"))
+
+
+def modify_set(wid: str, fn: Callable[[dict[str, str]], dict[str, Any] | None]) -> dict[str, Any]:
+    """Under the overrides lock: fn receives the keys wp/<wid>.conf carries, raw ({} when there
+    is no file), and returns the changes. An existing file takes them as update_set applies
+    them; a missing one is written with exactly the keys set (write_keys). Returns the changes."""
+    with lock.held("overrides"):
+        path = paths.wp_file(wid)
+        if path.exists():
+            changes = fn(tier_a.parse(_read_raw(path))) or {}
+            if changes:
+                update_set_path(path, changes)
+        else:
+            changes = fn({}) or {}
+            if changes:
+                write_keys(wid, {k: v for k, v in changes.items() if v is not None})
+        return changes
 
 
 def sparsify_overrides() -> dict[str, list[str]]:
@@ -216,20 +235,21 @@ def sparsify_overrides() -> dict[str, list[str]]:
         wid = conf.stem
         if not paths.is_safe_wid(wid):
             continue
-        try:
-            raw = tier_a.parse(conf.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        removed = [k for k, v in raw.items()
-                   if k in C.WP_SCHEMA and k not in IDENTITY_KEYS
-                   and _coerce(C.WP_SCHEMA[k], v) == C.WP_SCHEMA[k]["default"]]
-        if not removed:
-            continue
-        kept = {k: v for k, v in raw.items() if k not in removed}
-        try:
-            atomic.atomic_write_text(conf, tier_a.serialize(kept, header=f"lwe wallpaper override {wid} (Tier A)"))
-        except OSError:
-            continue
+        with lock.held("overrides"):
+            try:
+                raw = tier_a.parse(conf.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            removed = [k for k, v in raw.items()
+                       if k in C.WP_SCHEMA and k not in IDENTITY_KEYS
+                       and _coerce(C.WP_SCHEMA[k], v) == C.WP_SCHEMA[k]["default"]]
+            if not removed:
+                continue
+            kept = {k: v for k, v in raw.items() if k not in removed}
+            try:
+                atomic.atomic_write_text(conf, tier_a.serialize(kept, header=f"lwe wallpaper override {wid} (Tier A)"))
+            except OSError:
+                continue
         report[wid] = removed
     return report
 
@@ -248,7 +268,8 @@ def save_path(path, d: dict[str, Any]) -> None:
     so every writer of a wp-schema conf shares one serialization."""
     from pathlib import Path
 
-    atomic.atomic_write_text(path, serialize(d, Path(path).stem))
+    with lock.held("overrides"):
+        atomic.atomic_write_text(path, serialize(d, Path(path).stem))
 
 
 def serialize(d: dict[str, Any], wid: str = "") -> str:

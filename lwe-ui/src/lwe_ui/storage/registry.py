@@ -33,6 +33,7 @@ CARRIED_INSIDE: dict[str, str] = {
 NOT_BACKED_UP: dict[str, str] = {
     "engine-env": "generated from settings at every panel start, for this machine's outputs",
     "legacy/playlists/*": "deleted playlists, recoverable on the machine they were deleted on",
+    "locks/*": "the lock each store's writers take, one file per store, never deleted or replaced",
 }
 
 

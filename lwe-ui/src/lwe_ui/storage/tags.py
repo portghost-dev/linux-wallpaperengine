@@ -11,7 +11,7 @@ import io
 import zipfile
 from typing import Any
 
-from . import atomic, paths
+from . import atomic, lock, paths
 from .store import Store
 
 HEADER = ("id", "title", "state")
@@ -83,14 +83,14 @@ def set_state(id: str, title: str, state: str) -> None:
     """Upsert a row (match by id) and save. Updates the title on every call.
     States in use: good (rotates), bad (tombstone), review (imported, awaiting the
     card verdict; never rotates). Thread-safe."""
-    with _WRITE_LOCK:
+    with _WRITE_LOCK, lock.held("tags"):
         _set_state_locked(id, title, state)
 
 
 def remove(id: str) -> None:
     """Delete a row entirely (tombstone restore: an unknown id reimports / re-pends
     naturally, which IS the restore semantics). Thread-safe. No-op when absent."""
-    with _WRITE_LOCK:
+    with _WRITE_LOCK, lock.held("tags"):
         rows = load()
         kept = [r for r in rows if r.get("id") != id]
         if len(kept) != len(rows):
@@ -99,7 +99,7 @@ def remove(id: str) -> None:
 
 def save_rows(rows: list[dict]) -> None:
     """Replace the whole store under the module lock."""
-    with _WRITE_LOCK:
+    with _WRITE_LOCK, lock.held("tags"):
         save(rows)
 
 
@@ -107,7 +107,7 @@ def remove_state(state: str) -> list[str]:
     """Drop every row in `state`, load-filter-save INSIDE the lock (a concurrent import
     worker's set_state must never be lost - tags.csv is watcher-load-bearing). Returns
     the removed ids (the tombstone clear-all reports what came back to life)."""
-    with _WRITE_LOCK:
+    with _WRITE_LOCK, lock.held("tags"):
         rows = load()
         removed = [r["id"] for r in rows if r.get("state") == state and r.get("id")]
         if removed:
@@ -183,10 +183,11 @@ def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
     if not rows:
         return True
     try:
-        current = {row["id"]: row for row in load() if row.get("id")}
-        for row in rows:
-            current[row["id"]] = row
-        save(list(current.values()))
+        with lock.held("tags"):
+            current = {row["id"]: row for row in load() if row.get("id")}
+            for row in rows:
+                current[row["id"]] = row
+            save(list(current.values()))
     except Exception as exc:
         r["errors"].append({"file": MEMBER, "reason": str(exc)})
     return True

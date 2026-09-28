@@ -34,7 +34,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import paths
+from . import lock, paths
 
 ACTIONS = ("approved", "deleted", "bypassed", "benched_no_decision")
 INITIATORS = ("human", "wizard_recommended")
@@ -103,7 +103,7 @@ def append(wid: str, event: dict) -> bool:
     # carry a raw line separator that split()/splitlines() would tear the event on; also keeps the
     # record file pure-ASCII. open("a") is O_APPEND (atomic offset, single writer) and writes fully
     # (A2: no short-write truncation, unlike a bare os.write).
-    with open(p, "a", encoding="utf-8") as f:
+    with lock.held("records"), open(p, "a", encoding="utf-8") as f:
         f.write(json.dumps(event) + "\n")
     return True
 

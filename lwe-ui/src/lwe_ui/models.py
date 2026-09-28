@@ -980,12 +980,18 @@ class Backend(QObject):
     def _drop_from_schedule(self, slug: str) -> None:
         """A deleted playlist leaves the schedule and the schedule switches off, the same
         thing the engine does on its side; the modal then opens with the switch off."""
-        packed = str(self._setting("SCHEDULE", "") or "")
-        kept = [e for e in packed.split(";") if e.strip() and e.partition("=")[2].strip() != slug]
-        if len(kept) == len([e for e in packed.split(";") if e.strip()]):
+        def drop(cur: dict[str, Any]) -> dict[str, Any]:
+            packed = str(cur.get("SCHEDULE", "") or "")
+            kept = [e for e in packed.split(";") if e.strip() and e.partition("=")[2].strip() != slug]
+            if len(kept) == len([e for e in packed.split(";") if e.strip()]):
+                return {}
+            return {"SCHEDULE": ";".join(kept), "SCHEDULE_ENABLED": False}
+        try:
+            changed = settings.modify(drop)
+        except Exception:
             return
-        self._set_setting("SCHEDULE", ";".join(kept))
-        self._set_setting("SCHEDULE_ENABLED", False)
+        if changed:
+            self.settingsChanged.emit()
 
     @Slot(str)
     def setPlaylistMode(self, mode: str) -> None:
@@ -993,9 +999,7 @@ class Backend(QObject):
         if not slug:
             return
         try:
-            d = playlists.load(slug)
-            d["MODE"] = mode
-            playlists.save(slug, d)  # save re-mirrors legacy keys for the active playlist
+            playlists.update(slug, {"MODE": mode})
         except Exception:
             return
         self.playlistsChanged.emit()
@@ -1013,10 +1017,8 @@ class Backend(QObject):
             return
         seconds = int(value) * (60 if unit == "min" else 1)
         try:
-            d = playlists.load(slug)
-            d["INTERVAL"] = seconds
-            d["UNIT"] = unit if unit in C.PLAYLIST_UNITS else "min"
-            playlists.save(slug, d)
+            playlists.update(slug, {"INTERVAL": seconds,
+                                    "UNIT": unit if unit in C.PLAYLIST_UNITS else "min"})
         except Exception:
             return
         self.playlistsChanged.emit()
@@ -1429,17 +1431,12 @@ class Backend(QObject):
     def restoreSessionOverrides(self) -> None:
         """App quit: clear every session override so nothing outlives the session."""
         try:
-            cur = settings.load()
+            changed = settings.modify(lambda cur: {skey: False for skey in self._SESSION_KEYS.values()
+                                                   if cur.get(skey)})
         except Exception:
             return
-        changed = False
-        for skey in self._SESSION_KEYS.values():
-            if cur.get(skey):
-                cur[skey] = False
-                changed = True
         if changed:
             try:
-                settings.save(cur)
                 self._sync_engine()
             except Exception:
                 pass
@@ -1556,16 +1553,14 @@ class Backend(QObject):
 
         Load current -> build defaults -> carry the preserved set forward -> save.
         """
-        try:
-            current = settings.load()
-        except Exception:
-            current = {}
-        try:
+        def reset(current: dict[str, Any]) -> dict[str, Any]:
             fresh = dict(paths.default_settings())
             for key in self._RESET_PRESERVED:
                 if key in current:
                     fresh[key] = current[key]
-            settings.save(fresh)
+            return fresh
+        try:
+            settings.replace(reset)
         except Exception:
             return False
         self.settingsChanged.emit()
@@ -1882,12 +1877,7 @@ class Backend(QObject):
 
     def _set_setting(self, key: str, value: Any) -> None:
         try:
-            cur = settings.load()
-        except Exception:
-            cur = dict(paths.default_settings())
-        cur[key] = value
-        try:
-            settings.save(cur)
+            settings.update({key: value})
         except Exception:
             return
         self.settingsChanged.emit()

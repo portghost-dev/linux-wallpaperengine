@@ -19,7 +19,7 @@ import json
 import zipfile
 from typing import Any
 
-from . import atomic, foreign, migrate, paths
+from . import atomic, foreign, lock, migrate, paths
 from .store import Store
 
 ROLES = ("background", "surface", "text", "textMuted", "accent", "border")
@@ -188,10 +188,11 @@ def active_keys() -> set[str]:
 
 
 def save_config(cfg: dict[str, Any]) -> None:
-    atomic.atomic_write_json(paths.theme_file(), {
-        "active": cfg.get("active", DEFAULT_ACTIVE),
-        "overlays": cfg.get("overlays", {}),
-    })
+    with lock.held("theme"):
+        atomic.atomic_write_json(paths.theme_file(), {
+            "active": cfg.get("active", DEFAULT_ACTIVE),
+            "overlays": cfg.get("overlays", {}),
+        })
 
 
 def theme_list() -> list[dict[str, str]]:
@@ -415,7 +416,8 @@ def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
     if not t:
         return True
     try:
-        save_config({**load_config(), **t})
+        with lock.held("theme"):
+            save_config({**load_config(), **t})
     except Exception as exc:
         r["errors"].append({"file": MEMBER, "reason": str(exc)})
     return True

@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import Any
 
 from .. import constants as C
-from . import atomic, paths
+from . import atomic, lock, paths
 
 MEMBER = "foreign.json"
 
@@ -38,7 +38,8 @@ def load() -> dict[str, dict[str, dict[str, Any]]]:
 
 
 def save(d: dict[str, dict[str, dict[str, Any]]]) -> None:
-    atomic.atomic_write_json(_file(), d)
+    with lock.held("foreign"):
+        atomic.atomic_write_json(_file(), d)
 
 
 def extras(store: str, scope: str, data: dict | None = None) -> dict[str, Any]:
@@ -62,64 +63,67 @@ def promote(log=None) -> dict[str, int]:
     playlist or override no longer exists are dropped too. Runs at every panel start."""
     from .. import constants as C
     from . import discover_cfg, playlists, settings, themes, wp
-    data = load()
-    if not data:
-        return {"promoted": 0, "pruned": 0}
-    done = {"promoted": 0, "pruned": 0}
+    with lock.held("foreign"):
+        data = load()
+        if not data:
+            return {"promoted": 0, "pruned": 0}
+        done = {"promoted": 0, "pruned": 0}
 
-    def promote_dense(store, scope, known, read, write, coerce):
-        keys = data.get(store, {}).get(scope, {})
-        for key in [k for k in keys if known(k)]:
+        def promote_dense(store, scope, known, update, coerce):
+            keys = data.get(store, {}).get(scope, {})
+            for key in [k for k in keys if known(k)]:
+                try:
+                    update({key: coerce(key, keys[key])})
+                except Exception as exc:
+                    if log:
+                        log.warning("foreign: could not promote %s %s: %s", store, key, exc)
+                    continue
+                del keys[key]
+                done["promoted"] += 1
+
+        def merged(store, read, write):
+            def update(changes):
+                with lock.held(store):
+                    write({**read(), **changes})
+            return update
+
+        promote_dense("settings", settings.MEMBER, lambda k: k in C.SETTINGS_SCHEMA,
+                      settings.update, lambda k, v: settings._coerce(k, v, C.SETTINGS_SCHEMA[k]))
+        promote_dense("theme", themes.MEMBER, lambda k: k in themes.CONFIG_KEYS,
+                      merged("theme", themes.load_config, themes.save_config), lambda k, v: v)
+        promote_dense("discovery", discover_cfg.MEMBER, lambda k: k in C.DISCOVER_DEFAULTS,
+                      merged("discovery", discover_cfg.load, discover_cfg.save), lambda k, v: v)
+        for slug in list(data.get("playlists", {})):
+            if not paths.playlist_file(slug).exists():
+                del data["playlists"][slug]
+                done["pruned"] += 1
+                continue
+            promote_dense("playlists", slug, lambda k: k in C.PLAYLIST_SCHEMA,
+                          lambda changes: playlists.update(slug, changes),
+                          lambda k, v: playlists._coerce(k, v, C.PLAYLIST_SCHEMA[k]))
+        for wid in list(data.get("overrides", {})):
+            if not wp.exists(wid):
+                del data["overrides"][wid]
+                done["pruned"] += 1
+                continue
+            keys = data["overrides"][wid]
+            known = [k for k in keys if k in C.WP_SCHEMA or k.startswith(C.WP_PROP_PREFIX)]
+            if not known:
+                continue
             try:
-                cur = read()
-                cur[key] = coerce(key, keys[key])
-                write(cur)
+                wp.modify_set(wid, lambda present: {k: keys[k] for k in known if k not in present})
             except Exception as exc:
                 if log:
-                    log.warning("foreign: could not promote %s %s: %s", store, key, exc)
+                    log.warning("foreign: could not promote override %s: %s", wid, exc)
                 continue
-            del keys[key]
+            for k in known:
+                del keys[k]
             done["promoted"] += 1
-
-    promote_dense("settings", settings.MEMBER, lambda k: k in C.SETTINGS_SCHEMA,
-                  settings.load, settings.save,
-                  lambda k, v: settings._coerce(k, v, C.SETTINGS_SCHEMA[k]))
-    promote_dense("theme", themes.MEMBER, lambda k: k in themes.CONFIG_KEYS,
-                  themes.load_config, themes.save_config, lambda k, v: v)
-    promote_dense("discovery", discover_cfg.MEMBER, lambda k: k in C.DISCOVER_DEFAULTS,
-                  discover_cfg.load, discover_cfg.save, lambda k, v: v)
-    for slug in list(data.get("playlists", {})):
-        if not paths.playlist_file(slug).exists():
-            del data["playlists"][slug]
-            done["pruned"] += 1
-            continue
-        promote_dense("playlists", slug, lambda k: k in C.PLAYLIST_SCHEMA,
-                      lambda: playlists.load(slug), lambda d: playlists.save(slug, d),
-                      lambda k, v: playlists._coerce(k, v, C.PLAYLIST_SCHEMA[k]))
-    for wid in list(data.get("overrides", {})):
-        if not wp.exists(wid):
-            del data["overrides"][wid]
-            done["pruned"] += 1
-            continue
-        keys = data["overrides"][wid]
-        known = [k for k in keys if k in C.WP_SCHEMA or k.startswith(C.WP_PROP_PREFIX)]
-        if not known:
-            continue
-        try:
-            present = wp.load_set(wid)
-            wp.update_set(wid, {k: keys[k] for k in known if k not in present})
-        except Exception as exc:
-            if log:
-                log.warning("foreign: could not promote override %s: %s", wid, exc)
-            continue
-        for k in known:
-            del keys[k]
-        done["promoted"] += 1
-    for store in list(data):
-        data[store] = {s: k for s, k in data[store].items() if k}
-        if not data[store]:
-            del data[store]
-    save(data)
+        for store in list(data):
+            data[store] = {s: k for s, k in data[store].items() if k}
+            if not data[store]:
+                del data[store]
+        save(data)
     if log and (done["promoted"] or done["pruned"]):
         log.info("foreign: promoted %d, pruned %d", done["promoted"], done["pruned"])
     return done
@@ -144,11 +148,12 @@ def apply_plan(plan: dict[str, Any], r: dict[str, Any]) -> None:
     if not kept:
         return
     try:
-        current = load()
-        for store, scopes in kept.items():
-            have = current.setdefault(store, {})
-            for scope, keys in scopes.items():
-                have.setdefault(scope, {}).update(keys)
-        save(current)
+        with lock.held("foreign"):
+            current = load()
+            for store, scopes in kept.items():
+                have = current.setdefault(store, {})
+                for scope, keys in scopes.items():
+                    have.setdefault(scope, {}).update(keys)
+            save(current)
     except Exception as exc:
         r["errors"].append({"file": MEMBER, "reason": str(exc)})

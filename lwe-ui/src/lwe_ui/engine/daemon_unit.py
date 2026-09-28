@@ -20,7 +20,7 @@ import subprocess
 from pathlib import Path
 
 from .. import constants as C
-from ..storage import atomic, paths, settings
+from ..storage import atomic, lock, paths, settings
 
 ENV_FILE_NAME = "engine-env"
 UNIT_FILE_NAME = "lwe-engine.service"
@@ -328,25 +328,26 @@ def reconcile_env() -> bool:
 def write_files(outputs: list[str] | None = None) -> tuple[str, str]:
     """Write env file + unit file, daemon-reload, return their paths. Never enables."""
     env_path = paths.config_dir() / ENV_FILE_NAME
-    try:
-        existing = env_path.read_text(encoding="utf-8")
-    except OSError:
-        existing = None
-    atomic.atomic_write_text(env_path, build_env_content(outputs, existing))
+    with lock.held("env"):
+        try:
+            existing = env_path.read_text(encoding="utf-8")
+        except OSError:
+            existing = None
+        atomic.atomic_write_text(env_path, build_env_content(outputs, existing))
 
-    unit_dir = os.path.expanduser("~/.config/systemd/user")
-    os.makedirs(unit_dir, exist_ok=True)
-    unit_path = os.path.join(unit_dir, UNIT_FILE_NAME)
-    engine_bin = resolve_engine_bin()
-    if not engine_bin:
-        raise ValueError(
-            "no engine binary found: install linux-wallpaperengine on PATH "
-            "or set ENGINE_BIN in settings")
-    if '"' in engine_bin or "\n" in engine_bin:
-        raise ValueError(f"engine path {engine_bin!r} cannot be written into a unit file")
-    # quoted ExecStart handles spaces; % is a systemd specifier and must be doubled
-    atomic.atomic_write_text(unit_path, _UNIT_TEMPLATE.format(
-        env_name=ENV_FILE_NAME, engine_bin=engine_bin.replace("%", "%%")))
+        unit_dir = os.path.expanduser("~/.config/systemd/user")
+        os.makedirs(unit_dir, exist_ok=True)
+        unit_path = os.path.join(unit_dir, UNIT_FILE_NAME)
+        engine_bin = resolve_engine_bin()
+        if not engine_bin:
+            raise ValueError(
+                "no engine binary found: install linux-wallpaperengine on PATH "
+                "or set ENGINE_BIN in settings")
+        if '"' in engine_bin or "\n" in engine_bin:
+            raise ValueError(f"engine path {engine_bin!r} cannot be written into a unit file")
+        # quoted ExecStart handles spaces; % is a systemd specifier and must be doubled
+        atomic.atomic_write_text(unit_path, _UNIT_TEMPLATE.format(
+            env_name=ENV_FILE_NAME, engine_bin=engine_bin.replace("%", "%%")))
 
     try:
         reload_proc = subprocess.run(["systemctl", "--user", "daemon-reload"],

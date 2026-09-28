@@ -10,7 +10,7 @@ import zipfile
 from typing import Any
 
 from .. import constants as C
-from . import atomic, foreign, migrate, paths
+from . import atomic, foreign, lock, migrate, paths
 from .store import Store
 
 
@@ -28,7 +28,8 @@ def save(d: dict[str, Any]) -> None:
     """Persist defaults overlaid with the caller's values (so file is always complete)."""
     out = dict(C.DISCOVER_DEFAULTS)
     out.update(d or {})
-    atomic.atomic_write_json(paths.discover_file(), out)
+    with lock.held("discovery"):
+        atomic.atomic_write_json(paths.discover_file(), out)
 
 
 # --- backup ---------------------------------------------------------------------------
@@ -88,7 +89,8 @@ def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
     if not d:
         return True
     try:
-        save({**load(), **d})
+        with lock.held("discovery"):
+            save({**load(), **d})
     except Exception as exc:
         r["errors"].append({"file": MEMBER, "reason": str(exc)})
     return True

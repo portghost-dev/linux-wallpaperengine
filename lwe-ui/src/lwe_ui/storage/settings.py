@@ -8,10 +8,10 @@ from __future__ import annotations
 import os
 import warnings
 import zipfile
-from typing import Any
+from typing import Any, Callable
 
 from .. import constants as C
-from . import atomic, foreign, migrate, paths, tier_a
+from . import atomic, foreign, lock, migrate, paths, tier_a
 from .store import Store
 
 
@@ -180,13 +180,39 @@ def save(d: dict[str, Any]) -> None:
     """Validate, serialize (bools as true/false), atomically write settings.conf."""
     valid = _validate(d)
     text = tier_a.serialize(_to_text(valid), header="lwe settings (Tier A) - managed by LWE Control Panel")
-    atomic.atomic_write_text(paths.settings_file(), text)
+    with lock.held("settings"):
+        atomic.atomic_write_text(paths.settings_file(), text)
 
 
 def ensure_exists() -> None:
     """Write defaults if the file is absent (does not overwrite an existing file)."""
     if not paths.settings_file().exists():
-        save(paths.default_settings())
+        with lock.held("settings"):
+            if not paths.settings_file().exists():
+                save(paths.default_settings())
+
+
+def modify(fn: Callable[[dict[str, Any]], dict[str, Any] | None]) -> dict[str, Any]:
+    """Under the settings lock: load settings.conf fresh, pass it to fn, and write the keys fn
+    returns over it. Returns those keys; nothing is written when there are none."""
+    with lock.held("settings"):
+        current = load()
+        changes = fn(dict(current)) or {}
+        if changes:
+            save({**current, **changes})
+        return changes
+
+
+def update(changes: dict[str, Any]) -> dict[str, Any]:
+    """Set these keys under the settings lock, over a fresh load."""
+    return modify(lambda _current: dict(changes))
+
+
+def replace(fn: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
+    """Whole-store write under the settings lock: fn receives a fresh load and returns the
+    complete settings to write."""
+    with lock.held("settings"):
+        save(fn(load()))
 
 
 # --- backup ---------------------------------------------------------------------------
@@ -257,7 +283,7 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
 
 def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
     try:
-        save({**load(), **(plan.get("settings") or {})})
+        replace(lambda current: {**current, **(plan.get("settings") or {})})
     except Exception as exc:
         r["errors"].append({"file": MEMBER, "reason": str(exc)})
         return False

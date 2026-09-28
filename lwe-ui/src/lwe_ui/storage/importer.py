@@ -31,7 +31,7 @@ from pathlib import Path
 from .. import constants as C
 from ..discovery import project
 from ..discovery.project import derive_cc as _derive_cc
-from . import meta, paths, settings, tags, tier_a, wp
+from . import meta, paths, settings, tags, wp
 
 
 def _snapshot() -> dict:
@@ -159,12 +159,8 @@ def _write_conf(wid: str, d: dict) -> None:
     identity and adds only the facts the user has not set. A preset wire is not an arrival
     and rewrites whole."""
     facts = wp.facts_to_keys(d)
-    if wp.exists(wid):
-        present = tier_a.parse(paths.wp_file(wid).read_text(encoding="utf-8"))
-        changes = {k: v for k, v in facts.items() if k in wp.IDENTITY_KEYS or k not in present}
-        wp.update_set(wid, changes)
-        return
-    wp.write_keys(wid, facts)
+    wp.modify_set(wid, lambda present: {k: v for k, v in facts.items()
+                                        if k in wp.IDENTITY_KEYS or k not in present})
 
 
 def import_one(wid: str, cfg: dict | None = None) -> dict:

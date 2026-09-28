@@ -11,7 +11,7 @@ import json
 import zipfile
 from typing import Any
 
-from . import atomic, paths
+from . import atomic, lock, paths
 from .store import Store
 
 
@@ -39,7 +39,7 @@ _WRITE_LOCK = __import__("threading").Lock()
 def update(id: str, patch: dict[str, Any]) -> None:
     """Merge `patch` into the entry for `id` and atomically save the whole map.
     Thread-safe."""
-    with _WRITE_LOCK:
+    with _WRITE_LOCK, lock.held("meta"):
         _update_locked(id, patch)
 
 
@@ -120,10 +120,11 @@ def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
     if not patches:
         return True
     try:
-        m = load()
-        for wid, patch in patches.items():
-            m[wid] = {**m.get(wid, {}), **patch}
-        save(m)
+        with lock.held("meta"):
+            m = load()
+            for wid, patch in patches.items():
+                m[wid] = {**m.get(wid, {}), **patch}
+            save(m)
     except Exception as exc:
         r["errors"].append({"file": MEMBER, "reason": str(exc)})
     return True
