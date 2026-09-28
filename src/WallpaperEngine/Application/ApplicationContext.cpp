@@ -1,6 +1,8 @@
 #include "ApplicationContext.h"
 
 #include "Steam/FileSystem/FileSystem.h"
+#include "WallpaperEngine/Application/Config.h"
+#include "WallpaperEngine/Application/FlagValues.h"
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Logging/Log.h"
 
@@ -248,6 +250,7 @@ ApplicationContext::ApplicationContext (int argc, char* argv[]) : m_argc (argc),
 
 void ApplicationContext::loadSettingsFromArgv () {
     std::string lastScreen;
+    Config::Flags flags;
 
     argparse::ArgumentParser program ("linux-wallpaperengine", LWE_VERSION, argparse::default_arguments::help);
 
@@ -596,6 +599,88 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.default_value ("")
 	.action ([this] (const std::string& value) -> void { this->settings.general.propertiesFile = value; });
 
+    auto& engineGroup = program.add_group ("Engine settings");
+
+    engineGroup.add_argument ("--resclamp")
+	.help ("Scene size cap, a multiple of the largest screen, up to 4; 0 is no cap")
+	.action ([&flags] (const std::string& text) -> void {
+	    flags.ssfactor = Knob<float> { FlagValues::clampFactor ("--resclamp", text), "flag", text };
+	});
+
+    engineGroup.add_argument ("--effectclamp")
+	.help ("Effect layer size cap, a multiple of the largest screen, up to 4; 0 is no cap")
+	.action ([&flags] (const std::string& text) -> void {
+	    flags.clampComposites = Knob<float> { FlagValues::clampFactor ("--effectclamp", text), "flag", text };
+	});
+
+    engineGroup.add_argument ("--texturecache")
+	.help ("Use the compressed textures: on or off")
+	.action ([&flags] (const std::string& text) -> void {
+	    flags.texcomp = Knob<bool> { FlagValues::onOff ("--texturecache", text), "flag", text };
+	});
+
+    engineGroup.add_argument ("--texturedetail")
+	.help ("Texture detail: auto or full")
+	.action ([&flags] (const std::string& text) -> void {
+	    flags.texdetailAuto = Knob<bool> { FlagValues::autoFull ("--texturedetail", text), "flag", text };
+	});
+
+    engineGroup.add_argument ("--videodecode")
+	.help ("Video decoding: software or auto")
+	.action ([&flags] (const std::string& text) -> void {
+	    flags.hwdec = Knob<std::string> { FlagValues::videoDecode ("--videodecode", text), "flag", text };
+	});
+
+    engineGroup.add_argument ("--color")
+	.help ("Starting color correction: \"brightness contrast saturation hue\", hue in degrees")
+	.action ([&flags] (const std::string& text) -> void {
+	    flags.cc = Knob<glm::vec4> { FlagValues::color ("--color", text), "flag", text };
+	});
+
+    engineGroup.add_argument ("--speed")
+	.help ("Animation speed from 0 to 10, 1 is normal")
+	.action ([&flags] (const std::string& text) -> void {
+	    flags.timescale = Knob<float> { FlagValues::decimalInRange ("--speed", text, 0.0, 10.0), "flag", text };
+	});
+
+    engineGroup.add_argument ("--watchdog")
+	.help ("Free the screens after this long with no frames and no panel; 0 is off")
+	.action ([&flags] (const std::string& text) -> void {
+	    flags.deadman = Knob<int> { FlagValues::watchdogSeconds ("--watchdog", text), "flag", text };
+	});
+
+    engineGroup.add_argument ("--lightdimming")
+	.help ("Scene light dimming from 0.01 to 1000")
+	.action ([&flags] (const std::string& text) -> void {
+	    flags.classicK
+		= Knob<float> { FlagValues::decimalInRange ("--lightdimming", text, 0.01, 1000.0), "flag", text };
+	});
+
+    engineGroup.add_argument ("--lightfalloff")
+	.help ("Scene light falloff from 0.5 to 6")
+	.action ([&flags] (const std::string& text) -> void {
+	    flags.classicExp
+		= Knob<float> { FlagValues::decimalInRange ("--lightfalloff", text, 0.5, 6.0), "flag", text };
+	});
+
+    engineGroup.add_argument ("--audiogain")
+	.help ("Sound reaction strength from 0.1 to 20")
+	.action ([&flags] (const std::string& text) -> void {
+	    flags.audioGain = Knob<float> { FlagValues::decimalInRange ("--audiogain", text, 0.1, 20.0), "flag", text };
+	});
+
+    engineGroup.add_argument ("--audiosmoothing")
+	.help ("Sound level smoothing in milliseconds, 0 to 500")
+	.action ([&flags] (const std::string& text) -> void {
+	    flags.audioSmooth = Knob<float> { FlagValues::milliseconds ("--audiosmoothing", text), "flag", text };
+	});
+
+    engineGroup.add_argument ("--socket")
+	.help ("Command socket path")
+	.action ([&flags] (const std::string& text) -> void {
+	    flags.socket = Knob<std::filesystem::path> { FlagValues::path ("--socket", text), "flag", text };
+	});
+
     auto& configurationGroup = program.add_group ("Wallpaper configuration options");
 
     configurationGroup.add_argument ("--disable-particles")
@@ -698,6 +783,8 @@ void ApplicationContext::loadSettingsFromArgv () {
 	for (const auto& argument : unknownArguments) {
 	    sLog.error ("Ignoring unrecognized command line argument: ", argument);
 	}
+
+	Config::setFlags (flags);
 
 	// idle-daemon mode boots with NO backgrounds and awaits `show` over the socket
 	if (this->settings.general.defaultBackground.empty () && !this->settings.general.daemonMode) {

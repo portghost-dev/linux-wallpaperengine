@@ -6,7 +6,14 @@
 #include <cstdlib>
 #include <unistd.h>
 
+extern float g_LweClassicDivisor;
+extern float g_LweFalloffExp;
+extern float g_LweAudioGain;
+extern float g_LweAudioSmoothMs;
+
 namespace WallpaperEngine::Application {
+static Config::Flags flagStore;
+
 static float lweEnvFloat (const char* name, const float fallback, const float lo, const float hi) {
     const char* env = getenv (name);
     if (env == nullptr) {
@@ -143,6 +150,20 @@ static Config fromEnvironment () {
 	config.audioSmooth.raw = e;
     }
 
+    config.socket = flagStore.socket.value_or (config.socket);
+    config.ssfactor = flagStore.ssfactor.value_or (config.ssfactor);
+    config.clampComposites = flagStore.clampComposites.value_or (config.clampComposites);
+    config.texcomp = flagStore.texcomp.value_or (config.texcomp);
+    config.texdetailAuto = flagStore.texdetailAuto.value_or (config.texdetailAuto);
+    config.hwdec = flagStore.hwdec.value_or (config.hwdec);
+    config.cc = flagStore.cc.value_or (config.cc);
+    config.timescale = flagStore.timescale.value_or (config.timescale);
+    config.deadman = flagStore.deadman.value_or (config.deadman);
+    config.classicK = flagStore.classicK.value_or (config.classicK);
+    config.classicExp = flagStore.classicExp.value_or (config.classicExp);
+    config.audioGain = flagStore.audioGain.value_or (config.audioGain);
+    config.audioSmooth = flagStore.audioSmooth.value_or (config.audioSmooth);
+
     return config;
 }
 
@@ -154,4 +175,25 @@ static Config& instance () {
 const Config& Config::get () { return instance (); }
 
 void Config::reload () { instance () = fromEnvironment (); }
+
+void applyConfigTuning () {
+    const auto& config = Config::get ();
+
+    g_LweClassicDivisor = config.classicK.value;
+    g_LweFalloffExp = config.classicExp.value;
+    g_LweAudioGain = config.audioGain.value;
+    g_LweAudioSmoothMs = config.audioSmooth.value;
+}
+
+void Config::setFlags (const Flags& flags) {
+    flagStore = flags;
+    reload ();
+    applyConfigTuning ();
+}
+
+void Config::clearFlags () {
+    flagStore = {};
+    reload ();
+    applyConfigTuning ();
+}
 } // namespace WallpaperEngine::Application

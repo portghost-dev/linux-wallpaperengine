@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 
 #include <glm/vec4.hpp>
@@ -29,5 +30,25 @@ struct Config {
 
     static const Config& get ();
     static void reload ();
+
+    struct Flags {
+	std::optional<Knob<std::filesystem::path>> socket;
+	std::optional<Knob<float>> ssfactor;
+	std::optional<Knob<float>> clampComposites;
+	std::optional<Knob<bool>> texcomp;
+	std::optional<Knob<bool>> texdetailAuto;
+	std::optional<Knob<std::string>> hwdec;
+	std::optional<Knob<glm::vec4>> cc;
+	std::optional<Knob<float>> timescale;
+	std::optional<Knob<int>> deadman;
+	std::optional<Knob<float>> classicK;
+	std::optional<Knob<float>> classicExp;
+	std::optional<Knob<float>> audioGain;
+	std::optional<Knob<float>> audioSmooth;
+    };
+    static void setFlags (const Flags& flags);
+    static void clearFlags ();
 };
+
+void applyConfigTuning ();
 } // namespace WallpaperEngine::Application

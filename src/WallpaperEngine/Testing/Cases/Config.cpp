@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <unistd.h>
 
 #include <glm/vec4.hpp>
@@ -36,6 +37,7 @@ struct EnvGuard {
 	    unsetenv (name);
 	}
 
+	Config::clearFlags ();
 	Config::reload ();
     }
 
@@ -44,6 +46,33 @@ struct EnvGuard {
 	Config::reload ();
     }
 };
+
+template <typename T> struct FlagRow {
+    const char* variable;
+    const char* envText;
+    T envValue;
+    std::optional<Knob<T>> Config::Flags::* flag;
+    Knob<T> Config::* knob;
+    T flagValue;
+    const char* flagText;
+};
+
+template <typename T> void checkFlagRow (const FlagRow<T>& row) {
+    INFO (row.variable);
+    EnvGuard env (row.variable);
+    env.set (row.envText);
+
+    Config::Flags flags;
+    flags.*row.flag = Knob<T> { row.flagValue, "flag", row.flagText };
+    Config::setFlags (flags);
+    CHECK ((Config::get ().*row.knob).value == row.flagValue);
+    CHECK ((Config::get ().*row.knob).source == "flag");
+    CHECK ((Config::get ().*row.knob).raw == row.flagText);
+
+    Config::clearFlags ();
+    CHECK ((Config::get ().*row.knob).value == row.envValue);
+    CHECK ((Config::get ().*row.knob).source == "env");
+}
 } // namespace
 
 TEST_CASE ("Config resolves LWE_SOCKET: the override, else the runtime dir, else /tmp", "[config]") {
@@ -359,4 +388,30 @@ TEST_CASE ("Config reads LWE_AUDIOSMOOTH: any set value through atof, clamped 0 
     env.set (sample);
     CHECK (Config::get ().audioSmooth.value == std::clamp (static_cast<float> (atof (sample)), 0.0f, 500.0f));
     CHECK (Config::get ().audioSmooth.source == "env");
+}
+
+TEST_CASE ("Config takes a flag over its variable for every knob, and clearFlags gives the variable back", "[config]") {
+    const auto rows = std::make_tuple (
+	FlagRow<std::filesystem::path> { "LWE_SOCKET", "/tmp/lwe-config-env.sock", "/tmp/lwe-config-env.sock",
+					 &Config::Flags::socket, &Config::socket, "/tmp/lwe-config-flag.sock",
+					 "/tmp/lwe-config-flag.sock" },
+	FlagRow<float> { "LWE_SSFACTOR", "2", 2.0f, &Config::Flags::ssfactor, &Config::ssfactor, 0.5f, "0.5" },
+	FlagRow<float> { "LWE_CLAMPCOMPOSITES", "3", 3.0f, &Config::Flags::clampComposites, &Config::clampComposites,
+			 1.5f, "1.5" },
+	FlagRow<bool> { "LWE_TEXCOMP", "1", true, &Config::Flags::texcomp, &Config::texcomp, false, "off" },
+	FlagRow<bool> { "LWE_TEXDETAIL", "auto", true, &Config::Flags::texdetailAuto, &Config::texdetailAuto, false,
+			"full" },
+	FlagRow<std::string> { "LWE_HWDEC", "vaapi", "vaapi", &Config::Flags::hwdec, &Config::hwdec, "auto", "auto" },
+	FlagRow<glm::vec4> { "LWE_CC", "1.5 0.5 2 0.25", glm::vec4 (1.5f, 0.5f, 2.0f, 0.25f), &Config::Flags::cc,
+			     &Config::cc, glm::vec4 (2.0f, 1.0f, 1.0f, 0.0f), "2 1 1 0" },
+	FlagRow<float> { "LWE_TIMESCALE", "2.5", 2.5f, &Config::Flags::timescale, &Config::timescale, 0.5f, "0.5" },
+	FlagRow<int> { "LWE_DEADMAN", "60", 60, &Config::Flags::deadman, &Config::deadman, 120, "2m" },
+	FlagRow<float> { "LWE_CLASSICK", "32", 32.0f, &Config::Flags::classicK, &Config::classicK, 3.0f, "3" },
+	FlagRow<float> { "LWE_CLASSICEXP", "3", 3.0f, &Config::Flags::classicExp, &Config::classicExp, 4.0f, "4" },
+	FlagRow<float> { "LWE_AUDIOGAIN", "2.5", 2.5f, &Config::Flags::audioGain, &Config::audioGain, 5.0f, "5" },
+	FlagRow<float> { "LWE_AUDIOSMOOTH", "120", 120.0f, &Config::Flags::audioSmooth, &Config::audioSmooth, 45.0f,
+			 "45ms" }
+    );
+
+    std::apply ([] (const auto&... row) { (checkFlagRow (row), ...); }, rows);
 }
