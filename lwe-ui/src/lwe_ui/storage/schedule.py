@@ -45,27 +45,31 @@ def format_rows(rows: list[tuple[str, str | None]]) -> str:
 def set_field(rows: list[tuple[str, str | None]], part: str, field: str,
               value: int | str) -> list[tuple[str, str | None]]:
     """A copy of `rows` with one field of day's or night's row set: "time" takes minutes of the
-    day and stores HH:MM, "playlist" takes a slug. With no rows the rows start as
-    "08:00=;20:00="; one row is day, and night takes 20:00, or 08:00 when day holds 20:00. More
-    than two rows, or a row without "=", cannot be edited here: ValueError."""
-    rows = list(rows)
+    day and stores HH:MM, "playlist" takes a slug. One row is day. A missing row gets an empty
+    playlist and its time is chosen after the edit: with neither time known day starts 08:00 and
+    night 20:00; else night takes 20:00, or 08:00 when day holds 20:00, and day takes 08:00, or
+    20:00 when night holds 08:00. More than two rows, or a row without "=", cannot be edited
+    here: ValueError."""
     if any(playlist is None for _time, playlist in rows) or len(rows) > 2:
         raise ValueError("only a schedule of at most two time=playlist rows can be edited")
-    if not rows:
-        rows = [("08:00", ""), ("20:00", "")]
-    elif len(rows) == 1:
-        rows.append(("08:00" if _minutes(rows[0][0]) == 20 * 60 else "20:00", ""))
+    times: list[str | None] = [time for time, _playlist in rows] + [None] * (2 - len(rows))
+    names = [str(playlist) for _time, playlist in rows] + [""] * (2 - len(rows))
     index = _PARTS.index(part)
-    time, playlist = rows[index]
     if field == "time":
         if not isinstance(value, int) or not 0 <= value < 24 * 60:
             raise ValueError(f"a time is minutes of the day, 0 to 1439: {value!r}")
-        rows[index] = (f"{value // 60:02d}:{value % 60:02d}", playlist)
+        times[index] = f"{value // 60:02d}:{value % 60:02d}"
     elif field == "playlist":
-        rows[index] = (time, str(value))
+        names[index] = str(value)
     else:
         raise ValueError(f"unknown schedule field: {field!r}")
-    return rows
+    if times[0] is None and times[1] is None:
+        times = ["08:00", "20:00"]
+    elif times[1] is None:
+        times[1] = "08:00" if _minutes(times[0]) == 20 * 60 else "20:00"
+    elif times[0] is None:
+        times[0] = "20:00" if _minutes(times[1]) == 8 * 60 else "08:00"
+    return [(str(time), name) for time, name in zip(times, names)]
 
 
 def check_on(rows: list[tuple[str, str | None]]) -> list[tuple[str, str]]:

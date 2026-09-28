@@ -159,9 +159,10 @@ def preflight(path: str | Path) -> dict[str, Any]:
 
 def _referential(r: dict[str, Any], plan: dict[str, Any], current: dict[str, Any]) -> None:
     """A planned settings value may only name a playlist the import leaves behind: one in
-    the plan or already on disk. A SCHEDULE entry that names no such playlist is dropped
-    from the planned value and the schedule switched off, as the panel does when it loses
-    an entry; ACTIVE_PLAYLIST is named and left for playlists.active_slug."""
+    the plan or already on disk. A SCHEDULE entry with an empty playlist is kept in place and
+    noted; one that names no such playlist is dropped from the planned value and the schedule
+    switched off, as the panel does when it loses an entry; ACTIVE_PLAYLIST is named and left
+    for playlists.active_slug."""
     planned = plan.get("settings")
     if not planned:
         return
@@ -177,6 +178,9 @@ def _referential(r: dict[str, Any], plan: dict[str, Any], current: dict[str, Any
         slug = entry.split("=", 1)[1].strip() if "=" in entry else ""
         if known(slug):
             kept.append(entry)
+        elif "=" in entry and not slug:
+            kept.append(entry)
+            r["notes"].append({"kind": "unset", "key": "SCHEDULE", "slug": ""})
         else:
             r["notes"].append({"kind": "dangling", "key": "SCHEDULE", "slug": slug})
     if "SCHEDULE" in planned:
