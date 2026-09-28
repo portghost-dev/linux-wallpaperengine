@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _TMP = tempfile.mkdtemp(prefix="lwe-order-test-")
 os.environ["HOME"] = _TMP
@@ -45,6 +46,7 @@ def seed_library() -> None:
 _APP = QGuiApplication.instance() or QGuiApplication([])
 seed_library()
 
+from lwe_ui.engine import push  # noqa: E402
 from lwe_ui.models import Backend  # noqa: E402
 
 
@@ -54,7 +56,14 @@ class LibraryOrder(unittest.TestCase):
         self.slug = playlists.active_slug()
         self.set_members(["300", "100", "500"])
         self.pushes = 0
-        self.b._sync_engine = lambda: setattr(self, "pushes", self.pushes + 1)
+        run_change = push.run_change
+
+        def counted(*args, **kwargs):
+            self.pushes += 1
+            return run_change(*args, **kwargs)
+        patcher = mock.patch.object(push, "run_change", counted)
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.resets = 0
         self.b.orderModel.modelReset.connect(lambda: setattr(self, "resets", self.resets + 1))
 

@@ -28,6 +28,7 @@ from PySide6.QtCore import (
     QModelIndex,
     QObject,
     QSortFilterProxyModel,
+    QTimer,
     QUrl,
     Property,
     Qt,
@@ -38,7 +39,7 @@ from PySide6.QtCore import (
 from . import api_client
 from . import constants as C
 from .discovery import project
-from .engine import push
+from .engine import daemon_unit, marker, push
 from .engine.resolve import (_conf_true, _identity_dir, _wallpapers_dir, effective_speed, resolve_fit,
                              resolve_fullscreen_behavior, resolve_show_args, resolved_tuning,
                              split_playlist_parts)
@@ -362,9 +363,15 @@ class Backend(QObject):
         self._engine_pid_seen: int | None = None
         self._schedule_held = False
         self._schedule_refused = False
-        # a policy change the engine could not be told about (socket down, engine restarting):
-        # the next poll that finds the engine up delivers it
-        self._policy_dirty = False
+        self._drain_generation: int | None = None
+        self._drain_failures = 0
+        self._drain_after = 0.0
+        self._version_logged: str | None = None
+        self._ready_old_pid: Any = None
+        self._ready_deadline = 0.0
+        self._ready_timer = QTimer(self)
+        self._ready_timer.setInterval(250)
+        self._ready_timer.timeout.connect(self._ready_tick)
         # (monotonic, frames, pid) baseline for the measured frame rate. The engine
         # reports a CUMULATIVE frame count, so a rate needs two samples; the pid is
         # part of the key because a fresh engine restarts the counter at zero.
@@ -413,29 +420,31 @@ class Backend(QObject):
 
     @Slot(bool, result=str)
     def endDrag(self, commit: bool) -> str:
-        """Drop: store the provisional order once (reorder or insert), push once. Returns
-        the action taken: none, reorder or insert."""
+        """Drop: store the provisional order once (reorder or insert) through the change
+        runner, which sends its push. Returns the action taken: none, reorder or insert."""
         plan = self._order.dragPlan(commit)
         action = str(plan.get("action") or "none")
         slug = self._active_slug()
         if action != "none" and slug:
-            try:
+            inserted: list[int] = []
+
+            def write() -> None:
                 if action == "reorder":
                     playlists.reorder(slug, list(plan["members"]))
-                elif playlists.insert_member(slug, str(plan["wid"]), int(plan["index"])) >= 0:
+                else:
+                    inserted.append(playlists.insert_member(slug, str(plan["wid"]), int(plan["index"])))
+            if self._change("playlist order", ("playlists",), write, [("members", "MEMBERS")],
+                            slug=slug) is None:
+                action = "none"
+            elif action == "insert":
+                if inserted and inserted[0] >= 0:
                     self._model.set_in_playlist(str(plan["wid"]), True)
                 else:
                     action = "none"
-            except Exception:
-                action = "none"
         self._order.endDrag(commit)
         if action != "none":
             self.countChanged.emit()
             self.playlistsChanged.emit()
-            try:
-                self._sync_engine()
-            except Exception:
-                pass
         return action
 
     @Slot(str)
@@ -471,7 +480,9 @@ class Backend(QObject):
         # the launch wallpaper's color grade (engine burn-in incident 3, visibly wrong
         # colors).
         try:
-            if push.show(wid):
+            with push.engine_only():
+                shown = push.show(wid)
+            if shown:
                 self.statusChanged.emit()
                 return True
         except Exception:
@@ -561,58 +572,89 @@ class Backend(QObject):
         self.countChanged.emit()
         self.playlistsChanged.emit()
 
-    def _after_playlist_change(self, manual: bool = False) -> None:
+    def _after_playlist_change(self) -> None:
         self._model.reload(self._active_members())
         self.countChanged.emit()
         self.playlistsChanged.emit()
+
+    def _change(self, what: str, locks: tuple[str, ...], write: Any, rows: list, **kwargs: Any) -> Any:
+        """One window change through the change runner; its Outcome, or None when nothing was saved.
+        A refused switch or a store refusal logs one warning; any other failure returns None."""
         try:
-            self._sync_engine(manual=manual)
+            outcome = push.run_change(locks, write, rows, **kwargs)
+        except push.SwitchRefused as exc:
+            logging.getLogger(__name__).warning("%s not made: %s", what, exc)
+            return None
+        except (lock.StoreBusy, ValueError) as exc:
+            logging.getLogger(__name__).warning("%s not saved: %s", what, exc)
+            return None
         except Exception:
-            pass
+            return None
+        self._note(outcome, schedule=any(row == "schedule" for row, _key in rows))
+        return outcome
+
+    def _note(self, outcome: Any, schedule: bool = False) -> None:
+        """What the window keeps from a run: the lane clock for the deck's countdown; the schedule
+        cell off while the engine's last answer to schedule-set was a refusal (`schedule`: the run
+        sends schedule-set); and a version refusal from inside sync, which the window has no text
+        for, logged once per message."""
+        if outcome.clock is not None:
+            self.rotationClock.emit(*outcome.clock)
+        if outcome.refused_verb == "schedule-set":
+            self._schedule_refused = True
+        elif schedule and outcome.kind == "applied":
+            self._schedule_refused = False
+        if outcome.reason == "version" and outcome.message != self._version_logged:
+            self._version_logged = outcome.message
+            logging.getLogger(__name__).warning("engine not updated: %s", outcome.message)
 
     @Slot(str)
     def setActivePlaylist(self, slug: str) -> None:
-        try:
-            playlists.set_active(slug)
-        except Exception:
-            return
         # the user's own switch: under a schedule the engine holds it until the next boundary
-        self._after_playlist_change(manual=True)
+        if self._change("playlist switch", ("playlists", "settings"), lambda: playlists.set_active(slug),
+                        [("active", "ACTIVE_PLAYLIST")], slug=slug, manual=True) is None:
+            return
+        self._after_playlist_change()
 
     @Slot(str, result=str)
     def createPlaylist(self, name: str) -> str:
-        try:
-            slug = playlists.create(name)
-            playlists.set_active(slug)
-        except Exception:
+        made: list[str] = []
+
+        def write() -> None:
+            made.append(playlists.create(name))
+            playlists.set_active(made[0])
+        if self._change("playlist create", ("playlists", "settings"), write,
+                        [("active", "ACTIVE_PLAYLIST")], manual=True) is None or not made:
             return ""
-        self._after_playlist_change(manual=True)
-        return slug
+        self._after_playlist_change()
+        return made[0]
 
     @Slot(str, result=str)
     def saveAsPlaylist(self, name: str) -> str:
         """Fork the active playlist under a new name and switch to it (deck Save as)."""
         cur_slug = self._active_slug()
-        try:
+        made: list[str] = []
+
+        def write() -> None:
             cur = playlists.load(cur_slug) if cur_slug else {}
-            slug = playlists.create(name, members=str(cur.get("MEMBERS", "")).split(),
-                                    mode=cur.get("MODE", "shuffle"),
-                                    interval=int(cur.get("INTERVAL", 900)),
-                                    unit=cur.get("UNIT", "min"))
-            playlists.set_active(slug)
-        except Exception:
+            made.append(playlists.create(name, members=str(cur.get("MEMBERS", "")).split(),
+                                         mode=cur.get("MODE", "shuffle"),
+                                         interval=int(cur.get("INTERVAL", 900)),
+                                         unit=cur.get("UNIT", "min")))
+            playlists.set_active(made[0])
+        if self._change("playlist save as", ("playlists", "settings"), write,
+                        [("active", "ACTIVE_PLAYLIST")], manual=True) is None or not made:
             return ""
-        self._after_playlist_change(manual=True)
-        return slug
+        self._after_playlist_change()
+        return made[0]
 
     @Slot(str)
     def renameActivePlaylist(self, name: str) -> None:
         slug = self._active_slug()
         if not slug:
             return
-        try:
-            playlists.rename(slug, name)
-        except Exception:
+        if self._change("playlist rename", ("playlists",), lambda: playlists.rename(slug, name),
+                        [("members", "NAME")], slug=slug) is None:
             return
         self.playlistsChanged.emit()
 
@@ -620,41 +662,32 @@ class Backend(QObject):
     def deletePlaylist(self, slug: str) -> None:
         """Delete one playlist from its row in the menu; the active one reassigns as before."""
         slug = str(slug or "")
-        if not slug:
-            return
-        was_active = slug == self._active_slug()
-        try:
-            playlists.delete(slug)  # tombstones + reassigns the active pointer if it was active
-        except lock.StoreBusy as exc:
-            if paths.playlist_file(slug).exists():
-                return
-            logging.getLogger(__name__).warning("playlist %s deleted; the active playlist was not reassigned: %s",
-                                                slug, exc)
-            self._after_playlist_change(manual=was_active)
-            raise
-        except Exception:
-            return
-        self._drop_from_schedule(slug)
-        self._after_playlist_change(manual=was_active)
+        if slug:
+            self._delete_playlist(slug)
 
     @Slot()
     def deleteActivePlaylist(self) -> None:
         slug = self._active_slug()
-        if not slug:
+        if slug:
+            self._delete_playlist(slug)
+
+    def _delete_playlist(self, slug: str) -> None:
+        """One delete through the change runner. Judged from a lock-free read, deleting the active
+        playlist is a switch and deleting a scheduled one drops it from the schedule, and either
+        takes the settings lock too; a playlist that is neither sends nothing."""
+        active = slug == self._active_slug()
+        packed = str(self._setting("SCHEDULE", "") or "")
+        scheduled = any(e.strip() and e.partition("=")[2].strip() == slug for e in packed.split(";"))
+        rows = ([("active", "ACTIVE_PLAYLIST")] if active else []) + ([("schedule", "SCHEDULE")] if scheduled else [])
+
+        def write() -> None:
+            playlists.delete(slug)  # tombstones + reassigns the active pointer if it was active
+            if scheduled:
+                self._drop_from_schedule(slug)
+        if self._change("playlist delete", ("playlists", "settings") if rows else ("playlists",), write,
+                        rows or [("none", None)], manual=active) is None:
             return
-        try:
-            playlists.delete(slug)  # tombstones + reassigns the active pointer
-        except lock.StoreBusy as exc:
-            if paths.playlist_file(slug).exists():
-                return
-            logging.getLogger(__name__).warning("playlist %s deleted; the active playlist was not reassigned: %s",
-                                                slug, exc)
-            self._after_playlist_change(manual=True)
-            raise
-        except Exception:
-            return
-        self._drop_from_schedule(slug)
-        self._after_playlist_change(manual=True)
+        self._after_playlist_change()
 
     def _drop_from_schedule(self, slug: str) -> None:
         """A deleted playlist leaves the schedule and the schedule switches off, the same
@@ -677,15 +710,10 @@ class Backend(QObject):
         slug = self._active_slug()
         if not slug:
             return
-        try:
-            playlists.update(slug, {"MODE": mode})
-        except Exception:
+        if self._change("playlist mode", ("playlists",), lambda: playlists.update(slug, {"MODE": mode}),
+                        [("policy", "MODE")], slug=slug) is None:
             return
         self.playlistsChanged.emit()
-        try:
-            self._sync_engine()
-        except Exception:
-            pass
         # the deck shows the engine's word for the mode: fetch it now, not at the next poll
         self.statusChanged.emit()
 
@@ -695,16 +723,12 @@ class Backend(QObject):
         if not slug:
             return
         seconds = int(value) * (60 if unit == "min" else 1)
-        try:
-            playlists.update(slug, {"INTERVAL": seconds,
-                                    "UNIT": unit if unit in C.PLAYLIST_UNITS else "min"})
-        except Exception:
+        if self._change("playlist interval", ("playlists",),
+                        lambda: playlists.update(slug, {"INTERVAL": seconds,
+                                                        "UNIT": unit if unit in C.PLAYLIST_UNITS else "min"}),
+                        [("policy", "INTERVAL")], slug=slug) is None:
             return
         self.playlistsChanged.emit()
-        try:
-            self._sync_engine()
-        except Exception:
-            pass
 
     def _master_service(self) -> str:
         """The unit the master switch controls. OFF means OFF - full termination."""
@@ -730,18 +754,30 @@ class Backend(QObject):
 
         enable/disable --now so the switch position survives a reboot; the unit
         is written WantedBy=graphical-session.target but never enabled at
-        install time (daemon_unit.write_files never enables)."""
+        install time (daemon_unit.write_files never enables). A start first rebuilds
+        engine-env, writes the unit and runs daemon-reload; a failure there runs no systemctl
+        and shows the notice. A start that launched the engine bundles once it answers."""
         if _sandboxed():
             return False
+        was_active = True
+        if on:
+            try:
+                daemon_unit.write_files()
+            except (ValueError, RuntimeError) as exc:
+                self.notice.emit(f"Engine service config not updated: {exc}")
+                return False
+            was_active = self.masterState() == "active"
         args = ["enable", "--now"] if on else ["disable", "--now"]
         try:
             proc = subprocess.run(
                 ["systemctl", "--user", *args, self._master_service()],
                 capture_output=True, text=True, timeout=10, check=False)
             self.statusChanged.emit()
-            return proc.returncode == 0
         except (OSError, subprocess.SubprocessError):
             return False
+        if proc.returncode == 0 and not was_active:
+            self._bundle_when_ready(None)
+        return proc.returncode == 0
 
     @Slot(result=bool)
     def restartMaster(self) -> bool:
@@ -754,13 +790,44 @@ class Backend(QObject):
         if _sandboxed():
             return False
         try:
+            daemon_unit.write_files()
+        except (ValueError, RuntimeError) as exc:
+            self.notice.emit(f"Engine service config not updated: {exc}")
+            return False
+        cls, before = push.read_status()
+        try:
             proc = subprocess.run(
                 ["systemctl", "--user", "--no-block", "restart", self._master_service()],
                 capture_output=True, text=True, timeout=10, check=False)
             self.statusChanged.emit()
-            return proc.returncode == 0
         except (OSError, subprocess.SubprocessError):
             return False
+        if proc.returncode == 0:
+            self._bundle_when_ready(before.get("pid") if cls == "ok" and before else None)
+        return proc.returncode == 0
+
+    def _bundle_when_ready(self, old_pid: Any) -> None:
+        """The bundle of a service start or restart: the marker first, then a status read every
+        250 ms for up to 20 s; the first ok status whose pid differs from old_pid runs the window's
+        sync, and no answer leaves the marker to the drain."""
+        try:
+            marker.ensure(("BUNDLE",))
+        except OSError as exc:
+            logging.getLogger(__name__).warning("sync marker not set: %s", exc)
+        self._ready_old_pid = old_pid
+        self._ready_deadline = monotonic() + 20.0
+        self._ready_timer.start()
+
+    def _ready_tick(self) -> None:
+        cls, status = push.read_status()
+        if cls == "ok" and status.get("pid") != self._ready_old_pid:
+            self._ready_timer.stop()
+            try:
+                self._note(push.sync_all("window"), schedule=True)
+            except OSError:
+                pass
+        elif monotonic() >= self._ready_deadline:
+            self._ready_timer.stop()
 
     def _schedule_entries(self) -> list[dict[str, str]]:
         return push._schedule_entries()
@@ -828,21 +895,47 @@ class Backend(QObject):
             return
         try:
             self.refresh()
-            self._sync_engine()
+            self.drain_now()
         except Exception:
             pass
 
-    def _sync_engine(self, manual: bool = False) -> None:
-        outcome = push._sync_engine(manual)
-        if "policy_dirty" in outcome:
-            self._policy_dirty = outcome["policy_dirty"]
-        if "schedule_refused" in outcome:
-            self._schedule_refused = outcome["schedule_refused"]
-        if "rotation_clock" in outcome:
-            try:
-                self.rotationClock.emit(*outcome["rotation_clock"])
-            except Exception:
-                pass
+    def drain_now(self) -> Any:
+        """The window's bundle now (sync_all), its marker ensured first so the run is recorded."""
+        outcome = push.sync_all("window")
+        self._note(outcome, schedule=True)
+        return outcome
+
+    def _drain(self) -> None:
+        """The poll's drain: while the marker has classes and no readiness wait is due, the window's
+        bundle without waiting for sync. Failed drains of one generation are retried after 5 s,
+        15 s and 45 s, and when the retry after the 45 s wait fails, none follows until a writer
+        raises the generation. A run that found sync busy, an unresponsive status or another
+        build's engine counts nothing; an away one counts, as the poll has just read status."""
+        if self._ready_timer.isActive():
+            return
+        try:
+            state = marker.read()
+        except OSError:
+            return
+        if not state["classes"]:
+            return
+        if state["generation"] != self._drain_generation:
+            self._drain_generation, self._drain_failures, self._drain_after = state["generation"], 0, 0.0
+        if self._drain_failures >= 4 or monotonic() < self._drain_after:
+            return
+        try:
+            outcome = push.sync_all("window", wait_s=0)
+        except OSError:
+            return
+        self._note(outcome, schedule=True)
+        if outcome.kind in ("refused", "uncertain") or outcome.reason == "away" \
+                or (outcome.reason == "budget" and not outcome.recorded):
+            self._drain_failures += 1
+            if self._drain_failures < 4:
+                self._drain_after = monotonic() + (5.0, 15.0, 45.0)[self._drain_failures - 1]
+
+    def _sync_engine(self) -> None:
+        self.drain_now()
 
     @Slot(result=bool)
     def rotateNext(self) -> bool:
@@ -853,18 +946,13 @@ class Backend(QObject):
             except lock.StoreBusy as exc:
                 logging.getLogger(__name__).warning("rotation not resumed before next: %s", exc)
         try:
-            reply = api_client.next_wallpaper()
-            if reply is not None and reply.get("ok"):
-                self.statusChanged.emit()
-                return True
-            # engine said no (empty set before the first sync) -> push and retry
-            self._sync_engine()
-            reply = api_client.next_wallpaper()
-            if reply is not None and reply.get("ok"):
-                self.statusChanged.emit()
-                return True
+            with push.engine_only():
+                reply = api_client.next_wallpaper()
         except Exception:
-            pass
+            return False
+        if reply is not None and reply.get("ok"):
+            self.statusChanged.emit()
+            return True
         return False
 
     @Slot(result=bool)
@@ -876,7 +964,8 @@ class Backend(QObject):
             except lock.StoreBusy as exc:
                 logging.getLogger(__name__).warning("rotation not resumed before prev: %s", exc)
         try:
-            reply = api_client.prev_wallpaper()
+            with push.engine_only():
+                reply = api_client.prev_wallpaper()
             if reply is not None and reply.get("ok"):
                 self.statusChanged.emit()
                 return True
@@ -889,10 +978,6 @@ class Backend(QObject):
     def setPaused(self, paused: bool) -> None:
         """Deck pause: hold rotation without touching the playlist mode."""
         self._set_setting("ROTATION_ENABLED", not paused)
-        try:
-            self._sync_engine()
-        except Exception:
-            pass
 
     _SESSION_KEYS = push._SESSION_KEYS
 
@@ -907,7 +992,7 @@ class Backend(QObject):
 
         Same honesty contract as dev.instrumentReach - a control that looks instant and is
         not is the lying-toggle shape. _LIVE_GLOBAL_KEYS is the single source of truth: a
-        key in it gets pushed to the running engine by _push_live_globals, a key outside it
+        key in it gets pushed to the running engine by its setting row, a key outside it
         is folded into the next show's args and lands up to a full rotation interval later.
 
         This is deliberately derived rather than hardcoded: landing a verb flips the deck
@@ -961,7 +1046,8 @@ class Backend(QObject):
         """
         try:
             target = max(0.0, min(10.0, float(speed)))
-            reply = api_client.set_speed(target)
+            with push.engine_only():
+                reply = api_client.set_speed(target)
             if not (isinstance(reply, dict) and reply.get("ok")):
                 return -1.0
             result = reply.get("result") or {}
@@ -1003,7 +1089,8 @@ class Backend(QObject):
                     target = float(args.get("speed", 1.0))
                 else:
                     target = 1.0
-            reply = api_client.set_speed(target)
+            with push.engine_only():
+                reply = api_client.set_speed(target)
             if not (isinstance(reply, dict) and reply.get("ok")):
                 return -1.0
             result = reply.get("result") or {}
@@ -1019,23 +1106,18 @@ class Backend(QObject):
         if not skey:
             return
         self._set_setting(skey, bool(on))
-        try:
-            self._sync_engine()
-        except Exception:
-            pass
 
     def restoreSessionOverrides(self) -> None:
         """App quit: clear every session override so nothing outlives the session."""
         try:
-            changed = settings.modify(lambda cur: {skey: False for skey in self._SESSION_KEYS.values()
-                                                   if cur.get(skey)})
+            cur = settings.load()
+            keys = [skey for skey in self._SESSION_KEYS.values() if cur.get(skey)]
+            if keys:
+                push.run_change(("settings",),
+                                lambda: settings.modify(lambda now: {k: False for k in keys if now.get(k)}),
+                                [(push.SETTING_ROWS[k], k) for k in keys])
         except Exception:
             return
-        if changed:
-            try:
-                self._sync_engine()
-            except Exception:
-                pass
 
     themeRefreshRequested = Signal()
 
@@ -1064,10 +1146,6 @@ class Backend(QObject):
         if isinstance(value, str) and value.startswith("file://"):
             value = QUrl(value).toLocalFile()  # folder pickers hand over file:// urls
         self._set_setting(key, value)  # emits settingsChanged (bound pages live-refresh off it)
-        try:
-            self._sync_engine()
-        except Exception:
-            pass
 
     @Slot(str)
     def openPath(self, path: str) -> None:
@@ -1158,15 +1236,17 @@ class Backend(QObject):
                 if key in current:
                     fresh[key] = current[key]
             return fresh
-        try:
+        def write() -> None:
             settings.replace(reset)
+            try:
+                daemon_unit.write_env()
+            except Exception as exc:
+                logging.getLogger(__name__).warning("engine env file not rebuilt after the reset: %s", exc)
+        try:
+            self._note(push.run_change(("settings", "env"), write, [("reload", None)]), schedule=True)
         except Exception:
             return False
         self.settingsChanged.emit()
-        try:
-            self._sync_engine()
-        except Exception:
-            pass
         return True
 
     def _autostart_file(self) -> str:
@@ -1245,22 +1325,22 @@ class Backend(QObject):
         slug = self._active_slug()
         if not slug:
             return
-        try:
+        member: list[bool] = []
+
+        def write() -> None:
             playlists.toggle_member(slug, wid)
             now = wid in set(playlists.members(slug))
             if now != on:
                 playlists.toggle_member(slug, wid)
                 now = wid in set(playlists.members(slug))
-        except Exception:
+            member.append(now)
+        if self._change("playlist membership", ("playlists",), write, [("members", "MEMBERS")],
+                        slug=slug) is None:
             return
         # the store may have refused (an unsafe id): the card shows what the store holds
-        self._model.set_in_playlist(wid, now)
+        self._model.set_in_playlist(wid, member[0])
         self.countChanged.emit()
         self.playlistsChanged.emit()
-        try:
-            self._sync_engine()
-        except Exception:
-            pass
 
     @Slot(str)
     def approveReview(self, wid: str) -> None:
@@ -1283,22 +1363,18 @@ class Backend(QObject):
         if not wid:
             return
         title = self._model.title_of(wid)
-        try:
-            tags.set_state(wid, title, "bad")
-        except Exception:
-            return
         slug = self._active_slug()
-        try:
-            if slug and wid in playlists.members(slug):
+        member = bool(slug) and wid in playlists.members(slug)
+
+        def write() -> None:
+            tags.set_state(wid, title, "bad")
+            if member and wid in playlists.members(slug):
                 playlists.toggle_member(slug, wid)
-        except Exception:
-            pass
+        if self._change("trash", ("playlists", "tags"), write,
+                        [("members", "MEMBERS")] if member else [("none", None)], slug=slug or None) is None:
+            return
         self.refresh()
         self.playlistsChanged.emit()
-        try:
-            self._sync_engine()
-        except Exception:
-            pass
 
     @Slot(str)
     def toggleFavorite(self, wid: str) -> None:
@@ -1364,24 +1440,23 @@ class Backend(QObject):
     def _app_condition_names(self) -> list[str]:
         return push._app_condition_names()
 
-    def _push_live_globals(self) -> None:
-        push._push_live_globals()
-
-    def _push_fullscreen_behavior(self) -> None:
-        push._push_fullscreen_behavior()
+    def save_setting(self, key: str, value: Any) -> Any:
+        """One setting through the change runner: the settings lock (and env for a tuning or
+        restart row), the store write, then the key's row. settingsChanged fires after the write."""
+        row = push.SETTING_ROWS.get(key, "none")
+        outcome = push.run_change(("settings", "env") if row in ("tuning", "restart") else ("settings",),
+                                  lambda: settings.update({key: value}), [(row, key)])
+        self.settingsChanged.emit()
+        self._note(outcome, schedule=row == "schedule")
+        return outcome
 
     def _set_setting(self, key: str, value: Any) -> None:
         try:
-            settings.update({key: value})
-        except lock.StoreBusy:
+            self.save_setting(key, value)
+        except (lock.StoreBusy, ValueError):
             raise
         except Exception:
             return
-        self.settingsChanged.emit()
-        if key in self._FULLSCREEN_KEYS:
-            self._push_fullscreen_behavior()
-        if key in self._LIVE_GLOBAL_KEYS:
-            self._push_live_globals()
 
     def _mem_high_mb(self) -> int:
         """The engine unit's MemoryHigh in MB, read from systemd once and cached; -1 when
@@ -1599,6 +1674,7 @@ class Backend(QObject):
                 result["state"] = "up"
 
                 pid = api.get("pid")
+                first_sight = False
                 if pid != self._engine_pid_seen:
                     first_sight = self._engine_pid_seen is None
                     self._engine_pid_seen = pid
@@ -1608,13 +1684,12 @@ class Backend(QObject):
                         # RE-arrivals get nothing: the engine restores its own state
                         # on boot, and an automatic re-push (or re-show) here would
                         # defeat its crash-loop guard by feeding the loop.
-                        self._sync_engine()
-                        self._push_fullscreen_behavior()
-                        self._push_live_globals()
-                if self._policy_dirty:
-                    # a change made while the engine was away (a pause clicked during a
-                    # restart) is delivered now, once
-                    self._sync_engine()
+                        try:
+                            self._note(push.sync_all("window", wait_s=0), schedule=True)
+                        except OSError:
+                            pass
+                if not first_sight:
+                    self._drain()
 
                 # the fullscreen ignore-list is a FILE the user edits in their own
                 # editor, so there is no save hook to hang a push on. Watch its
@@ -1624,7 +1699,8 @@ class Backend(QObject):
                     stamp = bl.stat().st_mtime_ns if bl.exists() else 0
                     if stamp != getattr(self, "_blacklist_stamp", None):
                         if getattr(self, "_blacklist_stamp", None) is not None:
-                            api_client.set_fullscreen_ignore(self._fullscreen_ignore_ids())
+                            with lock.held("sync", wait_s=0):
+                                api_client.set_fullscreen_ignore(self._fullscreen_ignore_ids())
                         self._blacklist_stamp = stamp
                 except Exception:
                     pass
@@ -1843,7 +1919,7 @@ class ImportBridge(QObject):
             except Exception:
                 pass
             try:
-                self._backend._sync_engine()
+                self._backend.drain_now()
             except Exception:
                 pass
         # only now, repair fully done, run the startup scan a mode owed (serialized so
@@ -1959,7 +2035,7 @@ class ImportBridge(QObject):
             except Exception:
                 pass
             try:
-                self._backend._sync_engine()
+                self._backend.drain_now()
             except Exception:
                 pass
         self.busyChanged.emit()

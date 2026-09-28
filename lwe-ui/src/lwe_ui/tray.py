@@ -22,6 +22,7 @@ the two settings are deliberately orthogonal.
 """
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import sys
@@ -34,7 +35,7 @@ from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from . import api_client
 from .engine import resolve
 from .proctitle import set_process_name
-from .storage import settings
+from .storage import lock, settings
 
 
 def _fallback_icon() -> QIcon:
@@ -101,7 +102,7 @@ class TrayProcess(QObject):
         self._pause_action = QAction("Pause wallpapers", menu)
         self._pause_action.triggered.connect(self._toggle_pause)
         self._next_action = QAction("Next wallpaper", menu)
-        self._next_action.triggered.connect(lambda: api_client.next_wallpaper())
+        self._next_action.triggered.connect(self._next)
         self._stop_action = QAction("Stop wallpapers", menu)
         self._stop_action.triggered.connect(self._toggle_outputs)
         menu.addAction(self._pause_action)
@@ -143,18 +144,29 @@ class TrayProcess(QObject):
         released = (st.get("outputs") or {}).get("state") == "released"
         self._stop_action.setText("Restore wallpapers" if released else "Stop wallpapers")
 
+    def _next(self) -> None:
+        try:
+            with lock.held("sync"):
+                api_client.next_wallpaper()
+        except lock.StoreBusy as exc:
+            logging.getLogger(__name__).warning("next not sent: %s", exc)
+
     def _toggle_pause(self) -> None:
         # the master-pause fact (timescale 0) - the same single fact the panel drives
         st = self._status()
         if st is None:
             return
-        if float(st.get("speed", 1.0) or 0.0) == 0.0:
-            # resume restores the resolved rate of the wallpaper on screen, the same
-            # number a show or the panel's own resume would send
-            wid = str(((st.get("current") or {}).get("ui_id")) or "")
-            api_client.set_speed(resolve.effective_speed(wid))
-        else:
-            api_client.set_speed(0.0)
+        try:
+            with lock.held("sync"):
+                if float(st.get("speed", 1.0) or 0.0) == 0.0:
+                    # resume restores the resolved rate of the wallpaper on screen, the same
+                    # number a show or the panel's own resume would send
+                    wid = str(((st.get("current") or {}).get("ui_id")) or "")
+                    api_client.set_speed(resolve.effective_speed(wid))
+                else:
+                    api_client.set_speed(0.0)
+        except lock.StoreBusy as exc:
+            logging.getLogger(__name__).warning("pause not sent: %s", exc)
 
     def _toggle_outputs(self) -> None:
         st = self._status()

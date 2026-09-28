@@ -30,29 +30,39 @@ _BOOT_HOME = tempfile.mkdtemp(prefix="lwe-engsync-boot-")
 for _k, _sub in (("HOME", ""), ("XDG_CONFIG_HOME", "c"), ("XDG_STATE_HOME", "s"), ("XDG_DATA_HOME", "d")):
     os.environ[_k] = os.path.join(_BOOT_HOME, _sub) if _sub else _BOOT_HOME
 
+_OK = {"id": 1, "ok": True, "status": "done", "result": {}}
 _API = types.ModuleType("lwe_ui.api_client")
 _API.available = lambda: False
 _API.show = lambda wid, wait_done=False, **kw: None
 _API.status = lambda: None
+_API.last_class = lambda: "away"
 _API.ping = lambda: None
 _API.playlist_set = lambda *a, **kw: None
 _API.lanes_set = lambda lanes: None
+_API.schedule_set = lambda enabled, entries: _OK
 _API.next_wallpaper = lambda: None
 _API.prev_wallpaper = lambda: None
-_API.set_fullscreen = lambda behavior: None
-_API.set_fps = lambda fps: None
-_API.set_parallax = lambda enabled: None
-_API.set_particles = lambda enabled: None
-_API.set_fullscreen_ignore = lambda ids: None
+_API.set_fullscreen = lambda behavior: _OK
+_API.set_fps = lambda fps: _OK
+_API.set_parallax = lambda enabled: _OK
+_API.set_particles = lambda enabled: _OK
+_API.set_fullscreen_ignore = lambda ids: _OK
+_API.set_app_conditions = lambda names, behavior: _OK
+_API.set_speed = lambda speed: _OK
+_API.set_volume = lambda volume: _OK
+_API.set_mouse = lambda enabled: _OK
+_API.set_audio = lambda enabled: _OK
+_API.set_tuning = lambda **kw: _OK
+_API.set_fit = lambda **kw: _OK
 _API.list_objects = lambda **kw: None
-_API.set_skip = lambda ids, **kw: None
+_API.set_skip = lambda ids, **kw: _OK
 sys.modules["lwe_ui.api_client"] = _API
 
 from PySide6.QtCore import QCoreApplication  # noqa: E402
 
 _APP = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
 
-from lwe_ui import models  # noqa: E402
+from lwe_ui import models, version  # noqa: E402
 from lwe_ui.storage import playlists, settings, wp  # noqa: E402
 
 assert models.api_client is _API
@@ -73,7 +83,9 @@ class EngineSyncTest(unittest.TestCase):
 
         settings.save(settings.load())
         _API.available = lambda: True
-        _API.status = lambda: None
+        _API.status = lambda: {"api": 1, "version": version.panel_stamp(), "pid": 100,
+                               "current": {"id": "", "ui_id": ""}}
+        _API.set_skip = lambda ids, **kw: _OK
         self.pushes: list[dict] = []
         self.binds: list[list[dict]] = []
 
@@ -164,13 +176,13 @@ class EngineSyncTest(unittest.TestCase):
         self.assertTrue(self.backend.rotateNext())
         self.assertEqual(len(calls), 1)
 
-    def test_rotate_next_pushes_then_retries_then_reports_failure(self) -> None:
+    def test_a_refused_next_is_reported_and_never_retried(self) -> None:
         self._seed_playlist(["111"])
         attempts = []
         _API.next_wallpaper = lambda: (attempts.append(1), {"id": 1, "ok": False, "error": "rotation set is empty"})[1]
         self.assertFalse(self.backend.rotateNext())
-        self.assertEqual(len(attempts), 2, "one retry after the sync push")
-        self.assertEqual(len(self.pushes), 1, "the retry was preceded by a push")
+        self.assertEqual(len(attempts), 1, "an engine-only action is sent once")
+        self.assertEqual(self.pushes, [], "and never bundles")
 
     def test_prev_honest_empty_history_is_a_no(self) -> None:
         _API.prev_wallpaper = lambda: {"id": 1, "ok": False, "error": "history is empty"}
@@ -178,11 +190,12 @@ class EngineSyncTest(unittest.TestCase):
 
     def test_first_sight_pushes_once_and_rearrival_does_not(self) -> None:
         self._seed_playlist(["111"])
-        api_state = {"api": 1, "pid": 100, "uptime_s": 5, "screens": {"DP-1": "/x/111"},
-                     "current": {"id": "111", "ui_id": "111"}, "rotation": {}}
+        api_state = {"api": 1, "version": version.panel_stamp(), "pid": 100, "uptime_s": 5,
+                     "screens": {"DP-1": "/x/111"}, "current": {"id": "111", "ui_id": "111"}, "rotation": {}}
         _API.status = lambda: dict(api_state)
         self.backend.status()
         first = len(self.pushes)
+        self.assertEqual(len(self.binds), 1, "first sight is one bundle")
         self.assertGreaterEqual(first, 1, "first sighting pushes the panel's policy")
         self.backend.status()
         self.assertEqual(len(self.pushes), first, "same pid, no re-push")
@@ -292,18 +305,18 @@ class EngineSyncTest(unittest.TestCase):
 
     def _capture_globals(self) -> dict:
         got: dict = {}
-        _API.set_fps = lambda fps: got.__setitem__("fps", fps) or {"ok": True}
-        _API.set_parallax = lambda enabled: got.__setitem__("parallax", enabled) or {"ok": True}
-        _API.set_particles = lambda enabled: got.__setitem__("particles", enabled) or {"ok": True}
-        _API.set_fullscreen_ignore = lambda ids: got.__setitem__("ignore", ids) or {"ok": True}
-        _API.set_fullscreen = lambda behavior: got.__setitem__("behavior", behavior) or {"ok": True}
+        _API.set_fps = lambda fps: got.__setitem__("fps", fps) or _OK
+        _API.set_parallax = lambda enabled: got.__setitem__("parallax", enabled) or _OK
+        _API.set_particles = lambda enabled: got.__setitem__("particles", enabled) or _OK
+        _API.set_fullscreen_ignore = lambda ids: got.__setitem__("ignore", ids) or _OK
+        _API.set_fullscreen = lambda behavior: got.__setitem__("behavior", behavior) or _OK
         return got
 
     def test_live_globals_push_effective_values(self) -> None:
         got = self._capture_globals()
         settings.save({"ENGINE_FPS": "60", "PARALLAX_DEFAULT": True,
                        "PARTICLES_DEFAULT": False, "OVERRIDE_PARALLAX_OFF": False})
-        self.backend._push_live_globals()
+        self.backend._sync_engine()
         self.assertEqual(got["fps"], 60)
         self.assertTrue(got["parallax"])
         self.assertFalse(got["particles"], "the setting is the source of truth, not the default")
@@ -311,19 +324,19 @@ class EngineSyncTest(unittest.TestCase):
     def test_session_override_beats_parallax_default(self) -> None:
         got = self._capture_globals()
         settings.save({"PARALLAX_DEFAULT": True, "OVERRIDE_PARALLAX_OFF": True})
-        self.backend._push_live_globals()
+        self.backend._sync_engine()
         self.assertFalse(got["parallax"], "the deck override wins over the global default")
 
     def test_blank_fps_reads_as_the_default(self) -> None:
         got = self._capture_globals()
         settings.save({"ENGINE_FPS": ""})
-        self.backend._push_live_globals()
+        self.backend._sync_engine()
         self.assertEqual(got.get("fps"), 60, "a blank is not a state; the schema default is pushed")
 
     def test_fps_is_clamped_to_the_engine_range(self) -> None:
         got = self._capture_globals()
         settings.save({"ENGINE_FPS": "9000"})
-        self.backend._push_live_globals()
+        self.backend._sync_engine()
         self.assertEqual(got["fps"], 480, "the dispatcher would reject an out-of-range value")
 
     def test_changing_a_global_setting_pushes_it(self) -> None:
@@ -346,8 +359,8 @@ class EngineSyncTest(unittest.TestCase):
         got = self._capture_globals()
         self._seed_playlist(["111"])
         settings.save({**settings.load(), "PARTICLES_DEFAULT": False, "ENGINE_FPS": "24"})
-        api_state = {"api": 1, "pid": 100, "uptime_s": 5, "screens": {"DP-1": "/x/111"},
-                     "current": {"id": "111", "ui_id": "111"}, "rotation": {}}
+        api_state = {"api": 1, "version": version.panel_stamp(), "pid": 100, "uptime_s": 5,
+                     "screens": {"DP-1": "/x/111"}, "current": {"id": "111", "ui_id": "111"}, "rotation": {}}
         _API.status = lambda: dict(api_state)
         self.backend.status()
         self.assertEqual(got.get("fps"), 24)
@@ -419,7 +432,7 @@ class EngineSyncTest(unittest.TestCase):
         which_calls = []
         real_which = models.shutil.which
         models.shutil.which = lambda n: which_calls.append(n) or real_which(n)
-        _API.status = lambda: {"api": 1, "pid": 7, "screens": {"DP-1": "/x/111"},
+        _API.status = lambda: {"api": 1, "version": version.panel_stamp(), "pid": 7, "screens": {"DP-1": "/x/111"},
                                "current": {"id": "111", "ui_id": "111"},
                                "rotation": {"next_in_s": 42, "interval_s": 900,
                                             "label": "chill", "next_up": "222"}}
@@ -435,7 +448,8 @@ class EngineSyncTest(unittest.TestCase):
         self.assertEqual(st["playlist"], "chill")
 
     def test_now_playing_prefers_ui_id(self) -> None:
-        _API.status = lambda: {"api": 1, "pid": 100, "screens": {"DP-1": "/x/2185197772"},
+        _API.status = lambda: {"api": 1, "version": version.panel_stamp(), "pid": 100,
+                               "screens": {"DP-1": "/x/2185197772"},
                                "current": {"id": "2185197772", "ui_id": "3410648253"},
                                "rotation": {}}
         st = self.backend.status()

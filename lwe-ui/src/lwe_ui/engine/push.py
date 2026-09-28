@@ -1,8 +1,7 @@
 """The engine pushes, each resolved from the store and sent over the engine socket: a change's
 own push through run_change (the sync marker, the store write, then the requests of the change's
 rows), the bundle that rebuilds the engine from the store (sync_all), engine-only actions under
-the sync lock, and the rotation set, schedule, fullscreen policy, live globals and single show
-the window sends. Plain Python over the store and the resolver; no Qt import.
+the sync lock, and a single show. Plain Python over the store and the resolver; no Qt import.
 """
 from __future__ import annotations
 
@@ -10,7 +9,7 @@ import contextlib
 import logging
 import time
 from collections.abc import Callable, Iterable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .. import api_client, version
@@ -107,57 +106,6 @@ def _playlist_payload(slug: str) -> tuple[list, int, str, bool, str]:
     return entries, interval, order, enabled, label
 
 
-def _sync_engine(manual: bool = False) -> dict[str, Any]:
-    """Push the active playlist to the engine by slug, in parts, then the scheduled
-    playlists and the schedule, then bind the lane (policy push). The engine owns the
-    walk and the schedule; the panel owns resolution. `manual` marks the user's own
-    playlist switch, which the engine holds until the next boundary (R67). Best-effort by
-    design: a dead socket is retried by the status poll's pid-change tracker, never
-    surfaced to the caller.
-
-    Returns what the caller keeps, each key only when its step was reached: "policy_dirty"
-    (True from the socket check until the lane binding is answered), "schedule_refused"
-    (from the schedule push) and "rotation_clock" ((next_in_ms, interval_s) from the lanes
-    reply)."""
-    outcome: dict[str, Any] = {}
-    try:
-        if not api_client.available():
-            outcome["policy_dirty"] = True
-            return outcome
-        outcome["policy_dirty"] = True   # cleared below, once the lane binding was answered
-        slug = _active_slug() or "default"
-        entries, interval, order, enabled, label = _playlist_payload(slug)
-        parts = split_playlist_parts(entries)
-        for number, part in enumerate(parts, start=1):
-            reply = api_client.playlist_set(slug, part, order, interval, part=number,
-                                            of=len(parts), label=label)
-            if reply is None or not reply.get("ok"):
-                return outcome  # a refused part must never bind a half-sent playlist
-        # a refused or unknown schedule must not leave the lane unbound, but the cell
-        # must not claim a schedule the engine did not take
-        outcome["schedule_refused"] = not _push_schedule()
-        lane: dict[str, Any] = {"id": "all", "playlist": slug, "enabled": enabled}
-        if manual:
-            lane["manual"] = True
-        reply = api_client.lanes_set([lane])
-        try:
-            # the reply is the envelope: {ok, result: {lanes: [...]}}; an unanswered push
-            # (socket gone mid-way) leaves the policy marked for the next poll
-            if isinstance(reply, dict) and reply.get("ok"):
-                outcome["policy_dirty"] = False
-            result = reply.get("result") if isinstance(reply, dict) and reply.get("ok") else None
-            lanes = result.get("lanes") if isinstance(result, dict) else None
-            if isinstance(lanes, list) and lanes:
-                ms, iv = lanes[0].get("next_in_ms"), lanes[0].get("interval_s")
-                if isinstance(ms, (int, float)) and int(ms) >= 0:
-                    outcome["rotation_clock"] = (int(ms), int(iv) if isinstance(iv, (int, float)) else -1)
-        except Exception:
-            pass
-    except Exception:
-        pass
-    return outcome
-
-
 def effectiveSpeed(factor: float) -> float:
     """The rate the engine should run for the wallpaper on screen under `factor`."""
     return effective_speed(_current_ui_wid(), factor)
@@ -227,85 +175,6 @@ def _app_condition_names() -> list[str]:
     return out[:128]
 
 
-def _push_live_globals() -> None:
-    """Push the engine-global toggles to the running engine.
-
-    These are NOT per-wallpaper, so they never ride a show and a restarted engine
-    knows nothing about them - hence this is also called from the pid-change
-    reconnect. Idempotent and best-effort: a dead socket is picked up by the next
-    status poll, never surfaced.
-
-    ENGINE_FPS empty means "whatever the engine launched with", so there is nothing
-    to push; it takes effect on the next service restart.
-    """
-    try:
-        s = settings.load()
-        if not api_client.available():
-            return
-
-        fps = str(s.get("ENGINE_FPS") or "").strip()
-        if fps:
-            try:
-                api_client.set_fps(max(1, min(480, int(fps))))
-            except ValueError:
-                pass
-
-        # the engine holds one speed number, the resolved rate of the wallpaper on screen, so the global
-        # speed is pushed through the same resolve as a show. independently tolerant, like every other
-        # push in this method: one verb that cannot answer must never cost the rest of the fan-out
-        try:
-            api_client.set_speed(effectiveSpeed(float(s.get("ENGINE_TIMESCALE") or 1.0)))
-        except Exception:
-            pass
-
-        parallax = _conf_true(s.get("PARALLAX_DEFAULT"), True) and not _conf_true(
-            s.get("OVERRIDE_PARALLAX_OFF"), False)
-        api_client.set_parallax(parallax)
-        api_client.set_particles(_conf_true(s.get("PARTICLES_DEFAULT"), True))
-        api_client.set_fullscreen_ignore(_fullscreen_ignore_ids())
-        # a restarted engine restores conditions from its own state file; this push
-        # covers the fresh-install boot and any hand-edit of the list file
-        api_client.set_app_conditions(
-            _app_condition_names(),
-            str(s.get("APP_CONDITION_BEHAVIOR") or "off"))
-
-        # mute + mouse (v1.10 sec 4: set-volume/set-mouse ship). These are NOT globals - the honest live value
-        # is the CURRENT wallpaper's resolved one, so it is computed by the same resolve_show_args every show
-        # uses. No wallpaper showing (idle daemon) means nothing to retune; the next show carries the override.
-        wid = _current_ui_wid()
-        if wid:
-            _, args = resolve_show_args(wid)
-            if "volume" in args:
-                api_client.set_volume(int(args["volume"]))
-            if "mouse" in args:
-                api_client.set_mouse(bool(args["mouse"]))
-            if "audio_processing" in args:
-                api_client.set_audio(bool(args["audio_processing"]))
-    except Exception:
-        pass
-
-
-def _push_fullscreen_behavior() -> None:
-    """Apply the fullscreen policy to the live engine.
-
-    The verb changes the RUNNING scene: turning the mode off un-latches a pause or
-    hands the outputs back at once, instead of waiting for the next swap.
-
-    The rotation set also has to be refreshed whenever this changes, because every
-    stored entry carries its own resolved copy and the next timed advance would
-    otherwise restore the old policy. That is NOT done here: every caller already
-    follows a settings write with _sync_engine(), and doing it in both places
-    pushed 54 entries twice per change.
-    """
-    try:
-        s = settings.load()
-        if not api_client.available():
-            return
-        api_client.set_fullscreen(resolve_fullscreen_behavior(s))
-    except Exception:
-        pass
-
-
 _log = logging.getLogger(__name__)
 
 _WINDOW_BUDGET_S = 8.0
@@ -355,13 +224,17 @@ class Outcome:
     "refused" (message quotes the engine's first refusal) or "uncertain" (a request got no final
     reply, or one that was neither a done ok nor ok false). message also carries a version refusal;
     env is the engine-env write of a tuning or restart change; recorded counts the playlists a
-    budget stop recorded in the marker; warning says the marker could not be cleared."""
+    budget stop recorded in the marker; warning says the marker could not be cleared; clock is the
+    lane clock (next_in_ms, interval_s) of the last ok lanes-set reply; refused_verb names the verb
+    of the first refused request."""
     kind: str
     reason: str | None = None
     message: str | None = None
     env: str | None = None
     recorded: int = 0
     warning: str | None = None
+    clock: tuple[int, int] | None = field(default=None, compare=False)
+    refused_verb: str | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -444,6 +317,13 @@ def _reply_class(reply: dict[str, Any] | None) -> str:
     return "away" if api_client.last_class() == "away" else "uncertain"
 
 
+def _verb_of(call: Callable[..., Any]) -> str:
+    """The engine verb an api_client call sends: its name in api_client, dashed."""
+    name = next((n for n in dir(api_client) if getattr(api_client, n, None) is call),
+                getattr(call, "__name__", ""))
+    return name.replace("_", "-")
+
+
 def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
@@ -474,16 +354,21 @@ class _Run:
         self.stopped = False
         self.recorded = 0
         self.schedule: bool | None = None
+        self.reply: Any = None
+        self.clock: tuple[int, int] | None = None
+        self.refused_verb: str | None = None
         self._payloads: dict[str, tuple] = {}
 
     def send(self, call: Callable[..., Any], *args: Any, **kwargs: Any) -> bool:
-        """Send one request unless the run has ended; True when it ended ok."""
+        """Send one request unless the run has ended; True when it ended ok. The reply is kept."""
         if self.ended is not None:
             return False
-        return self.note(call(*args, **kwargs))
+        self.reply = call(*args, **kwargs)
+        return self.note(self.reply, _verb_of(call) if _reply_class(self.reply) == "refused" else None)
 
-    def note(self, reply: dict[str, Any] | None) -> bool:
-        """Keep how one reply ended; True when it is ok."""
+    def note(self, reply: dict[str, Any] | None, verb: str | None = None) -> bool:
+        """Keep how one reply ended; True when it is ok. The first refusal keeps its message and
+        the verb that was refused."""
         cls = _reply_class(reply)
         if cls == "ok":
             return True
@@ -491,6 +376,7 @@ class _Run:
         if cls == "refused":
             if self.refused is None:
                 self.refused = str(reply.get("error") or "")
+                self.refused_verb = verb
         else:
             self.ended = cls
         return False
@@ -538,6 +424,19 @@ def _transfer(run: _Run, slug: str) -> bool:
     return True
 
 
+def _lanes_set(run: _Run, lane: dict[str, Any]) -> None:
+    """lanes-set for the one lane; an ok reply's lane clock (next_in_ms, interval_s) is kept for
+    the deck's countdown."""
+    if not run.send(api_client.lanes_set, [lane]):
+        return
+    result = run.reply.get("result")
+    lanes = result.get("lanes") if isinstance(result, dict) else None
+    first = lanes[0] if isinstance(lanes, list) and lanes and isinstance(lanes[0], dict) else {}
+    ms, iv = first.get("next_in_ms"), first.get("interval_s")
+    if _is_number(ms) and ms >= 0:
+        run.clock = (int(ms), int(iv) if _is_number(iv) else -1)
+
+
 def _verb(run: _Run, key: str, s: dict[str, Any]) -> None:
     """The verb row's request for `key`: set-fps (nothing for an empty ENGINE_FPS), set-parallax,
     set-particles, set-app-conditions or set-fullscreen-ignore."""
@@ -580,12 +479,12 @@ def _reshow(run: _Run, wid: str) -> None:
     reply counts as one of the run's requests, then set-skip when the wallpaper lists skips, since
     a show clears the skip list, then set-speed with the read speed, whatever the show's outcome."""
     speed = run.status.get("speed")
-    run.note(show_final(wid, tuned=run.note))
+    run.note(show_final(wid, tuned=lambda reply: run.note(reply, "set-tuning")), "show")
     skips = resolve_show_args(wid)[1].get("skip_objects")
     if skips:
-        run.note(api_client.set_skip(skips))
+        run.note(api_client.set_skip(skips), "set-skip")
     if _is_number(speed):
-        run.note(api_client.set_speed(speed))
+        run.note(api_client.set_speed(speed), "set-speed")
 
 
 def _holds_current() -> bool:
@@ -635,7 +534,7 @@ def _bundle(run: _Run, derived: str | None, reshow: bool, reload: bool = False) 
         if derived:
             lane["playlist"] = derived
         lane["enabled"] = run.enabled(derived)
-        run.send(api_client.lanes_set, [lane])
+        _lanes_set(run, lane)
     if run.halted():
         return
     s = settings.load()
@@ -687,13 +586,13 @@ def _own(run: _Run, row: str, key: str | None, ticket: Ticket, derived: str | No
             lane: dict[str, Any] = {"id": "all", "playlist": active, "enabled": run.enabled(active)}
             if run.schedule_on():
                 lane["manual"] = True
-            run.send(api_client.lanes_set, [lane])
+            _lanes_set(run, lane)
     elif row == "pause":
-        run.send(api_client.lanes_set, [{"id": "all", "enabled": run.enabled(derived)}])
+        _lanes_set(run, {"id": "all", "enabled": run.enabled(derived)})
     elif row in ("policy", "members"):
         target = ticket.slug or derived
         if sent.get(target) and (row == "policy" or target == derived):
-            run.send(api_client.lanes_set, [{"id": "all", "enabled": run.enabled(derived)}])
+            _lanes_set(run, {"id": "all", "enabled": run.enabled(derived)})
     elif row == "schedule":
         if all(sent.get(slug) for slug in _scheduled()):
             _send_schedule(run)
@@ -782,17 +681,18 @@ def _finish(run: _Run, env: str | None = None) -> Outcome:
             marker.clear(run.generation)
         except OSError as exc:
             warning = f"the sync marker could not be cleared: {exc}"
+    seen: dict[str, Any] = {"env": env, "clock": run.clock, "refused_verb": run.refused_verb}
     if run.ended == "uncertain":
-        return Outcome("uncertain", env=env)
+        return Outcome("uncertain", **seen)
     if run.ended is not None:
-        return Outcome("pending", reason=run.ended, env=env)
+        return Outcome("pending", reason=run.ended, **seen)
     if run.stopped:
         _log.warning("engine sync stopped at the window's %.0f s budget with %d playlists recorded",
                      _WINDOW_BUDGET_S, run.recorded)
-        return Outcome("pending", reason="budget", env=env, recorded=run.recorded)
+        return Outcome("pending", reason="budget", recorded=run.recorded, **seen)
     if run.refused is not None:
-        return Outcome("refused", message=run.refused, env=env)
-    return Outcome("applied", env=env, warning=warning)
+        return Outcome("refused", message=run.refused, **seen)
+    return Outcome("applied", warning=warning, **seen)
 
 
 def _deliver(ticket: Ticket) -> Outcome:

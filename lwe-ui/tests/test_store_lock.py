@@ -609,7 +609,7 @@ class StoreLockTest(unittest.TestCase):
                 logger.warning.assert_called_once()
         tree = ast.parse(Path(app.__file__).read_text(encoding="utf-8"))
         tries = [node for node in ast.walk(tree) if isinstance(node, ast.Try)
-                 and any("reconcile_env" in ast.unparse(stmt) for stmt in node.body)]
+                 and any("write_env" in ast.unparse(stmt) for stmt in node.body)]
         self.assertEqual(len(tries), 1)
         caught = " ".join(ast.unparse(h.type) for h in tries[0].handlers if h.type is not None)
         self.assertIn("OSError", caught, "a busy env lock at start must be logged, not fatal")
@@ -715,10 +715,10 @@ class StoreLockTest(unittest.TestCase):
         self.assertLess(waited, 0.25, "deleting a playlist that is not active took the settings lock")
         self.assertFalse(paths.playlist_file("beta").exists())
         self.assertFalse(paths.playlist_file("gamma").exists())
-        self.assertEqual((len(changed), pushes), (1, [False]), "the window refreshed the menu and re-pushed")
+        self.assertEqual((len(changed), pushes), (1, []), "the window refreshed the menu and sent nothing")
         self.assertEqual(settings.load()["ACTIVE_PLAYLIST"], "keep")
 
-    def test_deleting_the_active_playlist_while_settings_is_busy_refreshes_and_reports(self) -> None:
+    def test_deleting_the_active_playlist_while_settings_is_busy_deletes_nothing_and_reports(self) -> None:
         from lwe_ui import models
         for slug in ("victim", "spare", "alpha"):
             playlists.save(slug, {"NAME": slug, "MODE": "shuffle", "INTERVAL": 900, "UNIT": "min",
@@ -735,11 +735,11 @@ class StoreLockTest(unittest.TestCase):
                 changed.clear()
                 pushes.clear()
                 with mock.patch.object(lock, "LOCK_WAIT_S", 0.3), self._held_elsewhere("settings"), \
-                        self.assertLogs("lwe_ui", level="WARNING") as logged, self.assertRaises(lock.StoreBusy):
+                        self.assertLogs("lwe_ui", level="WARNING") as logged:
                     delete()
                 self.assertEqual(len(logged.records), 1)
-                self.assertFalse(paths.playlist_file(slug).exists(), "the playlist file was moved")
-                self.assertEqual((len(changed), pushes), (1, [True]), "the window refreshed the menu and re-pushed")
+                self.assertTrue(paths.playlist_file(slug).exists(), "settings is taken first: nothing was deleted")
+                self.assertEqual((len(changed), pushes), (0, []), "nothing saved, refreshed or sent")
                 self.assertEqual(settings.load()["ACTIVE_PLAYLIST"], slug, "the busy store was not written")
 
     def test_the_rules_editor_opens_a_file_that_is_not_utf8(self) -> None:

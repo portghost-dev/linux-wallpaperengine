@@ -66,16 +66,18 @@ def main() -> None:
         from PySide6.QtQuick import QQuickView
         from PySide6.QtTest import QTest
         from PySide6.QtQml import qmlRegisterSingletonInstance
-        from lwe_ui import api_client, bench_bridge, bench_courier
+        from lwe_ui import api_client, bench_bridge, bench_courier, version
         from lwe_ui.models import Backend, ThemeTokens
         from lwe_ui.editor import EditorBridge
         from lwe_ui.dev import DevBridge
         from lwe_ui.deck_popup import DeckPopupBridge
-        from lwe_ui.storage import paths, settings
+        from lwe_ui.storage import paths, playlists, settings
         from lwe_ui.app import _resolve_theme_tokens, _QML_DIR, _TOKENS_URI, _TOKENS_NAME
 
         paths.ensure_dirs()
         settings.ensure_exists()
+        playlists.save("main", {"NAME": "Main", "MODE": "shuffle", "INTERVAL": IV, "UNIT": "min", "MEMBERS": "111"})
+        settings.update({"ACTIVE_PLAYLIST": "main"})
         bench_courier.available = lambda: True
         app = QGuiApplication.instance() or QGuiApplication(["t"])
         tokens = ThemeTokens(_resolve_theme_tokens())
@@ -134,8 +136,9 @@ def main() -> None:
         # the engine, answering the real click path: lanes-set replies with the envelope shape
         eng = {"m": None}
         api_client.available = lambda: True
-        api_client.playlist_set = lambda *a, **k: {"ok": True}
-        api_client.schedule_set = lambda *a, **k: {"ok": True}
+        api_client.status = lambda *a, **k: {"api": 1, "version": version.panel_stamp(), "pid": 1, "current": {"id": "", "ui_id": ""}}
+        api_client.playlist_set = lambda *a, **k: {"ok": True, "status": "done"}
+        api_client.schedule_set = lambda *a, **k: {"ok": True, "status": "done"}
 
         def lanes_set(lanes):
             enabled = bool(lanes[0].get("enabled", True))
@@ -145,7 +148,8 @@ def main() -> None:
                 m.pause(now)
             elif enabled and m.frozen_ms >= 0:
                 m.resume(now)
-            return {"ok": True, "result": {"lanes": [{"id": "all", "next_in_ms": m.next_in_ms(now), "interval_s": IV}]}}
+            return {"ok": True, "status": "done",
+                    "result": {"lanes": [{"id": "all", "next_in_ms": m.next_in_ms(now), "interval_s": IV}]}}
         api_client.lanes_set = lanes_set
 
         def settle():

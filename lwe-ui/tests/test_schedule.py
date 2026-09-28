@@ -52,12 +52,20 @@ class ScheduleBridgeTests(unittest.TestCase):
         for slug, name in (("day", "Day"), ("night", "Night"), ("party", "Party")):
             playlists.create(name)
         self.calls: list[tuple] = []
+        from lwe_ui import version
+        self.status = {"version": version.panel_stamp(), "pid": 7, "current": {"id": "", "ui_id": ""},
+                       "schedule": {"enabled": False}}
         self.api.available = lambda: True
+        self.api.status = lambda: dict(self.status)
         self.api.playlist_set = lambda slug, entries, order, interval, **kw: (
-            self.calls.append(("playlist-set", slug, kw.get("part", 1), kw.get("of", 1))) or {"ok": True})
+            self.calls.append(("playlist-set", slug, kw.get("part", 1), kw.get("of", 1))) or {"ok": True, "status": "done"})
         self.api.schedule_set = lambda enabled, entries: (
-            self.calls.append(("schedule-set", bool(enabled), list(entries))) or {"ok": True})
-        self.api.lanes_set = lambda lanes: (self.calls.append(("lanes-set", list(lanes))) or {"ok": True})
+            self.calls.append(("schedule-set", bool(enabled), list(entries))) or {"ok": True, "status": "done"})
+        self.api.lanes_set = lambda lanes: (self.calls.append(("lanes-set", list(lanes))) or {"ok": True, "status": "done"})
+        for verb in ("set_fps", "set_parallax", "set_particles", "set_fullscreen_ignore", "set_app_conditions",
+                     "set_fullscreen", "set_speed", "set_volume", "set_mouse", "set_audio", "set_tuning",
+                     "set_fit", "set_skip"):
+            setattr(self.api, verb, lambda *a, **kw: {"ok": True, "status": "done"})
         self.backend = self.models.Backend()
 
     def tearDown(self) -> None:
@@ -97,12 +105,15 @@ class ScheduleBridgeTests(unittest.TestCase):
     def test_user_switch_is_manual_and_a_missing_playlist_is_dropped(self) -> None:
         day, night, party = self._slug("Day"), self._slug("Night"), self._slug("Party")
         self._set_schedule(True, f"08:00={day};20:00=ghost;21:00={night}")
+        self.status["schedule"] = {"enabled": True}
         self.calls.clear()
         self.backend.setActivePlaylist(party)
         lanes = [c for c in self.calls if c[0] == "lanes-set"]
         self.assertEqual(len(lanes), 1)
         self.assertEqual(lanes[0][1][0].get("manual"), True, "the user's own switch is manual")
         self.assertEqual(lanes[0][1][0]["playlist"], party)
+        self.calls.clear()
+        self.backend._sync_engine()
         sched = [c for c in self.calls if c[0] == "schedule-set"][0]
         self.assertEqual([e["playlist"] for e in sched[2]], [day, night], "an entry naming a missing playlist is dropped")
         self.assertFalse(hasattr(self.paths, "manual_hold_file"), "the dead hold marker is gone")
@@ -131,20 +142,19 @@ class ScheduleBridgeTests(unittest.TestCase):
         self.assertTrue(self.settings.load()["SCHEDULE_ENABLED"])
 
     def test_a_policy_change_made_while_the_engine_was_away_is_delivered_on_its_return(self) -> None:
+        from lwe_ui.engine import marker
         day = self._slug("Day")
         self.playlists.set_active(day)
-        self.api.available = lambda: False
+        self.api.status = lambda: None
         self.backend.setPaused(True)   # the click lands while the engine is restarting
         self.assertEqual([c for c in self.calls if c[0] == "lanes-set"], [], "nothing could be sent")
-        self.assertTrue(self.backend._policy_dirty)
-        self.api.available = lambda: True
+        self.assertEqual(marker.read()["classes"], ["BUNDLE"], "the marker records the change")
         self.backend._engine_pid_seen = 7   # not first sight: a re-arrival
-        self.api.status = lambda: {"pid": 7, "state": "up", "current": {"id": "", "ui_id": ""},
-                                   "lanes": [{"id": "all", "playlist": day, "order": "sequential"}],
-                                   "schedule": {"enabled": False}}
+        self.api.status = lambda: {**self.status, "state": "up",
+                                   "lanes": [{"id": "all", "playlist": day, "order": "sequential"}]}
         self.backend.status()
         lanes = [c for c in self.calls if c[0] == "lanes-set"]
-        self.assertEqual(len(lanes), 1, "the poll delivers the missed change once")
+        self.assertEqual(len(lanes), 1, "the poll's drain delivers the missed change once")
         self.assertFalse(lanes[0][1][0]["enabled"], "the pause reached the engine")
         self.backend.status()
         self.assertEqual(len([c for c in self.calls if c[0] == "lanes-set"]), 1, "and only once")
@@ -159,7 +169,8 @@ class ScheduleBridgeTests(unittest.TestCase):
         self.assertNotIn(night, [p["slug"] for p in self.backend.playlistList()])
         self.assertFalse(self.settings.load()["SCHEDULE_ENABLED"], "a scheduled playlist gone switches the schedule off")
         lanes = [c for c in self.calls if c[0] == "lanes-set"]
-        self.assertTrue(lanes and "manual" not in lanes[-1][1][0], "no manual switch: the active did not change")
+        self.assertFalse(any(c[1][0].get("manual") for c in lanes), "no manual switch: the active did not change")
+        self.assertIn("schedule-set", [c[0] for c in self.calls], "the changed schedule is sent")
         self.backend.deletePlaylist(day)
         self.assertEqual(self.playlists.active_slug(), party, "deleting the active one reassigns")
 
@@ -169,7 +180,7 @@ class ScheduleBridgeTests(unittest.TestCase):
         self.api.schedule_set = lambda enabled, entries: {"ok": False, "error": "unknown command"}
         self.backend._sync_engine()
         self.assertFalse(self.backend.scheduleState()["enabled"], "an old engine took no schedule: the cell stays off")
-        self.api.schedule_set = lambda enabled, entries: {"ok": True}
+        self.api.schedule_set = lambda enabled, entries: {"ok": True, "status": "done"}
         self.backend._sync_engine()
         self.assertTrue(self.backend.scheduleState()["enabled"])
 

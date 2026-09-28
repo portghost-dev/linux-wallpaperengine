@@ -355,9 +355,13 @@ def main(argv: list[str] | None = None) -> int:
 
     from .engine import daemon_unit
     try:
-        if daemon_unit.reconcile_env():
+        env = daemon_unit.write_env()
+        if env == "written":
             QTimer.singleShot(0, lambda: backend.notice.emit(
                 "New engine options will take effect at the next engine restart"))
+        elif env == "no screens":
+            from . import logbook
+            logbook.install("window").warning("engine env file not updated: no screens found")
     except (ValueError, RuntimeError) as exc:
         _msg = f"Engine service config not updated: {exc}"
         QTimer.singleShot(0, lambda: backend.notice.emit(_msg))

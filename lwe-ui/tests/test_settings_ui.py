@@ -297,20 +297,21 @@ def _test_no_raw_enum_reaches_the_user() -> None:
 
 
 def _test_regenerate_is_never_reachable_before_the_dial_generator() -> None:
-    """T26: write_files() is called only from the sec 6.5 path, and that generator already
-    emits the three dial lines (the sec 1.2 sequencing law)."""
+    """T26: write_files() is called only from the sec 6.5 path and the service switch (models.py
+    setMaster and restartMaster), and that generator already emits the three dial lines (the
+    sec 1.2 sequencing law)."""
     callers = []
     for path in (_ROOT / "src").rglob("*.py"):
         if path.name == "daemon_unit.py":
             continue
         if "write_files(" in path.read_text(encoding="utf-8"):
             callers.append(path.relative_to(_ROOT).as_posix())
-    assert callers == ["src/lwe_ui/settings_bridge.py"], \
-        f"write_files() must be called only from the settings bridge, found {callers}"
+    assert sorted(callers) == ["src/lwe_ui/models.py", "src/lwe_ui/settings_bridge.py"], \
+        f"write_files() must be called only from the settings bridge and the service switch, found {callers}"
     gen = (_ROOT / "src/lwe_ui/engine/daemon_unit.py").read_text(encoding="utf-8")
     assert "AUDIO_DIAL_ENV" in gen, \
-        "the only caller exists ONLY because the generator already emits the dial lines"
-    print("OK T26 the single write_files() caller is the sec 6.5 path, generator dial-aware")
+        "the callers exist ONLY because the generator already emits the dial lines"
+    print("OK T26 write_files() is called from the sec 6.5 path and the service switch only, generator dial-aware")
 
 
 def _shape(value) -> int:

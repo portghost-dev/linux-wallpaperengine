@@ -2,9 +2,8 @@
 
 A child process whose PySide6 import raises imports lwe_ui.engine.resolve and
 lwe_ui.engine.push and resolves a store; models re-exports the resolver; the tray's resume
-sends the resolved rate of the wallpaper on screen through resolve.effective_speed; an import
-pass and a preset repair re-push the rotation set. The child's environment is built from
-scratch.
+sends the resolved rate of the wallpaper on screen through resolve.effective_speed. The child's
+environment is built from scratch.
 
 Run: PYTHONPATH=src python3 tests/test_resolver_qt_free.py
 """
@@ -128,23 +127,6 @@ class ResolverQtFreeTest(unittest.TestCase):
             tray.TrayProcess._toggle_pause(frozen_tray)
         self.assertEqual(asked, ["111", "222"], "the tray resolves the wallpaper on screen")
         self.assertEqual(sent, [1.5, 2.0], "its own SPEED, else the stored global")
-
-    def test_an_import_pass_and_a_preset_repair_push_the_rotation_set(self) -> None:
-        settings.save({**settings.load(), "DETECT_MODE": "manual"})
-        backend = models.Backend()
-        slug = playlists.active_slug()
-        playlists.update(slug, {"MEMBERS": "111"})
-        pushes: list[str] = []
-        with mock.patch.object(api_client, "available", lambda *a, **kw: True), \
-                mock.patch.object(api_client, "playlist_set",
-                                  lambda name, *a, **kw: pushes.append(name) or {"ok": True}), \
-                mock.patch.object(api_client, "schedule_set", lambda *a, **kw: {"ok": True}), \
-                mock.patch.object(api_client, "lanes_set", lambda lanes: {"ok": True}):
-            bridge = models.ImportBridge(backend)
-            bridge._finish(1, 1)
-            self.assertEqual(pushes, [slug], "an import pass re-pushes the rotation set")
-            bridge._on_repair_done(1)
-            self.assertEqual(pushes, [slug, slug], "a preset repair re-pushes it too")
 
 
 if __name__ == "__main__":
