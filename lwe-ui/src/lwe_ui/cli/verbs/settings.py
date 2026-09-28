@@ -7,7 +7,9 @@ restart setting saves its line and rebuilds engine-env through daemon_unit.write
 the settings lock; watchdog and color are engine-env lines with no settings key. Apart from the status
 read, none of those sends the engine a request. A live or next-wallpaper setting saves its line through
 engine/push.py::run_change, which sends the key's targeted push; speed 0 and audiosmoothing are sent to
-the engine under sync and never saved.
+the engine under sync and never saved. reload checks every file through cli/validate.py::check_all, prints
+what changed since its last snapshot, and applies the store through sync_all with the re-show before
+rebuilding engine-env.
 """
 from __future__ import annotations
 
@@ -36,6 +38,8 @@ _LOAD_REFUSED = ("layer", "videodecode", "assetsfolder", "watchdog", "color", *_
 RESTART_ONLY = "applies only at a restart (lwe service restart)"
 PANEL_ONLY = "read by the panel, not the engine"
 NEXT_ONLY = "applies to the next wallpaper"
+RELOAD_FIRST = "no earlier reload to compare with; every file was checked"
+RELOAD_SAME = "nothing changed since the last reload"
 RESTART_LINE = "the saved global takes effect at the next service restart (lwe service restart applies it)."
 _LOADS = ("volume", "mute", "audioreactive", "mouse", "parallax", "particles", "fps", "fullscreen", "lightdimming",
           "lightfalloff", "audiogain", "speed", "audiosmoothing")
@@ -542,10 +546,87 @@ def _setting_verb(name: str) -> Callable[[Context, list[str]], int]:
     return lambda ctx, args: _quietly(_set, ctx, name, args)
 
 
+def _reload(ctx: Context, args: list[str]) -> int:
+    if args:
+        return _refuse(ctx, f"reload takes no words; got {' '.join(args)}", USAGE)
+    return _quietly(_reload_run, ctx)
+
+
+def _reload_run(ctx: Context) -> int:
+    """reload: one status read, every file checked, then the cleanup, sync_all with the re-show,
+    engine-env rebuilt and the restart line; the report compares with reload's last snapshot."""
+    from ... import version
+    from ...engine import daemon_unit, marker, push
+    from ...storage import lock
+    from .. import validate
+    from .backup import restart_line
+    from .playlist import apply_cleanups
+    first = push.read_status()
+    status = first[1] if first[0] == "ok" else None
+    if status is not None:
+        refusal = version.running_refusal(status, version.panel_stamp())
+        if refusal is not None:
+            return _refuse(ctx, refusal, REFUSED)
+    errors, warnings, cleanups = validate.check_all(status)
+    if errors:
+        for line in errors:
+            ctx.error(line)
+        return _refuse(ctx, f"reload refused: {len(errors)} {'error' if len(errors) == 1 else 'errors'}; "
+                            "nothing was applied or written", REFUSED)
+    changes = validate.changes()
+    cleaned = ""
+    if cleanups:
+        with lock.held("settings"), marker.writing(("BUNDLE", "CURRENT")):
+            cleaned = apply_cleanups(cleanups)
+    outcome = push.sync_all("command", ("BUNDLE", "CURRENT"))
+    env_state, env_error = None, None
+    try:
+        env_state = daemon_unit.write_env()
+    except (OSError, ValueError) as exc:
+        env_error = str(exc)
+    waiting = restart_line()
+    validate.write_snapshot()
+    stopped = outcome.kind == report.REFUSED or outcome.reason == "version"
+    if ctx.json:
+        _print_json(ctx, {"changes": changes, "warnings": warnings, "cleanups": cleaned.splitlines(),
+                          "outcome": outcome.kind, "reason": outcome.reason or "",
+                          "message": outcome.message or "", "env": env_error or env_state, "restart": waiting})
+        return REFUSED if stopped or env_error else DONE
+    if changes is None:
+        print(RELOAD_FIRST, file=ctx.out)
+    elif not changes:
+        print(RELOAD_SAME, file=ctx.out)
+    for line in changes or []:
+        print(line, file=ctx.out)
+    for line in warnings:
+        print(f"warning: {line}", file=ctx.out)
+    if cleaned:
+        print(cleaned, file=ctx.out)
+    if outcome.kind == report.REFUSED:
+        ctx.error(f"The engine refused it: {outcome.message or 'no reason given'}")
+    elif outcome.reason == "version":
+        ctx.error(outcome.message or "The running engine is from another build; run lwe service restart.")
+    elif outcome.kind == report.APPLIED:
+        print("Applied.", file=ctx.out)
+    elif outcome.kind == report.PENDING:
+        print(f"Not applied yet: the service is not running or is busy. {report.OPPORTUNITIES}", file=ctx.out)
+    else:
+        print(f"The engine did not answer in time, so it may have applied. {report.OPPORTUNITIES}", file=ctx.out)
+    if env_state == "no screens":
+        print(f"{NO_SCREENS_SAVED}.", file=ctx.out)
+    if env_error:
+        ctx.error(f"the engine file could not be written: {env_error}")
+    if waiting:
+        print(waiting, file=ctx.out)
+    return REFUSED if stopped or env_error else DONE
+
+
 VERBS = (
     Verb("get", _get, "Prints bare values, one per line, for scripts and status bars.", "Settings"),
     Verb("config", _config, "Lists every setting with its value and where it came from, or reads or sets one.",
          "Settings"),
     *(Verb(row["name"], _setting_verb(row["name"]), row["what"], "Settings") for row in vocabulary.SETTINGS
       if row["name"] in _PANEL + _RESTART + _LINES + _LIVE + ("audiosmoothing",)),
+    Verb("reload", _reload, next(row["what"] for row in vocabulary.COMMANDS if row["name"] == "reload"),
+         "Settings"),
 )
