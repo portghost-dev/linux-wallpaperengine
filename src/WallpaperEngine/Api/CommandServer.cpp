@@ -67,7 +67,8 @@ CommandServer::~CommandServer () {
 
     struct stat entry {};
 
-    if (this->m_ownsSocketFile && lstat (this->m_socketPath.c_str (), &entry) == 0 && S_ISSOCK (entry.st_mode)) {
+    if (this->m_ownsSocketFile && lstat (this->m_socketPath.c_str (), &entry) == 0 && S_ISSOCK (entry.st_mode)
+	&& entry.st_dev == this->m_socketDevice && entry.st_ino == this->m_socketInode) {
 	std::error_code ignored;
 	std::filesystem::remove (this->m_socketPath, ignored);
     }
@@ -143,6 +144,11 @@ bool CommandServer::listen () {
     }
 
     this->m_ownsSocketFile = true;
+
+    if (lstat (path.c_str (), &entry) == 0) {
+	this->m_socketDevice = entry.st_dev;
+	this->m_socketInode = entry.st_ino;
+    }
 
     if (chmod (path.c_str (), S_IRUSR | S_IWUSR) != 0) {
 	this->m_error = std::string ("chmod 0600 failed: ") + std::strerror (errno);

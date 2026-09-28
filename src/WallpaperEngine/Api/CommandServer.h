@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <map>
 #include <string>
+#include <sys/types.h>
 #include <vector>
 
 namespace WallpaperEngine::Api {
@@ -72,5 +73,7 @@ private:
     std::string m_error;
     /** whether we created the socket file and are therefore responsible for removing it */
     bool m_ownsSocketFile = false;
+    dev_t m_socketDevice = 0;
+    ino_t m_socketInode = 0;
 };
 }

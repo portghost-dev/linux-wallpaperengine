@@ -3,6 +3,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <sys/socket.h>
@@ -195,6 +196,51 @@ template <typename Listener> void checkSavedOverSocketSurvivesExit (const std::s
 	CHECK (entryIntact (Entry::LinkToSocket, folder.path, path));
     }
 }
+
+template <typename Listener> void checkOwnSocketRemovedAtExit (const std::string& name) {
+    const ScratchFolder folder (name);
+    const auto path = folder.path / "s.sock";
+
+    {
+	Listener listener (path);
+	REQUIRE (listener.listen ());
+	REQUIRE (isSocket (path));
+    }
+
+    CHECK_FALSE (std::filesystem::exists (std::filesystem::symlink_status (path)));
+}
+
+template <typename Listener> void checkReboundSocketLeftAtExit (const std::string& name) {
+    const ScratchFolder folder (name);
+    const auto path = folder.path / "s.sock";
+    std::optional<Listener> first;
+    first.emplace (path);
+    REQUIRE (first->listen ());
+    REQUIRE (unlink (path.c_str ()) == 0);
+
+    Listener second (path);
+    REQUIRE (second.listen ());
+    first.reset ();
+
+    CHECK (isSocket (path));
+    CHECK (answers (path));
+}
+
+template <typename Listener> void checkRenamedSocketLeftAtExit (const std::string& name) {
+    const ScratchFolder folder (name);
+    const auto path = folder.path / "s.sock";
+    std::optional<Listener> first;
+    first.emplace (path);
+    REQUIRE (first->listen ());
+
+    Listener second (folder.path / "other.sock");
+    REQUIRE (second.listen ());
+    std::filesystem::rename (folder.path / "other.sock", path);
+    first.reset ();
+
+    CHECK (isSocket (path));
+    CHECK (answers (path));
+}
 } // namespace
 
 TEST_CASE ("CommandServer refuses a path that holds a file that is not a socket", "[socket]") {
@@ -293,4 +339,28 @@ TEST_CASE ("CommandServer leaves a file or a symlink saved over its socket at ex
 
 TEST_CASE ("MessageListener leaves a file or a symlink saved over its socket at exit", "[socket]") {
     checkSavedOverSocketSurvivesExit<MessageListener> ("helper-exit");
+}
+
+TEST_CASE ("CommandServer removes its own socket at exit", "[socket]") {
+    checkOwnSocketRemovedAtExit<CommandServer> ("engine-own");
+}
+
+TEST_CASE ("MessageListener removes its own socket at exit", "[socket]") {
+    checkOwnSocketRemovedAtExit<MessageListener> ("helper-own");
+}
+
+TEST_CASE ("CommandServer leaves another listener's socket bound at its path after an unlink", "[socket]") {
+    checkReboundSocketLeftAtExit<CommandServer> ("engine-rebound");
+}
+
+TEST_CASE ("MessageListener leaves another listener's socket bound at its path after an unlink", "[socket]") {
+    checkReboundSocketLeftAtExit<MessageListener> ("helper-rebound");
+}
+
+TEST_CASE ("CommandServer leaves another listener's socket renamed over its path", "[socket]") {
+    checkRenamedSocketLeftAtExit<CommandServer> ("engine-renamed");
+}
+
+TEST_CASE ("MessageListener leaves another listener's socket renamed over its path", "[socket]") {
+    checkRenamedSocketLeftAtExit<MessageListener> ("helper-renamed");
 }

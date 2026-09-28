@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <sys/types.h>
 #include <vector>
 
 namespace WallpaperEngine::WebHelper {
@@ -72,6 +73,8 @@ private:
     std::filesystem::path m_socketPath;
     int m_listenFd = -1;
     bool m_ownsSocketFile = false;
+    dev_t m_socketDevice = 0;
+    ino_t m_socketInode = 0;
     std::string m_error;
 };
 
