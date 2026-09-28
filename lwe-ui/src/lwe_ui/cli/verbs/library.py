@@ -121,7 +121,8 @@ def _compress(ctx: Context, args: list[str]) -> int:
     if ctx.json:
         print(json.dumps({
             "wallpapers": [{"id": row.id, "title": row.title, "result": r.kind, "bytes_before": r.before,
-                            "bytes_after": r.after, "failed": r.failed, "disk_bytes": r.disk}
+                            "bytes_after": r.after, "failed": r.failed, "disk_bytes": r.disk,
+                            "links_not_read": list(r.links)}
                            for row, r in zip(named, results) if r.kind != "unreadable"],
             "total": {"compressed": sum(1 for r in results if compress.written(r)), "named": len(results),
                       "bytes_before": sum(r.before for r in results),
@@ -186,6 +187,7 @@ def _add_one(row, cfg: dict) -> tuple[str, dict]:
         return "already in the pool", {**facts, "result": "already"}
     before = tags.known_ids()
     title = row.title
+    not_copied: list[str] = []
     if row.state == "download":
         deps, own = _download_deps(row.id)
         folder = catalog.render_dir(deps[0]) if deps and not own else None
@@ -196,6 +198,7 @@ def _add_one(row, cfg: dict) -> tuple[str, dict]:
         if done["action"] not in ("imported-review", "imported-good"):
             return _failed(facts, _REASONS.get(done["action"], done["action"]))
         title = done["title"] or row.title
+        not_copied = done.get("skipped_links", [])
         head, kind = "imported into the pool", "imported"
     else:
         held = _held_bases(row.id)
@@ -211,6 +214,8 @@ def _add_one(row, cfg: dict) -> tuple[str, dict]:
         head, kind = "in the pool", "approved"
     actions.approve(row.id, title, wizard.approved_untested(where="workshop"))
     text = f"{head}; {compress.result_text(row, result)}"
+    if not_copied:
+        text += compress.links_text(not_copied, "copied")
     tagged = {r.get("id"): r for r in tags.load()}
     bases = []
     for d in deps:
@@ -224,8 +229,8 @@ def _add_one(row, cfg: dict) -> tuple[str, dict]:
     return text, {**facts, "result": kind,
                   "compress": {"result": result.kind, "bytes_before": result.before,
                                "bytes_after": result.after, "failed": result.failed,
-                               "disk_bytes": result.disk},
-                  "bases": bases}
+                               "disk_bytes": result.disk, "links_not_read": list(result.links)},
+                  "links_not_copied": list(not_copied), "bases": bases}
 
 
 def _split_playlists(args: list[str]) -> tuple[list[str], list[str]] | None:

@@ -355,6 +355,50 @@ class BridgeSyncTest(unittest.TestCase):
         self.assertEqual(failures, [(["Configuration"], "That backup could not be restored.")])
         self.assertEqual(settings.load()["ENGINE_FPS"], 30, "nothing was restored")
 
+    def test_an_import_whose_restore_lock_is_a_link_or_a_fifo_fails_cleanly(self) -> None:
+        page = settings_bridge.SettingsBridge(self.backend)
+        failures: list = []
+        page.commitFailed.connect(lambda keys, reason: failures.append((list(keys), reason)))
+        settings.update({"ENGINE_FPS": 90})
+        archive = self.home / "fps-90.lwebackup"
+        self.assertEqual(backup.export_to(archive)["errors"], [])
+        settings.update({"ENGINE_FPS": 30})
+        lock = paths.state_dir() / "restore.lock"
+        sentinel = self.home / "sentinel.txt"
+        sentinel.write_text("SENTINEL\n", encoding="utf-8")
+        lock.symlink_to(sentinel)
+        self.assertFalse(page.importBackup(str(archive)))
+        self.assertEqual(sentinel.read_text(encoding="utf-8"), "SENTINEL\n", "the link's target was written")
+        lock.unlink()
+        os.mkfifo(lock)
+        got: list = []
+        thread = threading.Thread(target=lambda: got.append(page.importBackup(str(archive))), daemon=True)
+        thread.start()
+        thread.join(10)
+        self.assertFalse(thread.is_alive(), "the window door blocked on restore.lock")
+        _APP.processEvents()
+        self.assertEqual(got, [False])
+        self.assertEqual(failures, [(["Configuration"], "That backup could not be restored.")] * 2)
+        self.assertEqual(settings.load()["ENGINE_FPS"], 30, "nothing was restored")
+
+    def test_an_import_that_cannot_remove_the_record_says_restored_and_names_the_record(self) -> None:
+        page = settings_bridge.SettingsBridge(self.backend)
+        settings.update({"ENGINE_FPS": 90})
+        archive = self.home / "fps-90.lwebackup"
+        self.assertEqual(backup.export_to(archive)["errors"], [])
+        settings.update({"ENGINE_FPS": 30})
+        backups = paths.state_dir() / "backups"
+        backups.mkdir(parents=True, exist_ok=True)
+        shutil.copy(archive, backups / "pre-restore-20200101-000000.lwebackup")
+        (backups / "recovery.json").write_text(json.dumps({"snapshot": "pre-restore-20200101-000000.lwebackup"}),
+                                               encoding="utf-8")
+        backups.chmod(0o500)
+        self.addCleanup(backups.chmod, 0o700)
+        with self.engine(None, "away"):
+            self.assertTrue(page.importBackup(str(archive)))
+        self.assertEqual((page.receiptLine, settings.load()["ENGINE_FPS"]),
+                         ("Restored · recovery.json could not be removed", 90))
+
     def test_an_engine_file_that_could_not_be_written_says_so(self) -> None:
         page = settings_bridge.SettingsBridge(self.backend)
         failures: list = []

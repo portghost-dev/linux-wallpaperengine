@@ -173,6 +173,12 @@ class HideTest(unittest.TestCase):
         self.assertEqual(_run("unhide", SCENE, "3")[::2], (0, ""))
         self.assertEqual(self.conf.read_bytes(), f'SKIP="{huge} 4"\n'.encode())
 
+    def test_unhide_removes_every_token_naming_the_part(self) -> None:
+        self.conf.write_bytes(b'SKIP="05 7"\n')
+        self.assertEqual(_run("unhide", SCENE, "5"),
+                         (0, f"{LABEL} part 5 shown again\n" + _pending("part 5 of Night Harbor"), ""))
+        self.assertEqual(self.conf.read_bytes(), b"SKIP=7\n")
+
     def test_an_emptied_skip_deletes_the_key(self) -> None:
         self.conf.write_bytes(b"VOLUME=40\nSKIP=3\n")
         self.assertEqual(_run("unhide", SCENE, "3"),

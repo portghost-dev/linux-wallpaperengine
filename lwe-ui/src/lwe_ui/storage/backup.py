@@ -22,12 +22,14 @@ from __future__ import annotations
 
 import contextlib
 import datetime
+import errno
 import fcntl
 import io
 import json
 import os
 import re
 import socket
+import stat
 import sys
 import threading
 import zipfile
@@ -47,6 +49,8 @@ SNAPSHOTS_KEPT = 5
 _SNAPSHOT_NAME = re.compile(r"pre-restore-[0-9]{8}-[0-9]{6}(?:-[1-9][0-9]*)?" + re.escape(EXTENSION))
 #: beside the snapshots: names the snapshot an import that failed left as the way back (settle)
 RECOVERY = "recovery.json"
+#: settle's reason when a successful import cannot remove RECOVERY
+_NOT_REMOVED = "could not be removed"
 
 
 def default_name() -> str:
@@ -213,13 +217,18 @@ def restoring() -> Iterator[bool]:
     """state_dir()/restore.lock for the body of the with statement, taken without waiting: True while
     this thread holds it, False when another restore holds it. A door holds it from apply through its
     later steps and settle, so no other import runs in between; a nested use on the same thread shares
-    the outermost one and takes no second flock."""
+    the outermost one and takes no second flock. The lock opens without following a link or blocking
+    (created 0600) and must be a regular file; anything else raises OSError."""
     outer = getattr(_restore, "held", None)
     if outer is not None:
         yield outer
         return
     paths.ensure_dirs()
-    with open(paths.state_dir() / "restore.lock", "w") as f:
+    path = paths.state_dir() / "restore.lock"
+    with open(path, "rb", buffering=0,
+              opener=lambda name, flags: os.open(name, flags | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)) as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise OSError(errno.EINVAL, "not a regular file", str(path))
         try:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             got = True
@@ -235,7 +244,8 @@ def restoring() -> Iterator[bool]:
 def _recovery() -> tuple[Path, str | None] | None:
     """recovery.json's path and the snapshot file name it keeps, or None when there is no
     recovery.json; the name is None when the file cannot be read or names anything but a file of
-    the backups folder named as snapshot() names its pre-restore snapshots (_SNAPSHOT_NAME)."""
+    the backups folder named as snapshot() names its pre-restore snapshots (_SNAPSHOT_NAME), or when that
+    name is in the folder as anything but a regular file that opens as a backup (_opens_as_backup)."""
     rec = paths.state_dir() / "backups" / RECOVERY
     if not os.path.lexists(rec):
         return None
@@ -245,7 +255,22 @@ def _recovery() -> tuple[Path, str | None] | None:
         return rec, None
     if not isinstance(name, str) or not _SNAPSHOT_NAME.fullmatch(name):
         return rec, None
+    if os.path.lexists(rec.parent / name) and not _opens_as_backup(rec.parent / name):
+        return rec, None
     return rec, name
+
+
+def _opens_as_backup(path: Path) -> bool:
+    """Whether path is a regular file, not a link, that opens as a backup the way preflight opens one."""
+    try:
+        with open(path, "rb", opener=lambda name, flags: os.open(name, flags | os.O_NOFOLLOW | os.O_NONBLOCK)) as f:
+            if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+                return False
+            with zipfile.ZipFile(f) as z:
+                _read_manifest(z)
+    except (OSError, zipfile.BadZipFile, ValueError):
+        return False
+    return True
 
 
 def settle(r: dict[str, Any], failed: bool) -> None:
@@ -259,7 +284,7 @@ def settle(r: dict[str, Any], failed: bool) -> None:
         try:
             rec.unlink(missing_ok=True)
         except OSError as exc:
-            r.setdefault("errors", []).append({"file": RECOVERY, "reason": f"could not be removed: {exc}"})
+            r.setdefault("errors", []).append({"file": RECOVERY, "reason": f"{_NOT_REMOVED}: {exc}"})
         return
     taken = next((n.get("path") for n in r.get("notes") or [] if n.get("kind") == "snapshot"), None)
     if not taken:
@@ -382,6 +407,10 @@ def receipt_line(r: dict[str, Any]) -> str:
     failed the line names the failure and no count, since the counts were the plan."""
     if r.get("refused") or (r.get("errors") and not r.get("counts")):
         return ""
+    errors = r.get("errors") or []
+    if (len(errors) == 1 and errors[0].get("file") == RECOVERY
+            and str(errors[0].get("reason", "")).startswith(_NOT_REMOVED + ":")):
+        return f"Restored · {RECOVERY} could not be removed"
     if r.get("errors"):
         first = r["errors"][0].get("file", "")
         return f"Restore incomplete · {len(r['errors'])} failed" + (f" ({first})" if first else "")
@@ -417,11 +446,12 @@ _RECEIPT_LISTS = ("reresolved", "held", "dropped", "adjusted", "preserved", "not
                   "followups", "errors")
 
 
-def _print_receipt(r: dict[str, Any]) -> int:
-    """Print a receipt as plain lines; returns the exit code (1 when anything failed)."""
+def _print_receipt(r: dict[str, Any], dry_run: bool = False) -> int:
+    """Print a receipt as plain lines, a dry run's as what a restore would do; returns the exit code (1
+    when anything failed)."""
     if r.get("kind") == "export":
         print(f"Exported {r['path']}")
-    elif "notes" in r and not any(n.get("kind") == "snapshot" for n in r["notes"]) and not r.get("refused"):
+    elif dry_run and not r.get("refused"):
         print("Would restore: " + (receipt_line(r) or "nothing"))
     else:
         print(receipt_line(r) or f"Refused {r['path']}")
@@ -454,7 +484,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "preview":
         r = preflight(args.file)
         r.pop("plan", None)
-        return _print_receipt(r)
+        return _print_receipt(r, dry_run=True)
     with contextlib.ExitStack() as held:
         try:
             held.enter_context(restoring())

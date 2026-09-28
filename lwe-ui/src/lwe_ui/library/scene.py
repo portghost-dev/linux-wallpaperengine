@@ -13,6 +13,7 @@ import re
 from collections.abc import Iterable
 
 from ..discovery import objects, project, properties
+from ..engine import daemon_unit
 from ..storage import wp
 from . import catalog
 
@@ -105,15 +106,24 @@ def part(render_dir: str, objid: int) -> dict | None:
     return next((p for p in objects.extract(render_dir) if p["objid"] == str(objid)), None)
 
 
-def _typed(kind: str, value: object, authored: object) -> object:
+def _typed(kind: str, value: object, authored: object, override: bool = False) -> object:
     """A knob's value with one type per kind: a slider a number (an int when the author's value is an int
     and the text a whole number, else a float), a bool true or false, anything else a string; a slider text
-    that does not read as a number stays a string. A bool text is true only when it is exactly "true" or
-    "1", as the engine reads it (Property.h, PropertyBoolean::update)."""
-    if value is None or kind not in ("slider", "bool"):
-        return value if value is None or isinstance(value, str) else json.dumps(value)
+    that does not read as a number stays a string. A bool reads as the engine reads it: an override text is
+    true only when it is exactly "true" or "1" (Property.h, PropertyBoolean::update); the author's value is
+    true when it is JSON true, the text "true", or a text whose C strtod prefix is a finite number other than
+    0, and false otherwise, a JSON number or null included (PropertyParser.cpp::parseBoolean, JSON.h)."""
     if kind == "bool":
-        return value if isinstance(value, bool) else str(value) in ("true", "1")
+        if isinstance(value, bool):
+            return value
+        if override:
+            return str(value) in ("true", "1")
+        if not isinstance(value, str):
+            return False
+        number = daemon_unit.strtod(value)
+        return value == "true" or (number is not None and math.isfinite(number) and number != 0)
+    if value is None or kind != "slider":
+        return value if value is None or isinstance(value, str) else json.dumps(value)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return value
     text = str(value).strip()
@@ -142,7 +152,7 @@ def knobs(wid: str, typed: bool = True) -> list[dict]:
             "name": name,
             "label": entry["label"],
             "kind": entry["kind"],
-            "value": _typed(entry["kind"], value, entry["value"]) if typed else value,
+            "value": _typed(entry["kind"], value, entry["value"], override=yours) if typed else value,
             "yours": yours,
             "options": entry.get("options"),
             "min": entry.get("min"),

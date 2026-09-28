@@ -635,6 +635,8 @@ Window { width: 1400; height: 620; visible: true
         def shown() -> list:
             entries = le.property("entries")
             return list(entries.toVariant() if hasattr(entries, "toVariant") else entries)
+        QMetaObject.invokeMethod(le, "tryAdd", Qt.ConnectionType.DirectConnection, Q_ARG("QVariant", "xterm"))
+        assert "xterm" in shown(), "an add saved while the engine is away shows in the popup"
         with mock.patch.object(push, "run_change", refused):
             QMetaObject.invokeMethod(le, "tryAdd", Qt.ConnectionType.DirectConnection, Q_ARG("QVariant", "xclock"))
             assert "xclock" in shown(), "a refused add is saved, and the popup shows it"

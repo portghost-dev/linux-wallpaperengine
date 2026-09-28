@@ -12,7 +12,7 @@ What is proven:
   * a level-0-only color texture grows the sRGB mip chain (8 levels for 128px);
   * re-scan sees the cache (todo drops to 0) and a second encode is a no-op;
   * cancellation between textures stops the run;
-  * a package or exempt.txt that is a link is not read, and the log names it.
+  * a package or exempt.txt that is a link is not read, and the log names it on one line.
 """
 from __future__ import annotations
 
@@ -139,13 +139,24 @@ def main() -> None:
     exempt_linked.mkdir(parents=True)
     (exempt_linked / "scene.pkg").write_bytes(_pkg({"materials/keep.tex": _tex(0, 128, 128, foreign[::-1])}))
     (exempt_linked / "exempt.txt").symlink_to(outside / "exempt.txt")
+    other_name = Path(_TMP) / "wp" / "500"
+    other_name.mkdir(parents=True)
+    (other_name / "a.pkg").symlink_to(outside / "foreign.pkg")
+    newline = Path(_TMP) / "wp" / "600"
+    newline.mkdir(parents=True)
+    (newline / "b\nc.pkg").symlink_to(outside / "foreign.pkg")
     with unittest.TestCase().assertLogs("lwe_ui.texcomp", "INFO") as logs:
         s3 = texcomp.scan(str(linked))
         s4 = texcomp.scan(str(exempt_linked))
+        s5 = texcomp.scan(str(other_name))
+        texcomp.scan(str(newline))
     assert (texcomp.links(str(linked)), s3["total"]) == (["scene.pkg"], 0), s3
     assert (texcomp.links(str(exempt_linked)), s4["eligible"]) == (["exempt.txt"], 1), s4
+    assert (texcomp.links(str(other_name)), s5["total"]) == (["a.pkg"], 0), s5
     assert logs.output == [f"INFO:lwe_ui.texcomp:compress {linked}: link not read: scene.pkg",
-                           f"INFO:lwe_ui.texcomp:compress {exempt_linked}: link not read: exempt.txt"], logs.output
+                           f"INFO:lwe_ui.texcomp:compress {exempt_linked}: link not read: exempt.txt",
+                           f"INFO:lwe_ui.texcomp:compress {other_name}: link not read: a.pkg",
+                           f"INFO:lwe_ui.texcomp:compress {newline}: link not read: b?c.pkg"], logs.output
     assert texcomp.encode_scene(str(linked), "300")["total"] == 0
     assert not (Path(texcomp.CACHE) / (hashlib.sha256(foreign).hexdigest() + ".bc")).exists(), \
         "a texture from the link's target reached the cache"

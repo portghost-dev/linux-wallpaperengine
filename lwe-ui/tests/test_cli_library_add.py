@@ -165,6 +165,13 @@ def _stores() -> None:
     (_ROOT / "outside" / "loose.tex").write_bytes(_tex(0, 128, 128, pixels))
     (WORKSHOP / "1400000037" / "scene.pkg").symlink_to(_ROOT / "outside" / "foreign.pkg")
     (WORKSHOP / "1400000037" / "extra.tex").symlink_to(_ROOT / "outside" / "loose.tex")
+    _scene(LIB / "1400000038", "Linked Pool", None)
+    tags.set_state("1400000038", "Linked Pool", "good")
+    _scene(WORKSHOP / "1400000039", "Linked Json", None)
+    _scene(WORKSHOP / "1400000040", "Linked Newline", None)
+    for folder in (LIB / "1400000038", WORKSHOP / "1400000039", WORKSHOP / "1400000040"):
+        (folder / "scene.pkg").symlink_to(_ROOT / "outside" / "foreign.pkg")
+    (WORKSHOP / "1400000040" / "a\nnot added: SPOOF.pkg").symlink_to(_ROOT / "outside" / "foreign.pkg")
 
 
 def setUpModule() -> None:
@@ -220,6 +227,11 @@ def _commands() -> None:
     _run("linked", ["add", "1400000037"])
     _FACTS["linked"] = {"tag": _tag("1400000037"), "copied": sorted(p.name for p in (LIB / "1400000037").iterdir()),
                         "owners": _owners()}
+    _run("linked-compress", ["compress", "1400000038"])
+    _run("linked-compress-json", ["-j", "compress", "1400000038"])
+    _run("linked-json", ["-j", "add", "1400000039"])
+    _run("linked-newline", ["add", "1400000040"])
+    _FACTS["linked-newline"] = {"owners": _owners()}
     _run("clean-title", ["add", "1400000023"])
     _FACTS["clean-title"] = {(r["state"], r["title"]) for r in tags.load() if r["id"] == "1400000023"}
     _run("waiting", ["add", "1400000003"])
@@ -320,8 +332,9 @@ class AddTest(unittest.TestCase):
         self.assertGreater(disk, ARGB_AFTER)
         self.assertEqual(result, {"results": [{
             "id": "1400000002", "title": "Bravo", "result": "imported",
-            "compress": {"result": "compressed", "bytes_before": 65536, "bytes_after": ARGB_AFTER, "failed": 0},
-            "bases": []}], "receipt": None})
+            "compress": {"result": "compressed", "bytes_before": 65536, "bytes_after": ARGB_AFTER, "failed": 0,
+                         "links_not_read": []},
+            "links_not_copied": [], "bases": []}], "receipt": None})
         facts = _FACTS["download"]
         self.assertEqual(facts["tag"], "good")
         self.assertEqual(facts["events"], [("approved", "workshop", "human")])
@@ -331,11 +344,36 @@ class AddTest(unittest.TestCase):
     def test_a_download_whose_package_is_a_link_compresses_nothing_from_the_link(self) -> None:
         r = _RUNS["linked"]
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, _line(
-            "Linked (1400000037)", "imported into the pool; scene, nothing to compress; link not read: scene.pkg")
-            + "\n", ""))
+            "Linked (1400000037)", "imported into the pool; scene, nothing to compress; link not read: scene.pkg; "
+            "links not copied: extra.tex, scene.pkg") + "\n", ""))
         facts = _FACTS["linked"]
         self.assertEqual((facts["tag"], facts["copied"]), ("good", ["project.json"]))
         self.assertNotIn("1400000037", facts["owners"], "a texture from the link's target reached the cache")
+
+    def test_json_names_the_links_the_text_names_for_compress_and_add(self) -> None:
+        r = _RUNS["linked-compress"]
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, _line(
+            "Linked Pool (1400000038)", "scene, nothing to compress; link not read: scene.pkg") + "\n", ""))
+        r = _RUNS["linked-compress-json"]
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        self.assertEqual(json.loads(r.stdout)["wallpapers"], [{
+            "id": "1400000038", "title": "Linked Pool", "result": "nothing", "bytes_before": 0, "bytes_after": 0,
+            "failed": 0, "disk_bytes": 0, "links_not_read": ["scene.pkg"]}])
+        r = _RUNS["linked-json"]
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        self.assertEqual(json.loads(r.stdout), {"results": [{
+            "id": "1400000039", "title": "Linked Json", "result": "imported",
+            "compress": {"result": "nothing", "bytes_before": 0, "bytes_after": 0, "failed": 0, "disk_bytes": 0,
+                         "links_not_read": ["scene.pkg"]},
+            "links_not_copied": ["scene.pkg"], "bases": []}], "receipt": None})
+
+    def test_a_link_name_with_a_newline_stays_on_its_wallpapers_one_line(self) -> None:
+        r = _RUNS["linked-newline"]
+        names = "a?not added: SPOOF.pkg, scene.pkg"
+        self.assertEqual((r.returncode, r.stdout.splitlines(), r.stderr), (0, [_line(
+            "Linked Newline (1400000040)", f"imported into the pool; scene, nothing to compress; links not read: "
+            f"{names}; links not copied: {names}")], ""))
+        self.assertNotIn("1400000040", _FACTS["linked-newline"]["owners"])
 
     def test_approve_writes_the_title_the_importer_cleaned(self) -> None:
         self.assertEqual(_RUNS["clean-title"].returncode, 0, _RUNS["clean-title"].stderr)
@@ -428,8 +466,9 @@ class AddTest(unittest.TestCase):
         self.assertGreater(result["results"][0]["compress"].pop("disk_bytes"), ARGB_AFTER)
         self.assertEqual(result, {"results": [
             {"id": "1400000035", "title": "Oscar", "result": "imported",
-             "compress": {"result": "compressed", "bytes_before": 65536, "bytes_after": ARGB_AFTER, "failed": 0},
-             "bases": []},
+             "compress": {"result": "compressed", "bytes_before": 65536, "bytes_after": ARGB_AFTER, "failed": 0,
+                          "links_not_read": []},
+             "links_not_copied": [], "bases": []},
             {"id": "1400000036", "title": "Nine Bytes", "result": "failed",
              "reason": "its package could not be read"}], "receipt": None})
         self.assertEqual(_FACTS["unreadable-json"], {"tags": ["good", None], "copied": False})

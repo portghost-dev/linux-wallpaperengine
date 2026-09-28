@@ -38,6 +38,7 @@ import os
 import re
 import struct
 import subprocess
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from typing import Any, Callable
@@ -325,6 +326,11 @@ def scan(d: str) -> dict[str, Any]:
             "shim": shim_available()}
 
 
+def printable(name: str) -> str:
+    """name for one line of text: every control character (Unicode category Cc) as "?"."""
+    return "".join("?" if unicodedata.category(ch) == "Cc" else ch for ch in name)
+
+
 def links(d: str) -> list[str]:
     """The names of d's packages and exempt.txt that are symbolic links (lstat), sorted: the scan
     and the encoder read none of them."""
@@ -337,7 +343,7 @@ def _iter_scene_all(d: str):
     can report an honest total for the card. A package or exempt.txt that is a link is not read."""
     skipped = links(d)
     for name in skipped:
-        logging.getLogger(__name__).info("compress %s: link not read: %s", d, name)
+        logging.getLogger(__name__).info("compress %s: link not read: %s", d, printable(name))
     pk = [p for p in glob.glob(os.path.join(d, "*.pkg")) if os.path.basename(p) not in skipped]
     if not pk:
         return

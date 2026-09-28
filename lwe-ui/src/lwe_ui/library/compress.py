@@ -74,8 +74,14 @@ def result_text(row: catalog.Row, result: Result) -> str:
     else:
         text = "files missing, nothing to compress"
     if result.links:
-        text += f"; {'link' if len(result.links) == 1 else 'links'} not read: {', '.join(result.links)}"
+        text += links_text(result.links, "read")
     return text
+
+
+def links_text(names: list[str] | tuple[str, ...], verb: str) -> str:
+    """"; link not <verb>: <name>", or "links" before several names, each name shown on one line
+    (texcomp.printable)."""
+    return f"; {'link' if len(names) == 1 else 'links'} not {verb}: {', '.join(map(texcomp.printable, names))}"
 
 
 def result_line(row: catalog.Row, result: Result) -> str:

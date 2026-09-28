@@ -315,8 +315,10 @@ class BackupHandoffTest(unittest.TestCase):
         self.settings("ENGINE_FPS=30\n")
         (self.backups() / "sub").mkdir(parents=True)
         shutil.copy(archive, self.backups() / "sub" / "pre-restore-20200101-000000.lwebackup")
+        shutil.copy(archive, self.backups() / "pre-restore-20200101-000000.lwebackup.old")
         rec = self.backups() / "recovery.json"
-        for name in ("recovery.json", "sub/pre-restore-20200101-000000.lwebackup"):
+        for name in ("recovery.json", "sub/pre-restore-20200101-000000.lwebackup",
+                     "pre-restore-20200101-000000.lwebackup.old"):
             with self.subTest(name=name):
                 rec.write_text(json.dumps({"snapshot": name, "since": "2020-01-01T00:00:00"}), encoding="utf-8")
                 before = self.written()
@@ -331,6 +333,38 @@ class BackupHandoffTest(unittest.TestCase):
         rec.write_text(json.dumps({"snapshot": second.name, "since": "2020-01-01T00:00:00"}), encoding="utf-8")
         self.assertEqual(self.lwe("backup", "import", str(archive))[0], 0, "a snapshot's counter name is accepted")
         self.assertIsNone(self.recovery())
+
+    def test_a_record_whose_snapshot_is_no_real_backup_refuses_the_import_as_unreadable(self) -> None:
+        self.settings("ENGINE_FPS=45\n")
+        archive = self.root / "a.lwebackup"
+        self.assertEqual(self.lwe("backup", "export", str(archive))[0], 0)
+        self.settings("ENGINE_FPS=30\n")
+        (self.root / "notes.txt").write_text("not a backup\n", encoding="utf-8")
+        (self.root / "adir").mkdir()
+        self.backups().mkdir(parents=True)
+        snapshot = self.backups() / "pre-restore-20200101-000000.lwebackup"
+        rec = self.backups() / "recovery.json"
+        for label in ("link to a text file", "link to a folder", "dangling link", "file of other content",
+                      "link to a real backup"):
+            with self.subTest(label=label):
+                if os.path.lexists(snapshot):
+                    snapshot.unlink()
+                if label == "file of other content":
+                    snapshot.write_text("not a backup either\n", encoding="utf-8")
+                else:
+                    snapshot.symlink_to({"link to a text file": self.root / "notes.txt",
+                                         "link to a folder": self.root / "adir",
+                                         "dangling link": self.root / "gone",
+                                         "link to a real backup": archive}[label])
+                rec.write_text(json.dumps({"snapshot": snapshot.name, "since": "2020-01-01T00:00:00"}),
+                               encoding="utf-8")
+                before = self.written()
+                code, out, err = self.lwe("backup", "import", str(archive))
+                unreadable = (f"Refused {archive}\nerrors: file=recovery.json, reason=Nothing was imported: {rec} "
+                              f"cannot be read, so the snapshot it keeps from before an earlier failed import cannot "
+                              f"be found. Deleting {rec} clears this block.\n")
+                self.assertEqual((code, out, err), (1, unreadable, ""))
+                self.assertEqual(self.written(), before)
 
     def test_refusals(self) -> None:
         not_a_backup = self.root / "notes.txt"
@@ -512,6 +546,46 @@ class RestoreLockTest(unittest.TestCase):
         self.assertEqual((self.paths.config_dir() / "settings.conf").read_text(encoding="utf-8"),
                          "ASSETS_DIR=\nENGINE_FPS=30\n", "nothing was restored")
 
+    def test_a_restore_lock_that_is_a_link_or_a_fifo_fails_cleanly_at_the_command_and_headless_doors(self) -> None:
+        clean, _failing = self.archives()
+        lock = self.paths.state_dir() / "restore.lock"
+        sentinel = self.root / "sentinel.txt"
+        sentinel.write_text("SENTINEL\n", encoding="utf-8")
+
+        def headless() -> tuple[int, str, str]:
+            with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+                code = self.backup.main(["restore", str(clean)])
+            return code, out.getvalue(), err.getvalue()
+        for kind, refusal in (("link", f"[Errno 40] Too many levels of symbolic links: '{lock}'"),
+                              ("fifo", f"[Errno 22] not a regular file: '{lock}'")):
+            with self.subTest(kind=kind):
+                lock.unlink(missing_ok=True)
+                if kind == "link":
+                    lock.symlink_to(sentinel)
+                else:
+                    os.mkfifo(lock)
+                runs: dict = {}
+                thread = threading.Thread(target=lambda: runs.update(command=self.door(clean), headless=headless()),
+                                          daemon=True)
+                thread.start()
+                thread.join(10)
+                self.assertFalse(thread.is_alive(), "a door blocked on restore.lock")
+                line = f"That backup could not be restored: {refusal}\n"
+                self.assertEqual((runs["command"], runs["headless"]), ((1, line), (1, "", line)))
+                self.assertEqual(sentinel.read_text(encoding="utf-8"), "SENTINEL\n", "the link's target was written")
+                self.assertEqual((self.paths.config_dir() / "settings.conf").read_text(encoding="utf-8"),
+                                 "ASSETS_DIR=\nENGINE_FPS=30\n", "nothing was restored")
+
+    def test_the_headless_restore_prints_what_it_restored_while_a_record_exists(self) -> None:
+        clean, _failing = self.archives()
+        self.rec.parent.mkdir(parents=True, exist_ok=True)
+        named = self.rec.parent / "pre-restore-20200101-000000.lwebackup"
+        shutil.copy(clean, named)
+        self.rec.write_text(json.dumps({"snapshot": named.name, "since": "2020-01-01T00:00:00"}), encoding="utf-8")
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = self.backup.main(["restore", str(clean)])
+        self.assertEqual((code, out.getvalue().splitlines()[0], self.rec.exists()), (0, "Restored settings", False))
+
     def test_a_record_that_cannot_be_removed_after_a_successful_import_is_a_receipt_error(self) -> None:
         clean, _failing = self.archives()
         backups = self.rec.parent
@@ -522,12 +596,13 @@ class RestoreLockTest(unittest.TestCase):
         backups.chmod(0o500)
         self.addCleanup(backups.chmod, 0o700)
         error = f"errors: file=recovery.json, reason=could not be removed: [Errno 13] Permission denied: '{self.rec}'"
+        headline = "Restored · recovery.json could not be removed"
         code, printed = self.door(clean)
-        self.assertEqual(code, 1, printed)
+        self.assertEqual((code, printed.splitlines()[0]), (1, headline), printed)
         self.assertIn(error, printed.splitlines())
         with contextlib.redirect_stdout(io.StringIO()) as out:
             code = self.backup.main(["restore", str(clean)])
-        self.assertEqual(code, 1, out.getvalue())
+        self.assertEqual((code, out.getvalue().splitlines()[0]), (1, headline), out.getvalue())
         self.assertIn(error, out.getvalue().splitlines())
         self.assertTrue(self.rec.exists())
 

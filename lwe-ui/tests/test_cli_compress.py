@@ -266,11 +266,11 @@ class CompressTest(unittest.TestCase):
         self.assertEqual(json.loads(r.stdout), {
             "wallpapers": [
                 {"id": "1100000001", "title": "Alpha", "result": "compressed", "bytes_before": 128 * 128 * 5,
-                 "bytes_after": ARGB_AFTER + 16384, "failed": 0, "disk_bytes": disk_a},
+                 "bytes_after": ARGB_AFTER + 16384, "failed": 0, "disk_bytes": disk_a, "links_not_read": []},
                 {"id": "1100000002", "title": "Bravo", "result": "compressed", "bytes_before": 128 * 128 * 4,
-                 "bytes_after": ARGB_AFTER, "failed": 1, "disk_bytes": disk_b},
+                 "bytes_after": ARGB_AFTER, "failed": 1, "disk_bytes": disk_b, "links_not_read": []},
                 {"id": "1100000003", "title": "Charlie", "result": "nothing", "bytes_before": 0,
-                 "bytes_after": 0, "failed": 0, "disk_bytes": 0}],
+                 "bytes_after": 0, "failed": 0, "disk_bytes": 0, "links_not_read": []}],
             "total": {"compressed": 2, "named": 3, "bytes_before": 128 * 128 * 9,
                       "bytes_after": 2 * ARGB_AFTER + 16384, "disk_bytes": disk_a + disk_b}})
 
@@ -317,7 +317,7 @@ class CompressTest(unittest.TestCase):
                       text.stdout.splitlines())
         bravo = next(w for w in json.loads(as_json.stdout)["wallpapers"] if w["id"] == "1100000002")
         self.assertEqual(bravo, {"id": "1100000002", "title": "Bravo", "result": "failed", "bytes_before": 0,
-                                 "bytes_after": 0, "failed": 1, "disk_bytes": 0})
+                                 "bytes_after": 0, "failed": 1, "disk_bytes": 0, "links_not_read": []})
 
     def test_an_unreadable_package_is_named_and_skipped_and_the_rest_go_on(self) -> None:
         r = _RUNS["unreadable"]
@@ -342,7 +342,7 @@ class CompressTest(unittest.TestCase):
         self.assertEqual(r.stderr.splitlines(), ['{"error":"Bad Package: not compressed: its package could not be read"}'])
         self.assertEqual(json.loads(r.stdout), {
             "wallpapers": [{"id": "1100000001", "title": "Alpha", "result": "already", "bytes_before": 0,
-                            "bytes_after": 0, "failed": 0, "disk_bytes": 0}],
+                            "bytes_after": 0, "failed": 0, "disk_bytes": 0, "links_not_read": []}],
             "total": {"compressed": 0, "named": 2, "bytes_before": 0, "bytes_after": 0, "disk_bytes": 0}})
 
     def test_refusals(self) -> None:

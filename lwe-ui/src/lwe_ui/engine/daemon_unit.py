@@ -553,27 +553,33 @@ _LEADING_NUMBER_RE = re.compile(
     r"|((?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:e[+-]?[0-9]+)?))", re.ASCII | re.IGNORECASE)
 
 
+def strtod(text: str) -> float | None:
+    """C strtod in the C locale: the value of text's longest numeric prefix, or None when no number starts it."""
+    match = _LEADING_NUMBER_RE.match(text)
+    if match is None:
+        return None
+    sign, infinite, nan, hexa, decimal = match.groups()
+    if infinite:
+        value = math.inf
+    elif nan:
+        value = math.nan
+    elif hexa is not None:
+        try:
+            value = float.fromhex("0x" + hexa)
+        except OverflowError:
+            value = math.inf
+    else:
+        value = float(decimal)
+    return -value if sign == "-" else value
+
+
 def _engine_factor(text: str | None) -> float:
     """A clamp factor line as the engine reads it: absent or empty 1.0, else C atof, NaN 1.0, 0 to 4, float32."""
     if not text:
         return 1.0
-    match = _LEADING_NUMBER_RE.match(text)
-    value = 0.0
-    if match is not None:
-        sign, infinite, nan, hexa, decimal = match.groups()
-        if infinite:
-            value = math.inf
-        elif nan:
-            value = math.nan
-        elif hexa is not None:
-            try:
-                value = float.fromhex("0x" + hexa)
-            except OverflowError:
-                value = math.inf
-        else:
-            value = float(decimal)
-        if sign == "-":
-            value = -value
+    value = strtod(text)
+    if value is None:
+        return 0.0
     if math.isnan(value):
         return 1.0
     return _f32(4.0 if value > 4.0 else 0.0 if value <= 0.0 else value)

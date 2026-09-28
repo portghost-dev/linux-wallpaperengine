@@ -40,6 +40,16 @@ LIB = _ROOT / "lib"
 SCENE, PRESET, VIDEO, MISSING, LOOP = "1100000001", "1100000002", "1100000003", "1100000004", "1100000005"
 KNOBS, KNOBS_PRESET, KNOBS_ODD, SKIPS = "1100000006", "1100000007", "1100000008", "1100000009"
 KNOBS_TEXT, KNOBS_EXP = "1100000010", "1100000011"
+KNOBS_ONE, KNOBS_SPACE, AUTHORED, AUTHORED_OWN = "1100000012", "1100000013", "1100000014", "1100000015"
+#: an author's bool "value" as JSON gives it, and the value the engine reads from it
+#: (PropertyParser.cpp::parseBoolean through JSON.h optional<bool> and coerceNumericString<bool>)
+AUTHORED_BOOLS = [
+    (True, True), (False, False), (None, False), (1, False), (0, False), (1.0, False), (-1, False), (2, False),
+    ("true", True), ("false", False), ("1", True), ("0", False), ("1.0", True), ("0.0", False), ("2", True),
+    ("-1", True), ("True", False), ("TRUE", False), ("", False), (" 1", True), ("1abc", True), ("abc", False),
+    ("nan", False), ("inf", False), ("-inf", False), ("0x10", True), ("0x0", False), ("1e2", True),
+    ("1e-400", False), ("+1", True), (".5", True), ("yes", False), ("on", False), ([1], False), ({"a": 1}, False),
+]
 
 TREE = [
     "1  image  Harbor",
@@ -96,6 +106,17 @@ def setUpModule() -> None:
     tags.set_state(KNOBS_TEXT, "Knobs Text", "good")
     paths.wp_file(KNOBS_EXP).write_text(f"BG={KNOBS}\nPROP_speedx=1e2\n", encoding="utf-8")
     tags.set_state(KNOBS_EXP, "Knobs Exp", "good")
+    paths.wp_file(KNOBS_ONE).write_text(f"BG={KNOBS}\nPROP_flag=1\n", encoding="utf-8")
+    tags.set_state(KNOBS_ONE, "Knobs One", "good")
+    paths.wp_file(KNOBS_SPACE).write_text(f'BG={KNOBS}\nPROP_flag=" true"\n', encoding="utf-8")
+    tags.set_state(KNOBS_SPACE, "Knobs Space", "good")
+    _json_file(LIB / AUTHORED / "project.json", {"title": "Authored", "type": "scene", "file": "scene.json",
+                                                 "general": {"properties": {
+                                                     "flag": {"type": "bool", "text": "Flag", "value": "2"}}}})
+    _json_file(LIB / AUTHORED / "scene.json", {"objects": []})
+    tags.set_state(AUTHORED, "Authored", "good")
+    paths.wp_file(AUTHORED_OWN).write_text(f"BG={AUTHORED}\nPROP_flag=2\n", encoding="utf-8")
+    tags.set_state(AUTHORED_OWN, "Authored Own", "good")
 
 
 def _run(word: str, wid: str, *args: str, as_json: bool = False) -> tuple[int, str, str]:
@@ -217,6 +238,20 @@ class PropertiesTest(unittest.TestCase):
         code, out, err = _run("properties", KNOBS_TEXT, as_json=True)
         self.assertEqual((code, err, json.loads(out)[1]["value"]), (0, "", False))
         self.assertEqual(_run("properties", KNOBS_TEXT)[1].splitlines()[1], "flag  Flag: True (yours)")
+
+    def test_an_override_bool_is_on_only_for_exactly_true_or_1(self) -> None:
+        for wid, on in ((KNOBS_ONE, True), (KNOBS_SPACE, False)):
+            with self.subTest(wid=wid):
+                code, out, err = _run("properties", wid, as_json=True)
+                self.assertEqual((code, err, json.loads(out)[1]["value"]), (0, "", on))
+
+    def test_an_authored_bool_reads_as_the_engine_reads_it(self) -> None:
+        for value, engine in AUTHORED_BOOLS:
+            with self.subTest(value=value):
+                self.assertIs(scene._typed("bool", value, value), engine)
+        self.assertEqual([json.loads(_run("properties", wid, as_json=True)[1])[0]["value"]
+                          for wid in (AUTHORED, AUTHORED_OWN)], [True, False],
+                         "the author's 2 reads on, an override text 2 off")
 
     def test_the_text_line_shows_the_value_as_written_and_json_the_typed_value(self) -> None:
         for wid, text, typed in ((KNOBS_TEXT, "+5", 5), (KNOBS_EXP, "1e2", 100.0)):
