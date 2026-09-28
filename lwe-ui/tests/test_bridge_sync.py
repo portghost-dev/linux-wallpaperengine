@@ -31,15 +31,18 @@ import contextlib
 import copy
 import functools
 import dataclasses
+import io
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -130,6 +133,23 @@ def status(current: str = "111", speed=1.0, pid: int = 4242, **extra) -> dict:
     return {"api": 1, "version": version.panel_stamp(), "pid": pid, "speed": speed, "uptime_s": 100,
             "current": {"id": current, "ui_id": current, "title": ""}, "schedule": {"enabled": False},
             "lanes": [{"id": "all", "playlist": "main"}], **extra}
+
+
+def _zip_with_manifest(kind: str) -> bytes:
+    """A zip holding one stored manifest.json with an LWE manifest's text: kind "method" gives it an unknown
+    compression method (99), "encrypted" sets its encrypted flag."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(zipfile.ZipInfo("manifest.json"), json.dumps({"app": "lwe-ui", "format": 1}))
+    data = bytearray(buf.getvalue())
+    central = data.rfind(b"PK\x01\x02")
+    if kind == "method":
+        struct.pack_into("<H", data, 8, 99)
+        struct.pack_into("<H", data, central + 10, 99)
+    else:
+        struct.pack_into("<H", data, 6, 1)
+        struct.pack_into("<H", data, central + 8, 1)
+    return bytes(data)
 
 
 class BridgeSyncTest(unittest.TestCase):
@@ -754,6 +774,29 @@ class BridgeSyncTest(unittest.TestCase):
         self.assertEqual(failed, ["could not be written: full",
                                   f"Nothing was imported: {gone}, the snapshot kept from before an earlier failed "
                                   f"import, is missing. Deleting {rec} clears this block."])
+        self.assertEqual((settings.load()["ENGINE_FPS"], rec.exists()), (30, True))
+
+    def test_the_panel_refuses_a_backup_or_a_record_whose_manifest_cannot_be_decompressed(self) -> None:
+        archive = self._archive()
+        backups = paths.state_dir() / "backups"
+        backups.mkdir(parents=True, exist_ok=True)
+        rec = backups / "recovery.json"
+        named = backups / "pre-restore-20200101-000000.lwebackup"
+        page = settings_bridge.SettingsBridge(self.backend)
+        failed: list = []
+        page.commitFailed.connect(lambda keys, reason: failed.append(reason))
+        with self.engine(status()):
+            for kind in ("method", "encrypted"):
+                bad = self.home / f"{kind}.lwebackup"
+                bad.write_bytes(_zip_with_manifest(kind))
+                self.assertFalse(page.importBackup(str(bad)))
+                named.write_bytes(_zip_with_manifest(kind))
+                rec.write_text(json.dumps({"snapshot": named.name, "since": "2020-01-01T00:00:00"}),
+                               encoding="utf-8")
+                self.assertFalse(page.importBackup(str(archive)))
+        unreadable = (f"Nothing was imported: {rec} cannot be read, so the snapshot it keeps from before an earlier "
+                      f"failed import cannot be found. Deleting {rec} clears this block.")
+        self.assertEqual(failed, ["That file is not an LWE backup.", unreadable] * 2)
         self.assertEqual((settings.load()["ENGINE_FPS"], rec.exists()), (30, True))
 
     def test_the_panels_import_settles_inside_its_restore_lock(self) -> None:

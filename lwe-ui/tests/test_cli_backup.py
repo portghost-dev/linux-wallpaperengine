@@ -18,11 +18,13 @@ import io
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -32,6 +34,24 @@ import _fake_engine
 ROOT = Path(tempfile.mkdtemp(prefix="lwe-cli-backup-"))
 HOME = _cli_env.scratch_home(ROOT / "inproc")
 PENDING = "The service is not running or is busy, so it is not applied yet."
+
+
+def _zip_with_manifest(kind: str) -> bytes:
+    """A zip holding one stored member with an LWE manifest's text: kind "none" names it other.txt, "method"
+    gives manifest.json an unknown compression method (99), "encrypted" sets manifest.json's encrypted flag."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr(zipfile.ZipInfo("other.txt" if kind == "none" else "manifest.json"),
+                   json.dumps({"app": "lwe-ui", "format": 1}))
+    data = bytearray(buf.getvalue())
+    central = data.rfind(b"PK\x01\x02")
+    if kind == "method":
+        struct.pack_into("<H", data, 8, 99)
+        struct.pack_into("<H", data, central + 10, 99)
+    elif kind == "encrypted":
+        struct.pack_into("<H", data, 6, 1)
+        struct.pack_into("<H", data, central + 8, 1)
+    return bytes(data)
 
 
 def tearDownModule() -> None:
@@ -344,13 +364,17 @@ class BackupHandoffTest(unittest.TestCase):
         self.backups().mkdir(parents=True)
         snapshot = self.backups() / "pre-restore-20200101-000000.lwebackup"
         rec = self.backups() / "recovery.json"
+        zips = {"zip without a manifest": "none", "zip whose manifest has an unknown method": "method",
+                "zip whose manifest is flagged encrypted": "encrypted"}
         for label in ("link to a text file", "link to a folder", "dangling link", "file of other content",
-                      "link to a real backup"):
+                      "link to a real backup", *zips):
             with self.subTest(label=label):
                 if os.path.lexists(snapshot):
                     snapshot.unlink()
                 if label == "file of other content":
                     snapshot.write_text("not a backup either\n", encoding="utf-8")
+                elif label in zips:
+                    snapshot.write_bytes(_zip_with_manifest(zips[label]))
                 else:
                     snapshot.symlink_to({"link to a text file": self.root / "notes.txt",
                                          "link to a folder": self.root / "adir",
@@ -365,6 +389,17 @@ class BackupHandoffTest(unittest.TestCase):
                               f"be found. Deleting {rec} clears this block.\n")
                 self.assertEqual((code, out, err), (1, unreadable, ""))
                 self.assertEqual(self.written(), before)
+
+    def test_an_archive_whose_manifest_cannot_be_decompressed_is_refused_as_no_backup(self) -> None:
+        for kind in ("method", "encrypted"):
+            bad = self.root / f"{kind}.lwebackup"
+            bad.write_bytes(_zip_with_manifest(kind))
+            for verb in ("preview", "import"):
+                with self.subTest(kind=kind, verb=verb):
+                    before = self.written()
+                    self.assertEqual(self.lwe("backup", verb, str(bad)), (
+                        1, f"Refused {bad}\nerrors: file=manifest.json, reason=That file is not an LWE backup.\n", ""))
+                    self.assertEqual(self.written(), before)
 
     def test_refusals(self) -> None:
         not_a_backup = self.root / "notes.txt"
@@ -575,6 +610,27 @@ class RestoreLockTest(unittest.TestCase):
                 self.assertEqual(sentinel.read_text(encoding="utf-8"), "SENTINEL\n", "the link's target was written")
                 self.assertEqual((self.paths.config_dir() / "settings.conf").read_text(encoding="utf-8"),
                                  "ASSETS_DIR=\nENGINE_FPS=30\n", "nothing was restored")
+
+    def test_a_record_whose_snapshot_cannot_be_decompressed_refuses_at_the_command_and_headless_doors(self) -> None:
+        clean, _failing = self.archives()
+        named = self.rec.parent / "pre-restore-20200101-000000.lwebackup"
+        reason = (f"errors: file=recovery.json, reason=Nothing was imported: {self.rec} cannot be read, so the snapshot "
+                  f"it keeps from before an earlier failed import cannot be found. Deleting {self.rec} clears this "
+                  "block.\n")
+        for kind in ("method", "encrypted"):
+            with self.subTest(kind=kind):
+                self.rec.parent.mkdir(parents=True, exist_ok=True)
+                named.write_bytes(_zip_with_manifest(kind))
+                self.rec.write_text(json.dumps({"snapshot": named.name, "since": "2020-01-01T00:00:00"}),
+                                    encoding="utf-8")
+                self.assertEqual(self.door(clean), (1, f"Refused {clean}\n{reason}"))
+                with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+                    code = self.backup.main(["restore", str(clean)])
+                printed = out.getvalue().splitlines(keepends=True)
+                self.assertEqual((code, printed[0], printed[-1], err.getvalue()), (1, f"Refused {clean}\n", reason, ""))
+                self.assertEqual((self.paths.config_dir() / "settings.conf").read_text(encoding="utf-8"),
+                                 "ASSETS_DIR=\nENGINE_FPS=30\n", "nothing was restored")
+                self.assertTrue(self.rec.exists())
 
     def test_the_headless_restore_prints_what_it_restored_while_a_record_exists(self) -> None:
         clean, _failing = self.archives()

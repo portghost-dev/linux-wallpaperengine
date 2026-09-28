@@ -172,6 +172,15 @@ def _stores() -> None:
     for folder in (LIB / "1400000038", WORKSHOP / "1400000039", WORKSHOP / "1400000040"):
         (folder / "scene.pkg").symlink_to(_ROOT / "outside" / "foreign.pkg")
     (WORKSHOP / "1400000040" / "a\nnot added: SPOOF.pkg").symlink_to(_ROOT / "outside" / "foreign.pkg")
+    _scene(WORKSHOP / "1400000041", "Linked Controls", None)
+    for name in ("scene.pkg", "a\tb.pkg", "c\x1bd.pkg", "e\x9bf.pkg", "g\u2028h.pkg", "i\u2029j.pkg"):
+        (WORKSHOP / "1400000041" / name).symlink_to(_ROOT / "outside" / "foreign.pkg")
+    for preset, base, title in (("1400000042", "1400000043", "Base Links"),
+                                ("1400000044", "1400000045", "Base Links Json")):
+        _preset(preset, f"Preset of {title}", base)
+        (WORKSHOP / preset / "own.tex").symlink_to(_ROOT / "outside" / "loose.tex")
+        _scene(WORKSHOP / base, title, int(base[-2:]))
+        (WORKSHOP / base / "extra.tex").symlink_to(_ROOT / "outside" / "loose.tex")
 
 
 def setUpModule() -> None:
@@ -269,6 +278,9 @@ def _commands() -> None:
     _FACTS["all"] = {"tags": (_tag("1400000014"), _tag("1400000015")),
                      "events": (_events("1400000014"), _events("1400000015"))}
     _run("empty", ["untrash"])
+    _run("linked-controls", ["add", "1400000041"])
+    _run("base-links", ["add", "1400000042"])
+    _run("base-links-json", ["-j", "add", "1400000044"])
 
 
 def _line(label: str, text: str) -> str:
@@ -374,6 +386,25 @@ class AddTest(unittest.TestCase):
             "Linked Newline (1400000040)", f"imported into the pool; scene, nothing to compress; links not read: "
             f"{names}; links not copied: {names}")], ""))
         self.assertNotIn("1400000040", _FACTS["linked-newline"]["owners"])
+
+    def test_control_characters_in_link_names_stay_on_the_wallpapers_one_line(self) -> None:
+        r = _RUNS["linked-controls"]
+        names = "a?b.pkg, c?d.pkg, e?f.pkg, g?h.pkg, i?j.pkg, scene.pkg"
+        self.assertEqual((r.returncode, r.stdout.splitlines(), r.stderr), (0, [_line(
+            "Linked Controls (1400000041)", f"imported into the pool; scene, nothing to compress; links not read: "
+            f"{names}; links not copied: {names}")], ""))
+
+    def test_a_base_imported_for_a_preset_names_the_links_its_copy_left_out(self) -> None:
+        r = _RUNS["base-links"]
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, _line(
+            "Preset of Base Links (1400000042)", "imported into the pool; textures 0 MB before, 0 MB after; link not "
+            "copied: own.tex; its base Base Links (1400000043) was imported and waits for review; link not copied: "
+            "extra.tex") + "\n", ""))
+        r = _RUNS["base-links-json"]
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        result = json.loads(r.stdout)["results"][0]
+        self.assertEqual((result["links_not_copied"], result["bases"]), (["own.tex"], [{
+            "id": "1400000045", "title": "Base Links Json", "state": "waiting", "links_not_copied": ["extra.tex"]}]))
 
     def test_approve_writes_the_title_the_importer_cleaned(self) -> None:
         self.assertEqual(_RUNS["clean-title"].returncode, 0, _RUNS["clean-title"].stderr)

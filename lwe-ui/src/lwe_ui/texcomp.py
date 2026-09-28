@@ -38,7 +38,6 @@ import os
 import re
 import struct
 import subprocess
-import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from typing import Any, Callable
@@ -327,8 +326,10 @@ def scan(d: str) -> dict[str, Any]:
 
 
 def printable(name: str) -> str:
-    """name for one line of text: every control character (Unicode category Cc) as "?"."""
-    return "".join("?" if unicodedata.category(ch) == "Cc" else ch for ch in name)
+    """name for one line of text: every character str.isprintable refuses (controls, format and
+    unassigned characters, and separators but the space, U+2028 and U+2029 among them) as "?", the rule
+    importer._clean_title keeps titles by."""
+    return "".join(ch if ch.isprintable() else "?" for ch in name)
 
 
 def links(d: str) -> list[str]:

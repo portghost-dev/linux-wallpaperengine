@@ -188,6 +188,7 @@ def _add_one(row, cfg: dict) -> tuple[str, dict]:
     before = tags.known_ids()
     title = row.title
     not_copied: list[str] = []
+    base_links: dict[str, list[str]] = {}
     if row.state == "download":
         deps, own = _download_deps(row.id)
         folder = catalog.render_dir(deps[0]) if deps and not own else None
@@ -199,6 +200,7 @@ def _add_one(row, cfg: dict) -> tuple[str, dict]:
             return _failed(facts, _REASONS.get(done["action"], done["action"]))
         title = done["title"] or row.title
         not_copied = done.get("skipped_links", [])
+        base_links = done.get("base_skipped_links", {})
         head, kind = "imported into the pool", "imported"
     else:
         held = _held_bases(row.id)
@@ -223,9 +225,13 @@ def _add_one(row, cfg: dict) -> tuple[str, dict]:
             continue
         waiting = tagged[d].get("state") == "review"
         base_title = tagged[d].get("title") or d
+        left_out = base_links.get(d, [])
         text += (f"; its base {base_title} ({d}) was imported and "
                  + ("waits for review" if waiting else "is in the pool"))
-        bases.append({"id": d, "title": base_title, "state": "waiting" if waiting else "pool"})
+        if left_out:
+            text += compress.links_text(left_out, "copied")
+        bases.append({"id": d, "title": base_title, "state": "waiting" if waiting else "pool",
+                      "links_not_copied": list(left_out)})
     return text, {**facts, "result": kind,
                   "compress": {"result": result.kind, "bytes_before": result.before,
                                "bytes_after": result.after, "failed": result.failed,

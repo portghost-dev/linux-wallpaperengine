@@ -185,7 +185,8 @@ def import_one(wid: str, cfg: dict | None = None) -> dict:
     {"wid", "title", "type", "action"} where action is one of
     imported-review | imported-good | skipped-<reason>; an imported item's receipt also
     carries "skipped_links", the links its copy left out (copy_without_links), [] when
-    nothing was copied. Never raises."""
+    nothing was copied, and a preset's "base_skipped_links", {base id: the links that base's
+    copy left out} for each base this call imported. Never raises."""
     cfg = _snapshot() if cfg is None else cfg
     wid = str(wid)
     if not paths.is_safe_wid(wid):
@@ -224,8 +225,11 @@ def import_one(wid: str, cfg: dict | None = None) -> dict:
             # the resolve pass finishes the wiring hands-free when the base arrives.
             # ALL deps are stored (M4) - the modal surfaces the first missing one.
             return _import_held(wid, src, title, deps, cfg)
+        base_skipped: dict[str, list[str]] = {}
         for d in deps:
-            _ensure_dep_imported(d, cfg)
+            base = _ensure_dep_imported(d, cfg)
+            if base is not None:
+                base_skipped[d] = base.get("skipped_links", [])
         # the base must have actually landed (a failed copy on the ensure hop would
         # leave the preset wiring at a dir with no conf) - otherwise hold (H2 belt)
         try:
@@ -234,7 +238,7 @@ def import_one(wid: str, cfg: dict | None = None) -> dict:
             landed = False
         if not landed:
             return _import_held(wid, src, title, deps, cfg)
-        return _import_preset(wid, src, proj, title, deps, cfg)
+        return {**_import_preset(wid, src, proj, title, deps, cfg), "base_skipped_links": base_skipped}
 
     policy = str(_setting_from(cfg, "STORAGE_POLICY", "copy"))
     skipped: list[str] = []
@@ -328,12 +332,13 @@ _DEP_IMPORT_STACK: set = set()   # H1 belt: presence semantics already prevent
                                  # recursion; this makes a hostile graph inert anyway
 
 
-def _ensure_dep_imported(dep: str, cfg: dict) -> None:
+def _ensure_dep_imported(dep: str, cfg: dict) -> dict | None:
     """A preset's base item imports FIRST (same pass, same snapshot) so the preset's
     conf can point at the base's BG. The dedup guard makes this idempotent; the stack
-    guard makes it cycle-proof."""
+    guard makes it cycle-proof. Returns the base's import_one receipt, None when this call
+    did not import it."""
     if dep in _DEP_IMPORT_STACK:
-        return
+        return None
     try:
         known = tags.known_ids()
     except Exception:
@@ -341,9 +346,10 @@ def _ensure_dep_imported(dep: str, cfg: dict) -> None:
     if dep not in known:
         _DEP_IMPORT_STACK.add(dep)
         try:
-            import_one(dep, cfg)
+            return import_one(dep, cfg)
         finally:
             _DEP_IMPORT_STACK.discard(dep)
+    return None
 
 
 def _copy_or_reference(wid: str, src: Path, cfg: dict) -> tuple[str, list[str]] | None:

@@ -145,18 +145,26 @@ def main() -> None:
     newline = Path(_TMP) / "wp" / "600"
     newline.mkdir(parents=True)
     (newline / "b\nc.pkg").symlink_to(outside / "foreign.pkg")
+    controls = Path(_TMP) / "wp" / "700"
+    controls.mkdir(parents=True)
+    for name in ("a\tb.pkg", "c\x1bd.pkg", "e\x9bf.pkg", "g\u2028h.pkg", "i\u2029j.pkg"):
+        (controls / name).symlink_to(outside / "foreign.pkg")
     with unittest.TestCase().assertLogs("lwe_ui.texcomp", "INFO") as logs:
         s3 = texcomp.scan(str(linked))
         s4 = texcomp.scan(str(exempt_linked))
         s5 = texcomp.scan(str(other_name))
         texcomp.scan(str(newline))
+        texcomp.scan(str(controls))
     assert (texcomp.links(str(linked)), s3["total"]) == (["scene.pkg"], 0), s3
     assert (texcomp.links(str(exempt_linked)), s4["eligible"]) == (["exempt.txt"], 1), s4
     assert (texcomp.links(str(other_name)), s5["total"]) == (["a.pkg"], 0), s5
     assert logs.output == [f"INFO:lwe_ui.texcomp:compress {linked}: link not read: scene.pkg",
                            f"INFO:lwe_ui.texcomp:compress {exempt_linked}: link not read: exempt.txt",
                            f"INFO:lwe_ui.texcomp:compress {other_name}: link not read: a.pkg",
-                           f"INFO:lwe_ui.texcomp:compress {newline}: link not read: b?c.pkg"], logs.output
+                           f"INFO:lwe_ui.texcomp:compress {newline}: link not read: b?c.pkg",
+                           *(f"INFO:lwe_ui.texcomp:compress {controls}: link not read: {name}"
+                             for name in ("a?b.pkg", "c?d.pkg", "e?f.pkg", "g?h.pkg", "i?j.pkg"))], logs.output
+    assert all(len(line.splitlines()) == 1 for line in logs.output), logs.output
     assert texcomp.encode_scene(str(linked), "300")["total"] == 0
     assert not (Path(texcomp.CACHE) / (hashlib.sha256(foreign).hexdigest() + ".bc")).exists(), \
         "a texture from the link's target reached the cache"

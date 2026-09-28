@@ -116,8 +116,13 @@ def export_to(path: str | Path) -> dict[str, Any]:
 
 def _read_manifest(z: zipfile.ZipFile) -> dict[str, Any]:
     try:
-        m = json.loads(z.read(MANIFEST).decode("utf-8"))
-    except (KeyError, ValueError, UnicodeDecodeError):
+        raw = z.read(MANIFEST)
+    except Exception:
+        # missing, or a member zipfile cannot decompress: an unknown method, an encrypted flag, bad data
+        raise ValueError("That file is not an LWE backup.")
+    try:
+        m = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
         raise ValueError("That file is not an LWE backup.")
     if not isinstance(m, dict) or m.get("app") != "lwe-ui":
         raise ValueError("That file is not an LWE backup.")
