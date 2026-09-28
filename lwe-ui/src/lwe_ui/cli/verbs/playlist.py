@@ -4,7 +4,8 @@
 switches: with the schedule on it needs the running service, since the engine takes a hand switch only
 as a manual bind, and it is refused before any write while the service is away; otherwise
 ACTIVE_PLAYLIST is saved through the change runner, which binds the playlist, manual while the schedule
-is on. `playlist load` binds the saved playlist again without manual.
+is on. `playlist load` binds the saved playlist again without manual. For reload, check_files checks every
+playlist file from its raw text and writes nothing, and apply_cleanups makes its one cleanup.
 
 order and interval act on the derived active playlist, the playlist the engine plays for the panel:
 the engine's binding while its schedule is on and that playlist's file exists, else the saved active
@@ -357,6 +358,114 @@ def _playlist(ctx: Context, args: list[str]) -> int:
     if args[0] == "load":
         return _bind(ctx)
     return _switch(ctx, args[0])
+
+
+def _raw(text: str) -> dict[str, tuple[int, str, str | None]]:
+    """{key: (line number, value, the old spelling the value came from or None)} for each key the text
+    assigns, under this build's names, the last assignment of a key winning; values are read raw,
+    never default-filled."""
+    from ...storage import migrate, tier_a
+    out: dict[str, tuple[int, str, str | None]] = {}
+    for number, line in enumerate(text.split("\n"), 1):
+        raw, actions = migrate.apply_tables("playlists", tier_a.parse(line))
+        for key, value in raw.items():
+            old = next((a["from"] for a in actions if a.get("kind") == "alias" and a.get("key") == key), None)
+            out[key] = (number, str(value), old)
+    return out
+
+
+def check_files(status: dict | None = None) -> tuple[list[str], list[str], list[dict], list[str]]:
+    """Every playlists/*.conf checked from its raw text, never through the default-filling loader,
+    and nothing written. Returns (errors, warnings, cleanups, changes): each problem names the file,
+    the line and the key; the one cleanup, ACTIVE_PLAYLIST naming a missing file, is an edit for
+    apply_cleanups; changes compare the playing playlist's file with what `status` reports."""
+    import re
+    from ... import constants as C
+    from ...engine import push
+    from ...engine.resolve import split_playlist_parts
+    from ...storage import paths, playlists, settings
+    errors: list[str] = []
+    warnings: list[str] = []
+    cfg = settings.load()
+    held = {slug for slug in [settings_table.derived_active_playlist(status)[0], *push._scheduled()] if slug}
+    names: dict[str, list[str]] = {}
+    folder = paths.playlists_dir()
+    for path in sorted(folder.glob("*.conf")) if folder.is_dir() else []:
+        slug, where = path.stem, f"playlists/{path.name}"
+        text = path.read_bytes().decode("utf-8", "replace")
+        raw = _raw(text)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", slug):
+            line = f"{where}: the engine does not take this file name (letters, digits, - and _, 64 at most)"
+            (errors if slug in held else warnings).append(line)
+        if not raw.get("NAME", (0, "", None))[1].strip():
+            errors.append(f"{where}: NAME is missing")
+        else:
+            names.setdefault(" ".join(raw["NAME"][1].split()).casefold(), []).append(where)
+        if "MODE" in raw:
+            number, value, old = raw["MODE"]
+            if old is not None:
+                warnings.append(f"{where}:{number}: MODE {old} is an old spelling of {value}")
+            elif value not in C.PLAYLIST_MODES:
+                errors.append(f"{where}:{number}: MODE must be shuffle, sequential or static; got {value}")
+        if "INTERVAL" in raw:
+            number, value, _old = raw["INTERVAL"]
+            if not re.fullmatch(r"[0-9]+", value) or not 15 <= int(value) <= 599940:
+                errors.append(f"{where}:{number}: INTERVAL must be a whole number of seconds from 15 to 599940; "
+                              f"got {value}")
+        if "UNIT" in raw and raw["UNIT"][1] not in C.PLAYLIST_UNITS:
+            errors.append(f"{where}:{raw['UNIT'][0]}: UNIT must be min or s; got {raw['UNIT'][1]}")
+        if "MEMBERS" in raw:
+            number, value, _old = raw["MEMBERS"]
+            ids = value.split()
+            for wid in [w for w in ids if not paths.is_safe_wid(w)]:
+                errors.append(f"{where}:{number}: MEMBERS holds {wid}, which is not a wallpaper id")
+            for wid in sorted({w for w in ids if ids.count(w) > 1}):
+                errors.append(f"{where}:{number}: MEMBERS lists {wid} more than once")
+            for wid in [w for w in ids if paths.is_safe_wid(w) and not paths.wallpaper_present(w, cfg)]:
+                warnings.append(f"{where}:{number}: MEMBERS holds {wid}, which is not in the library")
+            entries = push._playlist_payload(slug)[0]
+            sent = sum(len(part) for part in split_playlist_parts(entries))
+            if sent < len(entries):
+                errors.append(f"{where}:{number}: MEMBERS is too large for one transfer; {len(entries) - sent} "
+                              "entries would be left out")
+    for files in names.values():
+        if len(files) > 1:
+            warnings.append(f"{', '.join(files)}: NAME is the same in {len(files)} files")
+    active = str(cfg.get("ACTIVE_PLAYLIST") or "")
+    cleanups: list[dict] = []
+    if active and not paths.playlist_file(active).exists():
+        remaining = playlists.list_playlists()
+        cleanups.append({"file": "settings.conf", "key": "ACTIVE_PLAYLIST", "from": active,
+                         "to": remaining[0]["slug"] if remaining else ""})
+    return errors, warnings, cleanups, _changes(status)
+
+
+def _changes(status: dict | None) -> list[str]:
+    """The playing playlist's file against status's rotation: label, order, interval_s and count."""
+    from ...engine import push
+    rotation = status.get("rotation") if isinstance(status, dict) else None
+    slug = settings_table.derived_active_playlist(status)[0]
+    if not isinstance(rotation, dict) or not slug:
+        return []
+    entries, interval, order, _enabled, label = push._playlist_payload(slug)
+    out = []
+    for field, stored in (("label", label), ("order", order), ("interval_s", interval), ("count", len(entries))):
+        if field in rotation and rotation[field] != stored:
+            out.append(f"playlists/{slug}.conf: {field} is {stored} in the file and {rotation[field]} in the engine")
+    return out
+
+
+def apply_cleanups(cleanups: list[dict]) -> str:
+    """Make check_files' cleanup under the settings lock, one settings.conf line; returns the line to
+    print, "" when there was none."""
+    from ...storage import lock, settings
+    lines = []
+    with lock.held("settings"):
+        for edit in cleanups:
+            settings.modify(lambda _current, edit=edit: {edit["key"]: edit["to"]})
+            lines.append(f"{edit['file']}: {edit['key']} {edit['from']} -> {edit['to'] or '(none)'}, since "
+                         f"playlists/{edit['from']}.conf is gone")
+    return "\n".join(lines)
 
 
 UNSET: dict[str, Callable[[Context], int]] = {
