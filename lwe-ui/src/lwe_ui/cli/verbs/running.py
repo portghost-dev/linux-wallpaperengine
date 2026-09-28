@@ -1,4 +1,9 @@
-"""next, prev and pause: the running commands that step through the playlist or hold its timer.
+"""show, next, prev and pause: the running commands that show a wallpaper, step through the playlist or
+hold its timer.
+
+show picks one wallpaper by the rules in cli/select.py and, once status answers, sends it through
+engine/push.py::show_final under the sync lock, held until the load finishes; it starts no service,
+writes nothing and is never retried.
 
 next and prev are engine-only: one status read first, then the engine's next or prev sent under the
 sync lock, which stays held until the engine's final reply; they write nothing, leave the playlist timer
@@ -159,11 +164,69 @@ def _pause(ctx: Context, args: list[str]) -> int:
     return REFUSED if outcome.kind == "refused" else DONE
 
 
+def _show(ctx: Context, args: list[str]) -> int:
+    """show <w>: the pick and its line, the status read, then show_final under the sync lock until
+    its final reply."""
+    if len(args) != 1:
+        return _refuse(ctx, f"show takes one wallpaper; got {len(args)} words", USAGE)
+    from ... import api_client, version
+    from ...engine import push
+    from ...storage.lock import StoreBusy
+    from .. import select
+
+    try:
+        pick = select.wallpaper(args[0])
+    except select.PickError as exc:
+        return select.report(ctx, exc)
+    line = select.pick_line(pick)
+
+    def refused(message: str, code: int) -> int:
+        if not ctx.json:
+            print(line, file=ctx.out)
+        return _refuse(ctx, message, code)
+
+    if pick.source == "download":
+        return refused(f"not in your pool yet; lwe add {pick.number} brings it in, lwe bench {pick.number} tries it",
+                       REFUSED)
+    kind, status = push.read_status()
+    if status is None:
+        if kind == "away":
+            return refused("the service is not running", ENGINE_DOWN)
+        return refused("the service is not answering", REFUSED)
+    refusal = version.running_refusal(status, version.panel_stamp())
+    if refusal is not None:
+        return refused(refusal, REFUSED)
+    outputs = status.get("outputs")
+    released = isinstance(outputs, dict) and outputs.get("state") == "released"
+    try:
+        with push.engine_only():
+            reply = push.show_final(pick.ui_id)
+            nothing_ran = api_client.last_class() == "away"
+    except StoreBusy:
+        return refused("the service is busy", REFUSED)
+    if not isinstance(reply, dict):
+        if nothing_ran:
+            return refused("the service is not running", ENGINE_DOWN)
+        return refused("accepted but not finished", REFUSED)
+    cls = api_client.reply_class(reply)
+    if cls == "refused":
+        return refused(str(reply.get("error") or ""), REFUSED)
+    if cls != "ok":
+        return refused("accepted but not finished", REFUSED)
+    if ctx.json:
+        _print_json(ctx, {"number": pick.number, "id": pick.ui_id, "title": pick.title,
+                          "screens_back_on": released})
+    else:
+        print(line + (" (screens back on)" if released else ""), file=ctx.out)
+    return DONE
+
+
 def _what(name: str) -> str:
     return next(row["what"] for row in vocabulary.COMMANDS if row["name"] == name)
 
 
 VERBS = (
+    Verb("show", _show, _what("show"), "Running"),
     Verb("next", _next, _what("next"), "Running"),
     Verb("prev", _prev, _what("prev"), "Running"),
     Verb("pause", _pause, _what("pause"), "Running"),
