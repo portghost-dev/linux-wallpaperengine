@@ -301,6 +301,30 @@ class WindowSyncTest(unittest.TestCase):
         self.assertEqual(settings.load()["ENGINE_VOLUME"], 30)
         self.assertEqual(marker.read()["classes"], ["BUNDLE"])
 
+    def test_the_switch_and_the_restart_row_record_the_bundle_before_they_launch(self) -> None:
+        seen: list = []
+
+        def run(args, **kwargs):
+            if "enable" in args or "restart" in args:
+                seen.append((args[-2], marker.read()))
+            return subprocess.CompletedProcess(args, 0, "inactive\n" if "is-active" in args else "", "")
+
+        with mock.patch.object(models, "_sandboxed", lambda: False), \
+                mock.patch.object(models.subprocess, "run", run):
+            with self.engine(None, "away"):
+                self.assertTrue(self.backend.setMaster(True))
+            with self.engine(status(pid=4242)):
+                self.assertTrue(self.backend.restartMaster())
+        self.backend._ready_timer.stop()
+        self.assertEqual([(verb, state["classes"], state.get("replaced")) for verb, state in seen],
+                         [("--now", ["BUNDLE"], None), ("restart", ["BUNDLE"], 4242)])
+        with self.engine(status(pid=4242)):
+            push.sync_all("window")
+        self.assertEqual(marker.read()["classes"], ["BUNDLE"], "a drain to the replaced engine keeps it")
+        with self.engine(status(pid=5000)):
+            push.sync_all("window")
+        self.assertEqual(marker.read()["classes"], [])
+
     def test_the_service_switch_rebuilds_first_and_bundles_once_the_engine_answers(self) -> None:
         events: list = []
         notices: list[str] = []

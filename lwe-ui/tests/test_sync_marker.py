@@ -243,6 +243,24 @@ class SyncMarkerTest(unittest.TestCase):
         self.assertTrue(marker.record_sent(current, 5151, "night"))
         self.assertEqual(marker.sent_for(current, 5151), ["night"])
 
+    def test_a_restart_record_stays_until_a_delivery_to_another_engine(self) -> None:
+        generation = marker.ensure(("BUNDLE",), replacing=4242)
+        self.assertEqual((marker.read()["classes"], marker.read()["replaced"]), (["BUNDLE"], 4242))
+        for pid in (4242, None):
+            with self.subTest(pid=pid):
+                self.assertTrue(marker.clear(generation, pid=pid))
+                self.assertEqual((marker.read()["classes"], marker.read()["replaced"]), (["BUNDLE"], 4242))
+        with marker.writing(("CURRENT",)) as (generation, _):
+            pass
+        self.assertEqual(marker.read()["replaced"], 4242, "a writer keeps the tie")
+        self.assertTrue(marker.clear(generation, pid=5000))
+        self.assertEqual(marker.read()["classes"], [])
+        self.assertNotIn("replaced", marker.read())
+        generation = marker.ensure(("BUNDLE",))
+        self.assertNotIn("replaced", marker.read(), "a start records no pid")
+        self.assertTrue(marker.clear(generation, pid=4242))
+        self.assertEqual(marker.read()["classes"], [])
+
     def test_a_child_inside_writing_makes_generation_raise_store_busy(self) -> None:
         inside = self.home / "inside"
         child = subprocess.Popen([sys.executable, "-c", CHILD, str(inside)], env=self._env(),

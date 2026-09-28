@@ -777,6 +777,8 @@ class Backend(QObject):
                 return False
             was_active = self.masterState() == "active"
         args = ["enable", "--now"] if on else ["disable", "--now"]
+        if on and not was_active:
+            self._record_bundle(None)
         try:
             proc = subprocess.run(
                 ["systemctl", "--user", *args, self._master_service()],
@@ -804,6 +806,8 @@ class Backend(QObject):
             self.notice.emit(f"Engine service config not updated: {exc}")
             return False
         cls, before = push.read_status()
+        old_pid = before.get("pid") if cls == "ok" and before else None
+        self._record_bundle(old_pid)
         try:
             proc = subprocess.run(
                 ["systemctl", "--user", "--no-block", "restart", self._master_service()],
@@ -812,17 +816,21 @@ class Backend(QObject):
         except (OSError, subprocess.SubprocessError):
             return False
         if proc.returncode == 0:
-            self._bundle_when_ready(before.get("pid") if cls == "ok" and before else None)
+            self._bundle_when_ready(old_pid)
         return proc.returncode == 0
 
-    def _bundle_when_ready(self, old_pid: Any) -> None:
-        """The bundle of a service start or restart: the marker first, then a status read every
-        250 ms for up to 20 s; the first ok status whose pid differs from old_pid runs the window's
-        sync, and no answer leaves the marker to the drain."""
+    def _record_bundle(self, old_pid: Any) -> None:
+        """Before a service start or restart launches: BUNDLE in the sync marker, tied to the engine
+        a restart replaces (old_pid), so a delivery to that engine cannot clear it."""
         try:
-            marker.ensure(("BUNDLE",))
+            marker.ensure(("BUNDLE",), replacing=old_pid if type(old_pid) is int else None)
         except OSError as exc:
             logging.getLogger(__name__).warning("sync marker not set: %s", exc)
+
+    def _bundle_when_ready(self, old_pid: Any) -> None:
+        """The bundle of a service start or restart, after _record_bundle and the launch: a status
+        read every 250 ms for up to 20 s; the first ok status whose pid differs from old_pid runs
+        the window's sync, and no answer leaves the marker to the drain."""
         self._ready_old_pid = old_pid
         self._ready_deadline = monotonic() + 20.0
         self._ready_timer.start()

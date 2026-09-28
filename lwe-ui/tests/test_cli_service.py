@@ -63,10 +63,8 @@ class ServiceTest(unittest.TestCase):
         shutil.rmtree(ROOT, True)
 
     def setUp(self) -> None:
-        from lwe_ui.engine import marker
-        state = marker.read()
-        if state["generation"] is not None:
-            marker.clear(state["generation"])
+        from lwe_ui.storage import paths
+        (paths.panel_state_dir() / "sync-pending").unlink(missing_ok=True)
         self.events: list = []
         CONFIG.mkdir(parents=True, exist_ok=True)
         (CONFIG / "settings.conf").write_text(f"ENGINE_BIN={self.engine}\n", encoding="utf-8")
@@ -230,11 +228,10 @@ class ServiceTest(unittest.TestCase):
     def test_an_interrupted_wait_leaves_the_owed_bundle(self) -> None:
         from lwe_ui.cli.verbs import service
         from lwe_ui.engine import marker
+        from lwe_ui.storage import paths
         for action in ("start", "restart"):
             with self.subTest(action=action):
-                state = marker.read()
-                if state["generation"] is not None:
-                    marker.clear(state["generation"])
+                (paths.panel_state_dir() / "sync-pending").unlink(missing_ok=True)
                 calls = []
 
                 def runner(args, **kw):
@@ -260,14 +257,25 @@ class ServiceTest(unittest.TestCase):
                                  (1, "", "The sync record could not be written (disk full), so nothing was started.\n"))
                 self.assertNotIn(words[0], self.kinds())
 
+    def test_a_busy_marker_prints_the_store_busy_line_and_launches_nothing(self) -> None:
+        from lwe_ui.engine import marker
+        from lwe_ui.storage import lock
+        for words, state in ((["start"], STOPPED), (["restart"], RUNNING)):
+            with self.subTest(words=words):
+                self.events.clear()
+                busy = lock.StoreBusy("Store busy: another writer holds marker.lock")
+                with mock.patch.object(marker, "ensure", side_effect=busy):
+                    self.assertEqual(self.run_lwe(words, state),
+                                     (1, "", "Store busy: another writer holds marker.lock\n"))
+                self.assertNotIn(words[0], self.kinds())
+
     def test_a_timeout_keeps_the_record_and_sends_nothing(self) -> None:
         from lwe_ui.engine import marker
+        from lwe_ui.storage import paths
         for words, state in ((["start"], STOPPED), (["restart"], RUNNING)):
             for pending in ((), ("CURRENT",)):
                 with self.subTest(words=words, pending=pending):
-                    held = marker.read()
-                    if held["generation"] is not None:
-                        marker.clear(held["generation"])
+                    (paths.panel_state_dir() / "sync-pending").unlink(missing_ok=True)
                     if pending:
                         marker.ensure(pending)
                     self.assertEqual(self.run_lwe(words, state, ready=False)[0], 1)

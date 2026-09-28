@@ -65,12 +65,16 @@ def _rebuild() -> list[str]:
 
 
 def _launch(args: list[str], old_pid: int | None) -> tuple[list[str], int]:
-    """Record the owed bundle in the sync marker, start or restart, wait for the engine and sync it;
-    returns the outcome line and the exit code. The record stays until a sync ends every request ok."""
+    """Record the owed bundle in the sync marker, tied to the engine a restart replaces (old_pid),
+    start or restart, wait for the engine and sync it; returns the outcome line and the exit code.
+    The record stays until a sync to another engine ends every request ok."""
     from ...engine import marker, push
+    from ...storage.lock import StoreBusy
     from .. import report
     try:
-        marker.ensure(("BUNDLE",))
+        marker.ensure(("BUNDLE",), replacing=old_pid)
+    except StoreBusy:
+        raise
     except OSError as exc:
         raise _Stop(f"The sync record could not be written ({exc}), so nothing was started.") from None
     _call(args)

@@ -2,12 +2,15 @@
 what the store holds.
 
 The file holds {"version": 1, "generation": N, "classes": [...], "sent": {"pid": N or null,
-"playlists": [...]}}. BUNDLE means the engine needs the full sync from the store, and CURRENT
-that the wallpaper on screen also needs a re-show. sent lists the playlists a window run has
-already transferred in this generation to that engine pid. A writer raises the generation of
-the marker; ensure makes a fresh one when no marker exists and raises it when it adds a class
-the marker did not hold; a clear keeps it. So a generation value never repeats, and a clear
-succeeds only for the generation its caller read.
+"playlists": [...]}}, plus "replaced": N while a restart's record is tied. BUNDLE means the engine
+needs the full sync from the store, and CURRENT that the wallpaper on screen also needs a re-show.
+sent lists the playlists a window run has already transferred in this generation to that engine
+pid. replaced is the pid of the engine a service restart replaces: while it is set, a clear by a
+run that delivered to that pid, or to no known pid, keeps BUNDLE, and only a delivery to another
+pid clears BUNDLE and it. A writer raises the generation of the marker; ensure makes a fresh one
+when no marker exists and raises it when it adds a class the marker did not hold; a clear keeps
+it. So a generation value never repeats, and a clear succeeds only for the generation its caller
+read.
 Every read and write holds the marker lock, and every write is an atomic replace followed by
 an fsync of the directory. Plain Python, no Qt import.
 """
@@ -31,9 +34,12 @@ def _file() -> Path:
 
 
 def _state(generation: int | None, classes: Iterable[str], pid: int | None = None,
-           playlists: Iterable[str] = ()) -> dict[str, Any]:
-    return {"generation": generation, "classes": list(classes),
-            "sent": {"pid": pid, "playlists": list(playlists)}}
+           playlists: Iterable[str] = (), replaced: int | None = None) -> dict[str, Any]:
+    state = {"generation": generation, "classes": list(classes),
+             "sent": {"pid": pid, "playlists": list(playlists)}}
+    if replaced is not None:
+        state["replaced"] = replaced
+    return state
 
 
 def _write(state: dict[str, Any]) -> None:
@@ -62,9 +68,10 @@ def _load() -> dict[str, Any]:
             and isinstance(doc.get("classes"), list) and all(c in _CLASSES for c in doc["classes"])
             and "pid" in sent and (sent["pid"] is None or type(sent["pid"]) is int)
             and isinstance(sent.get("playlists"), list)
-            and all(isinstance(slug, str) for slug in sent["playlists"])):
+            and all(isinstance(slug, str) for slug in sent["playlists"])
+            and (doc.get("replaced") is None or type(doc["replaced"]) is int)):
         return _state(doc["generation"], (c for c in _CLASSES if c in doc["classes"]),
-                      sent["pid"], sent["playlists"])
+                      sent["pid"], sent["playlists"], doc.get("replaced"))
     state = _state(time.time_ns(), _CLASSES)
     _write(state)
     return state
@@ -88,9 +95,10 @@ def _matches(state: dict[str, Any], generation: int) -> bool:
 
 
 def read() -> dict[str, Any]:
-    """The marker as {"generation", "classes", "sent": {"pid", "playlists"}}: with no file,
-    generation None, no classes and an empty sent. A malformed file, or one with another
-    version, reads as BUNDLE and CURRENT with an empty sent and is rewritten in place."""
+    """The marker as {"generation", "classes", "sent": {"pid", "playlists"}}, plus "replaced" while
+    a restart's record is tied: with no file, generation None, no classes and an empty sent. A
+    malformed file, or one with another version, reads as BUNDLE and CURRENT with an empty sent
+    and is rewritten in place."""
     with lock.held("marker"):
         return _load()
 
@@ -105,22 +113,27 @@ def writing(classes: Iterable[str]) -> Iterator[tuple[int, bool]]:
     with lock.held("marker"):
         state = _load()
         generation = _fresh(state)
-        _write(_state(generation, _merged(state["classes"], classes)))
+        merged = _merged(state["classes"], classes)
+        _write(_state(generation, merged, replaced=state.get("replaced")))
         yield generation, bool(state["classes"])
 
 
-def ensure(classes: Iterable[str]) -> int:
+def ensure(classes: Iterable[str], replacing: int | None = None) -> int:
     """With no marker (no file, or no classes), make a fresh generation as writing() does,
     with `classes`. With one, a class it does not hold raises the generation and empties sent,
     as writing() does, so a run that read the older generation cannot clear it; classes it
-    already holds keep the generation. Returns the generation."""
+    already holds keep the generation. `replacing`, the pid of the engine a restart replaces,
+    is recorded as replaced; None keeps what is recorded. Returns the generation."""
     with lock.held("marker"):
         state = _load()
         merged = _merged(state["classes"], classes)
+        replaced = state.get("replaced") if replacing is None else replacing
         if state["classes"] and merged == state["classes"]:
+            if replaced != state.get("replaced"):
+                _write({**state, "replaced": replaced})
             return state["generation"]
         generation = _fresh(state)
-        _write(_state(generation, merged))
+        _write(_state(generation, merged, replaced=replaced))
         return generation
 
 
@@ -131,16 +144,22 @@ def generation() -> int | None:
         return _load()["generation"]
 
 
-def clear(generation: int, keep: Iterable[str] = ()) -> bool:
+def clear(generation: int, keep: Iterable[str] = (), pid: int | None = None) -> bool:
     """Only while the marker's generation is `generation`: no classes but those of `keep` it
-    holds, an empty sent, the generation kept. Returns whether the generation matched. A failed
-    write puts the previous record back, best effort, and raises OSError, so a failed clear
-    never leaves a visibly cleared marker."""
+    holds, an empty sent, the generation kept. `pid` is the engine the clearing run delivered
+    to: while replaced is set, a run that delivered to that pid, or passes none, keeps BUNDLE
+    and replaced, and a run that delivered to another pid clears both. Returns whether the
+    generation matched. A failed write puts the previous record back, best effort, and raises
+    OSError, so a failed clear never leaves a visibly cleared marker."""
     with lock.held("marker"):
         state = _load()
         if not _matches(state, generation):
             return False
-        cleared = _state(generation, (c for c in state["classes"] if c in keep))
+        tie = state.get("replaced") if "BUNDLE" in state["classes"] else None
+        holds = tie is not None and (pid is None or pid == tie)
+        kept = set(keep) | ({"BUNDLE"} if holds else set())
+        cleared = _state(generation, (c for c in state["classes"] if c in kept),
+                         replaced=tie if holds else None)
         if cleared != state:
             try:
                 _write(cleared)
@@ -168,7 +187,7 @@ def start_sent(generation: int, pid: int) -> None:
         state = _load()
         listed = state["sent"]["pid"]
         if _matches(state, generation) and listed is not None and listed != pid:
-            _write(_state(state["generation"], state["classes"]))
+            _write(_state(state["generation"], state["classes"], replaced=state.get("replaced")))
 
 
 def record_sent(generation: int, pid: int, slug: str) -> bool:
@@ -181,5 +200,5 @@ def record_sent(generation: int, pid: int, slug: str) -> bool:
             return False
         if listed != pid or slug not in playlists:
             _write(_state(state["generation"], state["classes"], pid,
-                          playlists + ([] if slug in playlists else [slug])))
+                          playlists + ([] if slug in playlists else [slug]), state.get("replaced")))
         return True

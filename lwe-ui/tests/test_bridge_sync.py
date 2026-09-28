@@ -547,6 +547,28 @@ class BridgeSyncTest(unittest.TestCase):
                 self.assertEqual((before, rec.verbs().count("show")), (0, 1))
                 self.assertEqual(marker.read()["classes"], [])
 
+    def test_a_drain_to_the_engine_a_restart_replaces_keeps_the_restart_record(self) -> None:
+        from lwe_ui.cli.verbs import service
+        for action, old_pid, answer in (("restart", 4242, status(pid=4242)), ("start", None, None)):
+            with self.subTest(action=action):
+                held = marker.read()
+                if held["generation"] is not None:
+                    (paths.panel_state_dir() / "sync-pending").unlink()
+                drained = []
+
+                def launch(args):
+                    thread = threading.Thread(target=lambda: drained.append(push.sync_all("command")))
+                    thread.start()
+                    thread.join(5)
+                    return ""
+
+                with self.engine(answer, "ok" if answer else "away"), mock.patch.object(service, "_call", launch), \
+                        mock.patch.object(push, "wait_ready", side_effect=KeyboardInterrupt):
+                    with self.assertRaises(KeyboardInterrupt):
+                        service._launch([action, "lwe-engine.service"], old_pid)
+                self.assertEqual([o.kind for o in drained], ["applied" if answer else "pending"])
+                self.assertEqual(marker.read()["classes"], ["BUNDLE"])
+
     def test_ready_tick_during_burst(self) -> None:
         bridge = editor.EditorBridge(self.backend)
         bridge.open("111")
