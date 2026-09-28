@@ -108,7 +108,11 @@ now look right, and the ones that do not are how the work continues.
 - The daemon owns its own state: current wallpaper, rotation set, and playback
   settings persist to disk and restore on boot, so a service restart is
   invisible and no client has to babysit the engine. A crash-loop guard boots
-  it idle instead of restoring into a repeating failure.
+  it idle when the last two boots each died within 60 seconds of starting, and
+  then holds every automatic wallpaper change (the playlist timer, the schedule
+  and the panel's own re-shows) until you show a wallpaper, step to the next or
+  previous one, or pick a playlist. Until then lwe's other commands print a note
+  saying so, and `lwe status --json` reports `"restore_refused": true`.
 - Live property reload, a fullscreen-app policy handled by the engine itself
   (keep playing, pause, or free the outputs until the fullscreen window closes;
   stop frees the outputs only on the Wayland desktop and pauses elsewhere), and a
@@ -121,6 +125,9 @@ now look right, and the ones that do not are how the work continues.
   drown the engine's own logs.
 - Hardened parsers for the binary formats a wallpaper package can carry, and hard
   caps on what a client of the command socket can do.
+- Web wallpapers can read only their own folder and the Wallpaper Engine assets,
+  never other files on your disk, and the engine service runs in a folder of its
+  own under `$XDG_RUNTIME_DIR`.
 
 ## The control panel (lwe-ui)
 
@@ -131,6 +138,11 @@ quick actions stay a right-click away. Library browsing,
 rotation playlists, per-wallpaper settings (scaling, color correction,
 animation speed, scene properties), a global frame-rate cap, Workshop import with a bench-test wizard,
 theming, and a developer view exposing the engine's debug instruments.
+
+Engine > Advanced and the editor have two sliders, Render resolution limit and
+Effect resolution limit, that cap the size scenes and their effect layers are
+drawn at, from Off (no limit) to 2.00 times your screen; 1.00 renders at your
+screen's resolution.
 
 The panel is installed by `install.sh` along with the engine. See
 [`lwe-ui/README.md`](lwe-ui/README.md) for details.
@@ -172,8 +184,9 @@ rm -rf ~/.config/lwe ~/.local/state/lwe ~/.local/share/lwe
 rm -f ~/.config/autostart/lwe-ui.desktop
 ```
 
-The last line removes your settings, playlists, and the texture cache; keep it
-if you plan to reinstall. The packages pacman installed are ordinary system
+The `rm -rf ~/.config/lwe ~/.local/state/lwe ~/.local/share/lwe` line removes
+your settings, playlists, backups and the texture cache; skip it if you plan to
+reinstall. The packages pacman installed are ordinary system
 packages and stay; remove them with pacman if nothing else uses them.
 
 ## Building the engine by hand
@@ -217,6 +230,60 @@ Three notes for source builds:
   make -C build -j$(nproc)
   ```
 
+## Using LWE from the command line
+
+The panel's everyday work can also be done from a shell, without its window.
+`install.sh` links the engine into `~/.local/bin` a second time as `lwe`, and
+under that name it is a command: `lwe status`, `lwe off`, `lwe on` and
+`lwe --version` are answered by the engine itself, and every other command is
+handed to the panel's command entry, which runs without a window and changes the
+same files the window does. lwe and the panel must come from one build, which
+`bash install.sh` installs together.
+
+The engine itself runs as the systemd user service `lwe-engine.service`, so no
+window has to stay open. `lwe service` shows its state, `lwe service start`,
+`stop` and `restart` run it, and `lwe service autostart on|off` sets whether it
+starts with your desktop session.
+
+The command reference is built into each release, so it always matches the
+build you run:
+
+- `lwe help` lists every command and the everyday settings.
+- `lwe help <command>` explains one command or setting.
+- `lwe help --all` lists every setting with its values, its default and the
+  names it is saved under, including the engine variable, for example
+  `LWE_SSFACTOR` for `resclamp`.
+- `lwe help files` lists the files you can edit by hand; run `lwe reload` after
+  editing them.
+- `lwe help --debug` lists the unsupported debugging switches.
+- `lwe --help`, `lwe -h` and `lwe --h` print the same list as `lwe help`.
+
+`lwe status` prints what is on screen (labeled "last shown" while the screens
+are off), the playlist with its order and timer, whether the screens are on and,
+when they are off, why, the running engine's version, and a line of settings.
+
+### A blurry wallpaper at your screen size
+
+Two limits cap the size scenes are drawn at: resclamp limits the whole scene,
+and effectclamp its glow and blur layers. Each value is a share of your screen's
+resolution. 1.0, the default, is 100%, your screen's resolution, and 2.0 is
+200%. Values below 1 lower it toward 0 and trade away quality quickly. 0 turns
+the limit off: nothing is capped, and the scene renders at its own full size.
+The panel's sliders run from 0 to 2.00; the lwe command accepts values up to 4.
+
+A scene made for a bigger canvas can look soft under the default limit. To turn
+both limits off:
+
+```
+lwe resclamp 0
+lwe effectclamp 0
+lwe service restart
+```
+
+In the panel, set Render resolution limit and Effect resolution limit on
+Settings > Engine > Advanced to Off. For an engine started without lwe, set
+`LWE_SSFACTOR=0` and `LWE_CLAMPCOMPOSITES=0` in its environment.
+
 ## Driving the engine from a shell
 
 The panel is optional. The daemon speaks one JSON object per line over
@@ -241,10 +308,6 @@ argument and bound is in [`docs/FORK-MAP.md`](docs/FORK-MAP.md) chapters 1 and
 
 `linux-wallpaperengine --version` prints the engine's version stamp alone on one line and exits, and the
 `status` reply carries the same stamp in its `version` field.
-
-The engine also answers to the name `lwe`, which `install.sh` links into `~/.local/bin`:
-`lwe status`, `lwe off`, `lwe on` and `lwe --version` work with the engine alone. Every
-other `lwe` command needs the panel.
 
 ## Settings
 
@@ -355,6 +418,13 @@ variable, which still works.
 - On KDE Plasma, the Peek at Desktop shortcut (Meta+D by default) hides the
   wallpaper along with the windows, because the wallpaper is a desktop-layer
   surface. Press it again to bring it back.
+- A wallpaper folder with a project.json the engine cannot use (not a regular
+  file, larger than 4 MiB, unreadable, or not valid JSON) is skipped when the
+  engine starts, with one log line naming the folder and the reason, and the
+  engine starts with the rest; `journalctl --user -u lwe-engine.service` shows
+  it.
+- A scene whose objects depend on each other in a loop still loads; the log
+  names the objects in the loop ("Dependency cycle among scene objects ...").
 
 ## About this repository
 

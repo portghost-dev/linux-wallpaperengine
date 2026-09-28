@@ -581,7 +581,7 @@ SETTINGS: tuple[dict[str, str], ...] = (
         "scope": "global and per wallpaper",
         "when": "restart, or the next show for one wallpaper",
         "what": "Caps the size a scene is drawn at, as a multiple of your largest screen. Lower saves video memory. It never enlarges anything; turning it off can remove blur this cap caused.",
-        "ptr": "a new saved setting (RENDER_RESOLUTION stays the fallback for old files), LWE_SSFACTOR",
+        "ptr": "SSFACTOR (RENDER_RESOLUTION is still read from older files), LWE_SSFACTOR",
     },
     {
         "name": "effectclamp",
@@ -592,7 +592,7 @@ SETTINGS: tuple[dict[str, str], ...] = (
         "scope": "global and per wallpaper",
         "when": "restart, or the next show for one wallpaper",
         "what": "The same cap for glow, blur and the other effect layers, set on its own.",
-        "ptr": "a new saved setting (RENDER_RESOLUTION stays the fallback for old files), LWE_CLAMPCOMPOSITES",
+        "ptr": "CLAMPCOMPOSITES (RENDER_RESOLUTION is still read from older files), LWE_CLAMPCOMPOSITES",
     },
     {
         "name": "texturecache",

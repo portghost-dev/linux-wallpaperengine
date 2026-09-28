@@ -1,7 +1,8 @@
 """lwe help: each screen through cli.main in this process, byte for byte against the fixture screens
 in tests/fixtures/help (help resclamp still prints its fixed page), a page made from every command, setting
 and per-wallpaper row, five of them pinned in tests/fixtures/help/pages, help remove giving the remove
---playlist page, and help --debug through a fake engine named by ENGINE_BIN.
+--playlist page, help --debug through a fake engine named by ENGINE_BIN, and --help, -h and --h giving the
+main screen.
 
 The environment is rebuilt from nothing before any lwe_ui import: HOME, the XDG folders, the engine
 socket and PATH all point into a scratch folder, so the fake engine that help --debug starts inherits
@@ -72,6 +73,32 @@ class CliHelpTest(unittest.TestCase):
                     self.assertEqual(code, 0, err)
                     self.assertEqual(out.encode("utf-8"), (FIXTURES / f"{screen}.txt").read_bytes())
                     self.assertEqual(err, "")
+
+    def test_help_flags_print_the_main_screen(self) -> None:
+        main = (FIXTURES / "main.txt").read_bytes()
+        for flag in ("--help", "-h", "--h"):
+            for flags, stamp in (((), None), (("-j",), None), ((), "0.0.1")):
+                with self.subTest(flag=flag, flags=flags, stamp=stamp):
+                    out, err = io.StringIO(), io.StringIO()
+                    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                        code = self.cli.main([flag, *flags], sender_stamp=stamp)
+                    self.assertEqual(code, 0, err.getvalue())
+                    self.assertEqual(out.getvalue().encode("utf-8"), main)
+                    self.assertEqual(err.getvalue(), "")
+
+    def test_all_names_the_saved_clamp_settings(self) -> None:
+        code, out, err = self._help("--all")
+        self.assertEqual(code, 0, err)
+        text = " ".join(out.split())
+        for key in ("SSFACTOR", "CLAMPCOMPOSITES"):
+            with self.subTest(key=key):
+                self.assertIn(f"Points to {key} (RENDER_RESOLUTION is still read from older files), LWE_{key}.",
+                              text)
+        from lwe_ui.cli import vocabulary
+        rows = {r["name"]: r["ptr"] for r in vocabulary.SETTINGS}
+        self.assertEqual(rows["resclamp"], "SSFACTOR (RENDER_RESOLUTION is still read from older files), LWE_SSFACTOR")
+        self.assertEqual(rows["effectclamp"],
+                         "CLAMPCOMPOSITES (RENDER_RESOLUTION is still read from older files), LWE_CLAMPCOMPOSITES")
 
     def test_debug_prints_the_engine_switch_list_under_the_lwe_header(self) -> None:
         self._engine(f"exec /bin/cat '{FIXTURES / 'engine-debug.txt'}'\n")

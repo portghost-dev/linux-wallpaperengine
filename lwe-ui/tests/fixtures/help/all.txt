@@ -28,11 +28,11 @@ Every setting: its values, its default, and the engine name it points to.
   layer                       background | bottom | top | overlay. Default bottom. Points to
                               ENGINE_LAYER.
   resclamp                    0 to 4, decimals allowed  (1 is your screen size; 0 or below is no
-                              cap). Default 1. Points to a new saved setting (RENDER_RESOLUTION
-                              stays the fallback for old files), LWE_SSFACTOR.
+                              cap). Default 1. Points to SSFACTOR (RENDER_RESOLUTION is still read
+                              from older files), LWE_SSFACTOR.
   effectclamp                 0 to 4, decimals allowed  (1 is your screen size; 0 or below is no
-                              cap). Default 1. Points to a new saved setting (RENDER_RESOLUTION
-                              stays the fallback for old files), LWE_CLAMPCOMPOSITES.
+                              cap). Default 1. Points to CLAMPCOMPOSITES (RENDER_RESOLUTION is still
+                              read from older files), LWE_CLAMPCOMPOSITES.
   texturecache                on | off | toggle. Default on. Points to ENGINE_TEXCOMP, TEXCOMP,
                               LWE_TEXCOMP.
   texturedetail               auto | full. Default auto. Points to TEXTURE_DETAIL, LWE_TEXDETAIL.

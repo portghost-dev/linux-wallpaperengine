@@ -21,14 +21,15 @@ compositor's frame callbacks, configured entirely at launch time.
 This fork turns that into a small system of cooperating processes:
 
 ```
-                        ┌─────────────────────────────────────────┐
-                        │  lwe-ui  (control panel, PySide6/QML)   │
-                        │  small tray process + on-demand window; │
-                        │  manages its systemd unit                │
-                        └───────────────┬─────────────────────────┘
-                                        │ JSON lines over Unix socket
-                                        │ ($XDG_RUNTIME_DIR/lwe/engine.sock)
-                                        ▼
+┌────────────────────┐  ┌─────────────────────────────────────────┐
+│  lwe  (shell)      │  │  lwe-ui  (control panel, PySide6/QML)   │
+│  the engine binary │  │  small tray process + on-demand window; │
+│  by name: status,  │  │  manages its systemd unit                │
+│  off, on itself;   │  └───────────────┬─────────────────────────┘
+│  other verbs via   │                  │ JSON lines over Unix socket
+│  lwe-ui --lwe      │                  │ ($XDG_RUNTIME_DIR/lwe/engine.sock)
+└─────────┬──────────┘                  │
+          ▼                             ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  linux-wallpaperengine  (the engine; one process, one thread owns the    │
 │  loop, a worker pool simulates particles inside the frame)               │
@@ -181,7 +182,11 @@ replays it through the same core paths a client `show` takes
 therefore comes back on the wallpaper that was actually on screen. A restart is invisible
 without any client connected. A crash-loop guard tracks boot survival in
 `boot-history.json`: when the last two boots died within 60 seconds of starting,
-restore is refused and the engine boots idle, naming the re-arm path in its log.
+restore is refused and the engine boots idle, naming the re-arm path in its log. It then
+holds its automatic wallpaper changes, the lane timer, the schedule and any show, next or
+prev marked automatic, and reports `restore_refused` in status, until a show, next or prev
+without that mark, or a playlist switch marked manual, succeeds
+(`Application/BootGuard.cpp::release`).
 systemd starts the engine at graphical-session; no client needs to exist.
 
 `--api-socket` alone gives you the socket with a normal (wallpapered) boot.
@@ -210,7 +215,7 @@ project first, then invokes `applyShowCore`
 
 `rotate-set` replaces the whole playlist atomically; each entry carries the full
 per-show vocabulary. The engine then owns the schedule: sequential, shuffle (full
-permutation before reshuffle) and static, with random accepted for one release, and `avoid_repeat` re-rolls against the
+permutation before reshuffle) and static, with random accepted as another name for shuffle, and `avoid_repeat` re-rolls against the
 current display id. Disabling freezes the countdown: re-pushing an unchanged disabled
 set preserves the remaining time (a changed set freezes at the full interval), and
 re-enabling the same set resumes where it froze via a backdated clock
@@ -232,8 +237,8 @@ Fullscreen, AppCondition }`, `WallpaperApplication.h::ReleaseReason`):
   down, with "driver does not support releasing outputs".
 - **Deadman switch** - after the first `ping` is ever seen, if both pings and renders
   stop for `LWE_DEADMAN` seconds (default 300), outputs release themselves where the
-  driver can release them (the Wayland desktop; elsewhere the engine logs that once and
-  does nothing more): the orphan
+  driver can release them (the Wayland desktop; elsewhere the engine logs that once per
+  stall and does nothing more): the orphan
   reflex for "the panel died, don't burn GPU forever" (`tickDeadman`, WallpaperApplication.cpp::tickDeadman).
   A ping under a Deadman hold re-acquires; under a Verb hold it does not.
 - **Fullscreen stop** - when the live policy is `stop` and a relevant fullscreen app
@@ -323,7 +328,11 @@ hygiene.
 
 The `wp<workshopId>` URL scheme universe is enumerated from the wallpaper library at
 spawn and baked into the service's config, so a helper can only ever serve wallpapers
-that were in the library when it started.
+that were in the library when it started. Each wallpaper's scheme serves only its own
+folder, its scene.pkg when that is a real package file inside the folder, and the assets
+folder, never the process's working folder (`AssetLocator.cpp::setupWebAssetLocator`); the
+generated service runs the engine and the web service in their own runtime folder,
+`$XDG_RUNTIME_DIR/lwe-engine`.
 
 ---
 
@@ -336,8 +345,9 @@ is to be the daemon API's reference client and the system's owner:
 - It **generates and manages** `~/.config/systemd/user/lwe-engine.service` and the
   engine's env file (`engine/daemon_unit.py`), reconciling drift at every start. The
   restart-class engine settings live there, among them the resolution cap as two saved numbers,
-  `SSFACTOR` for the scene and `CLAMPCOMPOSITES` for the effect buffers (`Resolution clamp` and
-  `Effect clamp` on Engine > Advanced), each at most 4 with 0 or below off; a 1 writes no line, the
+  `SSFACTOR` for the scene and `CLAMPCOMPOSITES` for the effect buffers (`Render resolution limit`
+  and `Effect resolution limit` on Engine > Advanced, sliders from Off to 2.00 whose chip takes a
+  typed value from 0 to 2 or off), each at most 4 with 0 or below off; a 1 writes no line, the
   engine's default. A settings file that lacks a number, or holds one that is not finite, reads it from
   its three-state `RENDER_RESOLUTION` word: everything clamped is 1 and 1, composites exempt 1 and 0,
   and off 0 and 0.
@@ -347,7 +357,8 @@ is to be the daemon API's reference client and the system's owner:
   environment; a value given as a launch flag never counts); one tap restarts the service in place for
   every row that is pending.
   Per wallpaper, the scene editor's `Quality and memory` rule sets the two clamp numbers
-  (`Resolution clamp` and `Effect clamp`, picked or typed, 0 or below saved as 0) and the texture
+  (`Render resolution limit` and `Effect resolution limit`, the same sliders, showing Global while
+  the wallpaper inherits) and the texture
   compression and detail switches; a chosen value rides the show and the engine resolves it at
   scene load, an absent one inherits the engine's launch value (the flag when given, else the
   environment), and in a wallpaper file that carries a `RENDER_RESOLUTION` word a clamp with no
@@ -363,10 +374,17 @@ is to be the daemon API's reference client and the system's owner:
   collected in one registry, with every remaining config file named alongside the reason it
   stays behind, so a store that forgets a file its writers produce, or a storage module
   that writes and declares nothing, fails the ownership test instead of shipping. The
-  manifest carries each store's schema, so a later build can read what this one held, and
-  the first act of a restore is an export of the configuration as this build reads it,
-  kept under the state dir with the newest five, refused with the file named if any store
-  cannot be read.
+  manifest carries each store's schema, so a later build can read what this one held.
+  Before a restore writes anything it exports the configuration as this build reads it,
+  kept under the state dir with the newest five, and refuses with the file named if any
+  store cannot be read; an import that fails after that export keeps it as the way back,
+  named in `recovery.json`, and later imports take no new snapshot until one succeeds.
+- It **answers the shell**. The engine binary run under the name `lwe` answers --version
+  itself and status, off and on over the socket, and hands every other command to the panel's
+  command entry (`lwe-ui --lwe`), which runs without Qt, refuses a sender from another
+  build, and changes the same stores as the window. Every writer, window, tray or command,
+  takes that store's lock and changes only its own line, so two writers at once never undo
+  each other.
 - It **logs to files as it runs**: the state dir is a tree with one real-time log per
   subsystem under `logs/` (panel, developer exhibits, bench; the engine and CEF logs join
   from the engine side), so a crash leaves a full trail on disk without the panel's console.

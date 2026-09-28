@@ -28,6 +28,7 @@ USAGE = 3
 PIPE_CLOSED = 141
 
 _JSON_FLAGS = ("-j", "--json")
+_HELP_FLAGS = ("--help", "-h", "--h")
 
 
 class _Unsafe(dict):
@@ -134,6 +135,8 @@ def _main(argv: list[str], sender_stamp: str | None, cwd_entered: bool) -> int:
     words = [w for w in argv if w not in _JSON_FLAGS]
     ctx = Context(len(words) != len(argv), _Cleaned(sys.stdout), _Cleaned(sys.stderr), sender_stamp,
                   cwd_entered)
+    if words and words[0] in _HELP_FLAGS:
+        words = ["help", *words[1:]]
     if not words:
         ctx.error("usage: lwe [-j] <command> [value ...]")
         return USAGE
