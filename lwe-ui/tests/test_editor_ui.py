@@ -461,7 +461,7 @@ def main() -> None:
             QTest.qWait(80)
             assert win.property("currentView") == "editor", (text, "Escape left the editor")
             assert (opened, typed.hasActiveFocus()) == (True, False), (text, opened)
-        assert "PROP_mytint" not in _wp.load_set("synthwp_props"), "Escape in the hex entry commits nothing"
+        assert "mytint" not in _wp.load_set("synthwp_props")["props"], "Escape in the hex entry commits nothing"
         view_item.forceActiveFocus()
         QTest.keyClick(win, Qt.Key.Key_Escape)
         QTest.qWait(80)
@@ -469,6 +469,72 @@ def main() -> None:
         win.setProperty("currentView", "editor")
         QTest.qWait(80)
         print("OK Escape - an open entry cancels and the editor stays; with no entry open it leaves the editor")
+
+        # the text property entry and the title entry: a tap left untouched, or Escaped, writes nothing
+        # and keeps the editor; a typed change closed with Return saves
+        from lwe_ui.storage import meta as _meta
+        _wp.update_set("synthwp_props", {"PROP_mylabel": None})
+        editor.open("synthwp_fit")
+        editor.open("synthwp_props")
+        QTest.qWait(300)
+        stores = (paths.wp_file("synthwp_props"), paths.meta_file())
+
+        def snapshot():
+            return tuple(p.read_text(encoding="utf-8") if p.exists() else None for p in stores)
+
+        text_entry = next(i for i in walk(view_item) if i.property("text") == "hi"
+                          and i.metaObject().className().startswith("QQuickTextInput"))
+        title = editor.property("title")
+        title_entry = next(i for i in walk(view_item) if i.property("text") == title
+                           and "TextField" in i.metaObject().className())
+        before = snapshot()
+        for typed, shown in ((text_entry, "hi"), (title_entry, title)):
+            tap(typed)
+            opened = typed.hasActiveFocus()
+            view_item.forceActiveFocus()
+            QTest.qWait(80)
+            assert (opened, snapshot()) == (True, before), (shown, "a tap left untouched writes nothing")
+            tap(typed)
+            typed.setProperty("text", "typed")
+            QTest.keyClick(win, Qt.Key.Key_Escape)
+            QTest.qWait(80)
+            assert (snapshot(), typed.property("text"), typed.hasActiveFocus(), win.property("currentView")) == \
+                (before, shown, False, "editor"), (shown, "Escape writes nothing and keeps the editor")
+        tap(text_entry)
+        text_entry.setProperty("text", "bye")
+        QTest.keyClick(win, Qt.Key.Key_Return)
+        QTest.qWait(80)
+        tap(title_entry)
+        title_entry.setProperty("text", "Renamed")
+        QTest.keyClick(win, Qt.Key.Key_Return)
+        QTest.qWait(80)
+        saved = (_wp.load_set("synthwp_props")["props"].get("mylabel"), _meta.get("synthwp_props").get("title"))
+        assert saved == ("bye", "Renamed"), saved
+        editor.open("synthwp_fit")
+        editor.open("synthwp_props")
+        QTest.qWait(300)
+        text_entry = next(i for i in walk(view_item) if i.property("text") == "bye"
+                          and i.metaObject().className().startswith("QQuickTextInput"))
+        tap(text_entry)
+        text_entry.setProperty("text", "")
+        QTest.keyClick(win, Qt.Key.Key_Return)
+        QTest.qWait(80)
+        view_item.forceActiveFocus()
+        QTest.qWait(80)
+        cleared = (text_entry.property("text"), _wp.load_set("synthwp_props")["props"].get("mylabel"))
+        assert cleared == ("hi", None), ("a cleared entry shows the author's value and pins nothing", cleared)
+        editor.setProp("mylabel", "bye")
+        QTest.qWait(80)
+        tap(text_entry)
+        text_entry.setProperty("text", "zzz")
+        QTest.keyClick(win, Qt.Key.Key_Escape)
+        QTest.qWait(80)
+        escaped = text_entry.property("text")
+        editor.setProp("mylabel", "")
+        QTest.qWait(80)
+        followed = (escaped, text_entry.property("text"), _wp.load_set("synthwp_props")["props"].get("mylabel"))
+        assert followed == ("bye", "hi", None), ("after Escape the entry follows its row again", followed)
+        print("OK text and title entries - a tap left untouched or Escaped writes nothing; a typed change saves")
     finally:
         for k, v in orig.items():
             if v is None:

@@ -1148,6 +1148,7 @@ Rectangle {
                                                                                                 : Theme.border)
                                             TextInput {
                                                 id: propText
+                                                property string openedWith: ""
                                                 anchors.fill: parent
                                                 anchors.leftMargin: 8
                                                 anchors.rightMargin: 8
@@ -1158,16 +1159,22 @@ Rectangle {
                                                 selectByMouse: true
                                                 text: String(propRow.modelData.value === undefined
                                                              ? "" : propRow.modelData.value)
+                                                onActiveFocusChanged: if (activeFocus) openedWith = text
                                                 Keys.onShortcutOverride: function(event) {
                                                     event.accepted = event.key === Qt.Key_Escape
                                                 }
                                                 Keys.onEscapePressed: {
-                                                    propText.text = String(propRow.modelData.value === undefined
-                                                                           ? "" : propRow.modelData.value);
+                                                    propText.text = Qt.binding(function() {
+                                                        return String(propRow.modelData.value === undefined
+                                                                      ? "" : propRow.modelData.value); });
                                                     propText.focus = false;
                                                 }
-                                                onEditingFinished:
-                                                    editor.setProp(propRow.modelData.name, propText.text)
+                                                onEditingFinished: {
+                                                    if (propText.text === propText.openedWith)
+                                                        return;
+                                                    editor.setProp(propRow.modelData.name, propText.text);
+                                                    propText.openedWith = propText.text;
+                                                }
                                             }
                                         }
                                     }
@@ -1855,13 +1862,25 @@ Rectangle {
                         label: "Title"
                         TextField {
                             id: titleField
+                            property string openedWith: ""
                             width: 170; height: 24
                             text: editor.title
                             color: Theme.textPrimary; font.pixelSize: Theme.fontControl
                             background: Rectangle { color: Theme.inputWell; radius: Theme.radiusSm
                                 border.width: 1
                                 border.color: parent.activeFocus ? Theme.borderStrong : Theme.border }
-                            onEditingFinished: editor.setTitle(text)
+                            onActiveFocusChanged: if (activeFocus) openedWith = text
+                            Keys.onShortcutOverride: function(event) { event.accepted = event.key === Qt.Key_Escape }
+                            Keys.onEscapePressed: {
+                                titleField.text = Qt.binding(function() { return editor.title; });
+                                titleField.focus = false;
+                            }
+                            onEditingFinished: {
+                                if (titleField.text === titleField.openedWith)
+                                    return;
+                                editor.setTitle(titleField.text);
+                                titleField.openedWith = titleField.text;
+                            }
                         }
                     }
                     // Tags: the chip flow ends in a `+` pill that becomes an inline input in
