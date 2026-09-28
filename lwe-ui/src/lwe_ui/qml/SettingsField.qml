@@ -47,10 +47,12 @@ Rectangle {
             text: field.storeText
             Keys.onReturnPressed: field.entered(input.text)
             Keys.onEnterPressed: field.entered(input.text)
+            // the field takes Escape before the window does, so Escape never leaves the view
+            Keys.onShortcutOverride: function(event) { event.accepted = event.key === Qt.Key_Escape }
             Keys.onEscapePressed: { input.text = field.storeText; input.focus = false; }
             // hidden with focus, as when the view is left: closes as Escape does
             onVisibleChanged: if (!visible && activeFocus) { input.text = field.storeText; input.focus = false; }
-            onActiveFocusChanged: if (!activeFocus) field.entered(input.text)
+            onActiveFocusChanged: if (!activeFocus && input.text !== field.storeText) field.entered(input.text)
         }
         Label {
             id: suffixLabel

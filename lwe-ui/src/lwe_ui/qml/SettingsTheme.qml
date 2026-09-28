@@ -173,6 +173,11 @@ Column {
                             text = bound;
                         focus = false;
                     }
+                    // Escape, or the view hiding while the field is open, puts the stored color back
+                    // and saves nothing; the field takes Escape before the window does
+                    Keys.onShortcutOverride: function(event) { event.accepted = event.key === Qt.Key_Escape }
+                    Keys.onEscapePressed: { text = bound; focus = false; }
+                    onVisibleChanged: if (!visible && activeFocus) { text = bound; focus = false; }
                     onActiveFocusChanged: if (!activeFocus && text !== bound) {
                         if (!themeBridge.setRoleLive(roleRow.modelData.role, text))
                             text = bound;

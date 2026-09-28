@@ -119,7 +119,8 @@ def main() -> None:
         from lwe_ui.models import ThemeBridge
         settings_bridge = SettingsBridge(backend, import_bridge)
         engine.rootContext().setContextProperty("settingsBridge", settings_bridge)
-        engine.rootContext().setContextProperty("themeBridge", ThemeBridge(tokens))
+        theme_bridge = ThemeBridge(tokens)   # held: an unreferenced bridge is collected under QML
+        engine.rootContext().setContextProperty("themeBridge", theme_bridge)
         engine.load(QUrl.fromLocalFile(str(_QML_DIR / "Main.qml")))
         assert engine.rootObjects(), "Main.qml failed to load"
         win = engine.rootObjects()[0]
@@ -669,6 +670,21 @@ def main() -> None:
         QTest.qWait(120)
         typed = _wp.load_set("synthwp_lo").get("SPEED")
         assert (erased, typed) == (None, 3.0), (erased, typed)
+        # a chip left by a click elsewhere sends a changed text, and a cleared one returns the row to Global
+        title_entry = next(i for i in walk(view_item) if "TextField" in i.metaObject().className()
+                           and i.property("text") == "synthwp_lo")
+        tap(speed_chip)
+        entry(speed_chip).setProperty("text", "4")
+        tap(title_entry)
+        QTest.qWait(120)
+        left_typed = _wp.load_set("synthwp_lo").get("SPEED")
+        tap(speed_chip)
+        entry(speed_chip).setProperty("text", "")
+        tap(title_entry)
+        QTest.qWait(120)
+        view_item.forceActiveFocus()
+        QTest.qWait(80)
+        assert (left_typed, _wp.load_set("synthwp_lo").get("SPEED")) == (4.0, None), left_typed
         blanks = {}
         for key, seat, blank in (("VOLUME", lambda: editor.setVolumeValue(7), ""),
                                  ("FIT_ZOOM", lambda: editor.setFit("zoom", "1.5"), " "),
@@ -926,19 +942,110 @@ def main() -> None:
         to_view("library")
         fielded = (focus_name(), field_entry.hasActiveFocus(), settings.load().get("DETECT_INTERVAL_SEC") == interval)
         settings_view.setProperty("pageIndex", 1)
+        # the header search, and the deck bar when it holds focus, keep it across a switch, so typing
+        # goes on where it was
+        search = win.findChild(QQuickItem, "headerSearch")
+        to_view("editor")
+        search.forceActiveFocus()
+        QTest.keyClick(win, Qt.Key.Key_H)
+        to_view("library")
+        searched = (focus_name(), search.property("text"))
+        esc()
+        searched += (search.property("text"),)
+        deck_bar = win.findChild(QQuickItem, "deckBar")
+        to_view("editor")
+        deck_bar.forceActiveFocus()
+        to_view("library")
+        decked = focus_name()
+        to_view("editor")
+        to_view("library")
         # focus held outside the views stays there: the deck popup keeps its Escape across a switch
         QMetaObject.invokeMethod(popup_root, "open")
         QTest.qWait(300)
         to_view("settings")
         kept = (popup_root.property("activeFocus"), esc(), popup_root.property("visible"))
         QTest.qWait(200)
-        assert (f1, boxed, f2, f3, titled, propped, fielded, kept) == \
+        assert (f1, boxed, f2, f3, titled, propped, fielded, searched, decked, kept) == \
             (("libraryView", False, False, None), ("libraryView", False, True), ("libraryView", False, False, True),
              ("settingsView", "library"), ("libraryView", False, "synthwp_lo", None), ("libraryView", True),
-             ("libraryView", False, True), (True, "settings", False)), \
-            (f1, boxed, f2, f3, titled, propped, fielded, kept)
+             ("libraryView", False, True), ("headerSearch", "h", ""), "deckBar", (True, "settings", False)), \
+            (f1, boxed, f2, f3, titled, propped, fielded, searched, decked, kept)
         print("OK view switch - an entry open when the view changes closes without saving, and the view shown "
               "takes focus and the next Escape")
+
+        # the theme hex field, the Developer label and the Settings text field take Escape themselves:
+        # the stored text comes back, nothing is saved and the view stays; the next Escape leaves.
+        # A view switch while one is open closes it the same way
+        from lwe_ui.storage import themes as _theme_store
+
+        def focus_name():
+            h = win.activeFocusItem()
+            return h.objectName() if h is not None else None
+
+        saves = []
+        real_save = backend.save_setting
+
+        def recorded_save(key, value, write=None):
+            saves.append((key, value))
+            return real_save(key, value, write)
+        backend.save_setting = recorded_save
+
+        def type_into(item, text):
+            item.forceActiveFocus()
+            item.selectAll()
+            for ch in text:
+                QTest.keyClick(win, ord(ch))
+            QTest.qWait(60)
+
+        def settings_page(n):
+            to_view("settings")
+            page_view = win.findChild(QQuickItem, "settingsView")
+            page_view.setProperty("pageIndex", n)
+            QTest.qWait(300)
+            return page_view
+
+        def hex_field():
+            return next(i for i in walk(settings_page(3)) if str(i.property("objectName") or "").startswith("themeHex_")
+                        and i.isVisible())
+
+        def label_field():
+            to_view("developer")
+            return next(i for i in walk(win.contentItem()) if i.property("objectName") == "devSlotLabel"
+                        and i.isVisible())
+
+        def text_field():
+            field_item = next(i for i in walk(settings_page(2)) if i.metaObject().className().startswith("SettingsField"))
+            return next(i for i in walk(field_item) if i.metaObject().className().startswith("QQuickTextInput"))
+
+        assert settings_bridge.commit("DETECT_MODE", "interval")
+        stores = (lambda: _theme_store.load_config().get("overlays"),
+                  lambda: [s.label for s in dev.slots.values()],
+                  lambda: settings.load().get("DETECT_INTERVAL_SEC"))
+        escaped, switched = [], []
+        for (find_field, typed, view_name), store in zip(((hex_field, "#00ff00", "settings"),
+                                                         (label_field, "zz", "developer"),
+                                                         (text_field, "77", "settings")), stores):
+            before = store()
+            saves.clear()
+            field_item = find_field()
+            shown = field_item.property("text")
+            type_into(field_item, typed)
+            first = esc()
+            escaped.append((first, field_item.property("text") == shown, field_item.hasActiveFocus(),
+                            store() == before, list(saves), esc()))
+            field_item = find_field()
+            type_into(field_item, typed)
+            to_view("library")
+            switched.append((focus_name(), field_item.property("text") == shown, store() == before, list(saves)))
+        backend.save_setting = real_save
+        settings_page(1)
+        to_view("library")
+        assert (escaped, switched) == \
+            ([("settings", True, False, True, [], "library"), ("developer", True, False, True, [], "library"),
+              ("settings", True, False, True, [], "library")],
+             [("libraryView", True, True, [])] * 3), (escaped, switched)
+        print("OK own Escape - the theme hex field, the Developer label and the Settings field cancel on Escape "
+              "and on a view switch, saving nothing")
 
         # the deck popup's own entries keep the same rules. Its 2 s status poll would walk it onto
         # the engine's wallpaper (none here) mid-test, so the poll is held still

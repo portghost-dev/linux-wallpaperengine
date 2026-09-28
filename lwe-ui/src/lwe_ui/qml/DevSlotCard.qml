@@ -297,6 +297,15 @@ Rectangle {
                     border.width: 1
                     border.color: labelField.activeFocus ? Theme.borderStrong : Theme.border
                 }
+                // Escape, or the view hiding while the field is open, puts the label back and saves
+                // nothing; the field takes Escape before the window does
+                function cancelEntry() {
+                    labelField.text = Qt.binding(function() { return card.st.label || card.side; });
+                    labelField.focus = false;
+                }
+                Keys.onShortcutOverride: function(event) { event.accepted = event.key === Qt.Key_Escape }
+                Keys.onEscapePressed: labelField.cancelEntry()
+                onVisibleChanged: if (!visible && activeFocus) labelField.cancelEntry()
                 onEditingFinished: dev.setLabel(card.side, text)
             }
         }
