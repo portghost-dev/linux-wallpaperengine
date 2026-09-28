@@ -38,7 +38,7 @@ _APP = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
 
 from test_change_runner import Recorder, status  # noqa: E402
 from lwe_ui import constants as C, deck_popup, editor, models, settings_bridge  # noqa: E402
-from lwe_ui.engine import daemon_unit, push  # noqa: E402
+from lwe_ui.engine import daemon_unit, marker, push  # noqa: E402
 from lwe_ui.storage import migrate, paths, playlists, settings, wp  # noqa: E402
 
 
@@ -69,6 +69,7 @@ class VolumeRangeTest(unittest.TestCase):
                         mock.patch.object(daemon_unit.subprocess, "run", lambda argv, **kw: self.runs.append(argv))):
             patcher.start()
             self.addCleanup(patcher.stop)
+        marker.record_served(4242)
         self.backend = models.Backend()
 
     def tearDown(self) -> None:

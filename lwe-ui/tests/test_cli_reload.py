@@ -1,6 +1,7 @@
 """lwe reload: every file checked from its raw text; any error applies and writes nothing; otherwise what
 changed since reload's own snapshot, the warnings and the cleanup are printed, the store is applied
-through sync_all with the re-show, engine-env is rebuilt, and the restart line names what waits.
+through sync_all with the re-show, engine-env is rebuilt, and the restart line names what waits. Under the
+crash-loop brake the reload sends no show and no rotation start, and the command prints the reason.
 
 Each form runs through cli.main in this process with HOME and the XDG folders at scratch
 (_cli_env.scratch_home), daemon_unit's subprocess call replaced by a recorder, one screen faked, the
@@ -104,6 +105,17 @@ class ReloadTest(unittest.TestCase):
         self.assertEqual(sorted(self.snapshot_files()), ["playlists/main.conf", "settings.conf"])
         self.assertIn("show", self.sent(engine), "the reload re-shows the wallpaper on screen")
         self.assertEqual(self.lwe("reload")[1].splitlines(), [SAME, "Applied."])
+
+    def test_under_the_crash_loop_brake_the_reload_sends_no_show_and_says_why(self) -> None:
+        import time
+        from lwe_ui.engine import marker, push
+        marker.record_served(os.getpid() + 1, 1, time.time() - 10.0)
+        engine = self.engine(served=False)
+        code, out, err = self.lwe("reload")
+        self.assertEqual((code, out.splitlines()[-1], err), (0, "Applied.", push.BRAKED + "\n"))
+        self.assertNotIn("show", self.sent(engine))
+        self.assertNotIn("lanes-set", self.sent(engine))
+        self.assertEqual(marker.served_record()[::2], (os.getpid(), 2))
 
     def test_a_hand_edit_prints_what_changed_and_applies(self) -> None:
         engine = self.engine()

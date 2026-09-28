@@ -1000,24 +1000,25 @@ class Backend(QObject):
         else:
             self._delivery_owners.discard(owner)
 
-    def _drain(self) -> None:
-        """The poll's drain: while the marker has classes and no readiness wait or bridge delivery
-        is due, the window's bundle without waiting for sync. Failed drains of one generation are
-        retried after 5 s, 15 s and 45 s, and when the retry after the 45 s wait fails, none follows
-        until a writer raises the generation. A run that found sync busy, an unresponsive status or
-        another build's engine counts nothing; an away one counts, as the poll has just read
-        status."""
+    def _drain(self, pid: Any = None) -> None:
+        """The poll's drain: while no readiness wait or bridge delivery is due, the window's bundle
+        without waiting for sync when the marker has classes, or when `pid`, the engine the poll
+        just read, is not the marker's served pid. Failed drains of one generation are retried after
+        5 s, 15 s and 45 s, and when the retry after the 45 s wait fails, none follows until a writer
+        raises the generation. A run that found sync busy, an unresponsive status or another build's
+        engine counts nothing; an away one counts, as the poll has just read status."""
         if self._ready_timer.isActive() or self.delivery_due():
             return
         try:
             state = marker.read()
+            unserved = isinstance(pid, int) and not isinstance(pid, bool) and marker.served() != pid
         except OSError:
             return
-        if not state["classes"]:
+        if not state["classes"] and not unserved:
             return
         if state["generation"] != self._drain_generation:
             self._drain_generation, self._drain_failures, self._drain_after = state["generation"], 0, 0.0
-        if self._drain_failures >= 4 or monotonic() < self._drain_after:
+        if state["classes"] and (self._drain_failures >= 4 or monotonic() < self._drain_after):
             return
         try:
             outcome = push.sync_all("window", wait_s=0)
@@ -1762,9 +1763,6 @@ class Backend(QObject):
                 result["state"] = "up"
         # Socket overlay (status v2): the engine is ground truth for what is rendering.
         # This poll is also the UI's heartbeat (feeds the engine's dead-man reflex).
-        # The pid tracker below pushes policy ONCE per panel life, on first sight of
-        # an engine; crash recovery is the engine's own (state restore + crash-loop
-        # guard), never the panel's.
         try:
             try:
                 api_client.ping()
@@ -1781,17 +1779,14 @@ class Backend(QObject):
                     self._engine_pid_seen = pid
                     if first_sight:
                         # PANEL start: push the panel's stored policy once, so opening
-                        # the panel heals a drifted or state-lost engine. Engine
-                        # RE-arrivals get nothing: the engine restores its own state
-                        # on boot, and an automatic re-push (or re-show) here would
-                        # defeat its crash-loop guard by feeding the loop.
+                        # the panel heals a drifted or state-lost engine.
                         try:
                             self._note(push.sync_all("window", wait_s=0, defer_current=self.delivery_due()),
                                        schedule=True)
                         except OSError:
                             pass
                 if not first_sight:
-                    self._drain()
+                    self._drain(pid)
 
                 # the fullscreen ignore-list is a FILE the user edits in their own
                 # editor, so there is no save hook to hang a push on. Watch its

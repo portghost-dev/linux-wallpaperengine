@@ -353,9 +353,7 @@ class EngineSyncTest(unittest.TestCase):
         self.assertEqual(self.backend._fullscreen_ignore_ids(), ["steam", "org.mozilla.firefox"],
                          "comments and blank lines dropped, entries stripped")
 
-    def test_panel_start_arms_the_globals_once(self) -> None:
-        # the engine restores its own globals on restart (state persistence); the
-        # panel arms them exactly once per panel life, on first sight of an engine
+    def test_panel_start_arms_the_globals_and_each_engine_not_served_gets_them_once(self) -> None:
         got = self._capture_globals()
         self._seed_playlist(["111"])
         settings.save({**settings.load(), "PARTICLES_DEFAULT": False, "ENGINE_FPS": "24"})
@@ -369,7 +367,10 @@ class EngineSyncTest(unittest.TestCase):
         got.clear()
         api_state["pid"] = 200
         self.backend.status()
-        self.assertEqual(got, {}, "re-arrival pushes nothing - the engine restored itself")
+        self.assertEqual(got.get("fps"), 24, "an engine the marker does not name as served gets the bundle")
+        got.clear()
+        self.backend.status()
+        self.assertEqual(got, {}, "once served, the same engine gets nothing more")
 
 
     def _live_dev(self):

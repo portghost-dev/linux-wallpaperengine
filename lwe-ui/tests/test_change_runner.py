@@ -185,6 +185,7 @@ class ChangeRunnerTest(unittest.TestCase):
         playlists.save("night", {"NAME": "Night", "MODE": "sequential", "INTERVAL": 600, "UNIT": "min",
                                  "MEMBERS": "333"})
         settings.update({"ACTIVE_PLAYLIST": "main", "SCHEDULE": SCHEDULE, "SCHEDULE_ENABLED": False})
+        marker.record_served(4242)
 
     @contextlib.contextmanager
     def engine(self, reply: dict | None, status_class: str = "ok"):

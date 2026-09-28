@@ -217,6 +217,7 @@ def _test_save_first_and_a_refused_verb_says_so(sb) -> None:
     from lwe_ui.engine import marker
     settings.save({**settings.load(), "ENGINE_VOLUME": 20})
     marker.clear(marker.read()["generation"])   # the earlier commits here left their work pending
+    marker.record_served(1)
     failures: list = []
     sb.commitFailed.connect(lambda keys, reason: failures.append((list(keys), reason)))
     saved = (api_client.status, api_client.playlist_set, api_client.set_volume)

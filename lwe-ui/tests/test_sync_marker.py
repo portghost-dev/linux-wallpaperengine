@@ -10,7 +10,9 @@ changes nothing, and a clear whose directory fsync fails puts the record back an
 marker write syncs the file, replaces it, then syncs the directory. A malformed file, one with
 another version and an empty one read as BUNDLE and CURRENT and are rewritten. A window run
 records a sent playlist only for its generation and pid, and another pid empties the list at a
-run's start. Every child process gets an environment built from scratch.
+run's start. The served pid is written without raising the generation, survives a clear, a writer's
+step, ensure and a sent record, and a file without it reads as none. Every child process gets an
+environment built from scratch.
 
 Run: PYTHONPATH=src python3 tests/test_sync_marker.py
 """
@@ -219,6 +221,26 @@ class SyncMarkerTest(unittest.TestCase):
                 self.assertEqual((state["classes"], state["sent"]), (["BUNDLE", "CURRENT"], EMPTY))
                 self.assertIsInstance(state["generation"], int)
                 self.assertEqual(json.loads(self.file.read_text(encoding="utf-8")), {"version": 1, **state})
+
+    def test_the_served_pid_never_raises_the_generation_and_survives_every_other_write(self) -> None:
+        self.assertIsNone(marker.served())
+        generation = marker.ensure(("BUNDLE",))
+        marker.record_served(4242)
+        self.assertEqual((marker.served(), marker.generation(), marker.read()["classes"]),
+                         (4242, generation, ["BUNDLE"]))
+        self.assertTrue(marker.record_sent(generation, 4242, "main"))
+        marker.start_sent(generation, 5151)
+        self.assertTrue(marker.clear(generation))
+        raised = marker.ensure(("BUNDLE", "CURRENT"))
+        with marker.writing(("BUNDLE",)):
+            pass
+        self.assertEqual(marker.served(), 4242)
+        self.assertEqual(marker.generation(), raised + 1)
+        doc = json.loads(self.file.read_text(encoding="utf-8"))
+        del doc["served"]
+        self.file.write_text(json.dumps(doc), encoding="utf-8")
+        self.assertIsNone(marker.served())
+        self.assertEqual(marker.generation(), raised + 1)
 
     def test_record_sent_refuses_a_stale_generation_and_another_pid(self) -> None:
         stale = marker.ensure(("BUNDLE",))

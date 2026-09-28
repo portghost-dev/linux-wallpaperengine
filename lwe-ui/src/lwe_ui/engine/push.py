@@ -1,7 +1,11 @@
 """The engine pushes, each resolved from the store and sent over the engine socket: a change's
 own push through run_change (the sync marker, the store write, then the requests of the change's
 rows), the bundle that rebuilds the engine from the store (sync_all), engine-only actions under
-the sync lock, and a single show. Plain Python over the store and the resolver; no Qt import.
+the sync lock, and a single show. A delivery sends the whole bundle first to an engine whose pid
+is not the marker's served pid, and a whole bundle records the pid that took it (_unserved,
+_record_served). When the last two engines were each replaced within BRAKE_S of being served, the
+next one's owed bundle leaves out everything that shows a wallpaper (_owe). Plain Python over the
+store and the resolver; no Qt import.
 """
 from __future__ import annotations
 
@@ -177,6 +181,13 @@ def _app_condition_names() -> list[str]:
 
 
 _log = logging.getLogger(__name__)
+
+#: equal to the engine's BOOT_SURVIVED_SECONDS: an engine replaced sooner after being served counts
+BRAKE_S = 60
+BRAKED = ("The engine took your settings but no wallpaper: the last two engines each stopped within 60 s of "
+          "taking them. Show one when you are ready.")
+_now = time.time
+_brake_notes: list[str] = []
 
 _WINDOW_BUDGET_S = 8.0
 _READY_POLL_S = 0.25
@@ -378,6 +389,8 @@ class _Run:
         self.reply: Any = None
         self.clock: tuple[int, int] | None = None
         self.refused_verb: str | None = None
+        self.short = 0
+        self.brake = False
         self._payloads: dict[str, tuple] = {}
 
     def send(self, call: Callable[..., Any], *args: Any, **kwargs: Any) -> bool:
@@ -519,16 +532,20 @@ def _holds_current() -> bool:
 def _bundle(run: _Run, derived: str | None, reshow: bool, reload: bool = False) -> None:
     """sync_all's requests on the run's generation and status. It re-shows when the
     marker holds CURRENT, and for a reload's run whatever the marker holds, since that re-show is
-    the reload's own action and goes out after a budget stop as a change's own rows do."""
+    the reload's own action and goes out after a budget stop as a change's own rows do; a braked
+    run sends no re-show."""
     _bundle_steps(run, derived)
     wid = _on_screen(run.status)
+    if run.brake:
+        return
     if reshow and wid and (run.ended is None if reload else not run.halted() and _holds_current()):
         _reshow(run, wid)
 
 
 def _bundle_steps(run: _Run, derived: str | None) -> None:
     """Steps 2 to 6. A window run records each playlist it transferred in the marker and skips
-    the ones an earlier run of this generation recorded for the same engine pid."""
+    the ones an earlier run of this generation recorded for the same engine pid. A braked run
+    sends the lane's lanes-set only when it would not start rotation."""
     scheduled = _scheduled()
     pid = run.status.get("pid")
     skip: set[str] = set()
@@ -563,7 +580,8 @@ def _bundle_steps(run: _Run, derived: str | None) -> None:
         if derived:
             lane["playlist"] = derived
         lane["enabled"] = run.enabled(derived)
-        _lanes_set(run, lane)
+        if not (run.brake and lane["enabled"]):
+            _lanes_set(run, lane)
     if run.halted():
         return
     s = settings.load()
@@ -711,6 +729,59 @@ def _synced(stack: contextlib.ExitStack, wait_s: float, env: str | None) -> dict
     return status
 
 
+def _unserved(status: dict[str, Any]) -> bool:
+    """Whether the engine that answered `status` is owed the whole bundle: its pid is not the
+    marker's served pid, or none is recorded (an unreadable marker counts as none). A status with
+    no pid owes nothing, since no served pid could be recorded for it."""
+    pid = status.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        return False
+    try:
+        return marker.served() != pid
+    except OSError:
+        return True
+
+
+def _owe(run: _Run) -> None:
+    """An engine the marker does not name as served: BUNDLE and CURRENT ensured, and the run takes
+    the marker's generation, since its whole bundle and re-show deliver everything the marker
+    holds; a marker that cannot be written leaves the run's own generation. The run's short-lived
+    count is one more than the served record's when that record was written less than BRAKE_S ago,
+    else 0; at 2 or more the run is braked: its bundle sends no re-show and no lanes-set that
+    starts rotation, and the reason is logged and, for a command, kept for brake_notes()."""
+    try:
+        run.generation = marker.ensure(("BUNDLE", "CURRENT"))
+    except OSError:
+        pass
+    try:
+        served, at, short = marker.served_record()
+    except OSError:
+        served, at, short = None, None, 0
+    run.short = short + 1 if served is not None and at is not None and _now() - at < BRAKE_S else 0
+    run.brake = run.short >= 2
+    if run.brake:
+        _log.info("engine %s: %s", run.status.get("pid"), BRAKED)
+        if not run.window:
+            _brake_notes.append(BRAKED)
+
+
+def brake_notes() -> list[str]:
+    """The brake reasons command runs of this process kept since the last call, which are then
+    forgotten."""
+    notes = list(_brake_notes)
+    _brake_notes.clear()
+    return notes
+
+
+def _record_served(run: _Run) -> None:
+    """After a bundle whose every request ended ok, with nothing stopped: the engine that answered
+    the run's status is served, with the time now and the run's short-lived count."""
+    pid = run.status.get("pid")
+    if run.all_ok and run.ended is None and not run.stopped and isinstance(pid, int) and not isinstance(pid, bool):
+        with contextlib.suppress(OSError):
+            marker.record_served(pid, run.short, _now())
+
+
 def _finish(run: _Run, env: str | None = None, keep_current: bool = False) -> Outcome:
     """Clear the marker when every request ended ok, CURRENT kept when `keep_current`, and name
     the outcome."""
@@ -750,8 +821,12 @@ def _deliver(ticket: Ticket, defer_current: bool = False) -> Outcome:
         reshow = bool(ticket.wid) and ticket.wid == _on_screen(status) and "wp_build" in rows
         if reshow:
             _adopt_current(run)
-        if ticket.existed or "reload" in rows:
+        owed = _unserved(status)
+        if owed:
+            _owe(run)
+        if owed or ticket.existed or "reload" in rows:
             _bundle(run, derived, reshow=not reshow and not defer_current, reload="reload" in rows)
+            _record_served(run)
         if run.ended is None:
             _rows(run, ticket, derived, reshow)
         return _finish(run, ticket.env, keep_current=defer_current and not reshow)
@@ -833,8 +908,8 @@ def burst_existed(tickets: list[Ticket]) -> bool:
 
 def deliver(ticket: Ticket, defer_current: bool = False) -> Outcome:
     """The second half of run_change for a saved change: sync, the status and version check inside it,
-    the bundle first when a marker existed, the change's push, and the clear when every request
-    ended ok. defer_current is run_change's."""
+    the bundle first when a marker existed or the engine is not the served one, the change's push,
+    and the clear when every request ended ok. defer_current is run_change's."""
     return _deliver(ticket, defer_current)
 
 
@@ -851,7 +926,8 @@ def run_change(locks: Iterable[str], write: Callable[[], Any], rows: Iterable[tu
     SwitchRefused for a manual switch it cannot make; the store locks are taken in rank order; the
     marker is set and held across write(); engine-env is written for a tuning or restart row; the
     store locks are released, highest rank first; then sync, the status and version check inside
-    it, the bundle first when a marker existed, this change's push with each row's own verb last,
+    it, the bundle first when a marker existed or the answering engine is not the served one (with
+    BUNDLE and CURRENT ensured for it), this change's push with each row's own verb last,
     also after a bundle the window's budget stopped, and the clear when every request ended ok. An
     exception from write() reaches the caller with nothing sent, and a marker already set stays.
     defer_current, set while a window delivery is due, leaves the bundle's re-show to that
@@ -870,7 +946,8 @@ def sync_all(run: str, classes: Iterable[str] = ("BUNDLE",), wait_s: float = 2.0
     `classes` names CURRENT (a reload's run); the marker clears when every request ended ok. A
     "window" run keeps an 8 s budget and records its progress in the marker; a "command" run has
     neither. defer_current leaves the re-show and CURRENT to a window delivery that is due, as
-    run_change does."""
+    run_change does. An engine the marker does not name as served gets CURRENT ensured as well,
+    and a bundle whose every request ended ok records the answering pid as served."""
     classes = tuple(classes)
     generation = marker.ensure(classes)
     with contextlib.ExitStack() as stack:
@@ -878,5 +955,8 @@ def sync_all(run: str, classes: Iterable[str] = ("BUNDLE",), wait_s: float = 2.0
         if isinstance(status, Outcome):
             return status
         r = _Run(run, generation, status)
+        if _unserved(status):
+            _owe(r)
         _bundle(r, derived_active(status)[0], reshow=not defer_current, reload="CURRENT" in classes)
+        _record_served(r)
         return _finish(r, keep_current=defer_current)

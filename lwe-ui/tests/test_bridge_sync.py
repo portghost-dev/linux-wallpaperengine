@@ -152,6 +152,7 @@ class BridgeSyncTest(unittest.TestCase):
                                         lambda *a, _n=name, **k: self.env_writes.append(_n) or "written")
             patcher.start()
             self.addCleanup(patcher.stop)
+        marker.record_served(4242)
         self.backend = models.Backend()
 
     @contextlib.contextmanager

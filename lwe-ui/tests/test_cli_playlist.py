@@ -33,6 +33,7 @@ import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import contextlib
 import io
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -111,6 +112,7 @@ class OrderIntervalTest(unittest.TestCase):
         self.write("playlists/main.conf", MAIN)
         self.write("playlists/night.conf", NIGHT)
         self.write("settings.conf", f"ACTIVE_PLAYLIST={active}\n")
+        self.marker.record_served(os.getpid())
 
     def snapshot(self) -> dict[str, bytes]:
         """Every file under the config and state folders but the lock sidecars."""
@@ -259,7 +261,7 @@ class OrderIntervalTest(unittest.TestCase):
         self.assertEqual(self.read("playlists/main.conf"), "NAME=Main\nMEMBERS=111\n")
 
     def test_with_no_playlist_at_all_the_verbs_exit_1_and_create_nothing(self) -> None:
-        engine = self.engine()
+        engine = self.engine(served=False)
         for words in (("order", "static"), ("interval", "load"), ("config", "unset", "interval")):
             with self.subTest(words=words):
                 self.assertEqual(self.lwe(*words), (1, "", NO_PLAYLIST))
@@ -310,6 +312,7 @@ class PlaylistVerbTest(unittest.TestCase):
         self.write("playlists/main.conf", MAIN)
         self.write("playlists/night.conf", NIGHT)
         self.write("settings.conf", settings)
+        self.marker.record_served(os.getpid())
 
     def test_playlist_list_is_numbered_by_name_and_marks_the_playing_one(self) -> None:
         self.four()
@@ -430,7 +433,10 @@ class PlaylistHandoffTest(unittest.TestCase):
         (config / "playlists").mkdir(parents=True)
         (config / "playlists" / "main.conf").write_text(MAIN, encoding="utf-8")
         (config / "settings.conf").write_text("ACTIVE_PLAYLIST=main\n", encoding="utf-8")
-        with _fake_engine.FakeEngine(env["LWE_SOCKET"]) as engine:
+        from lwe_ui.engine import marker
+        with mock.patch.dict(os.environ, {key: env[key] for key in ("HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME")}):
+            marker.record_served(os.getpid())
+        with _fake_engine.FakeEngine(env["LWE_SOCKET"], served=False) as engine:
             result = _cli_env.run_lwe(["order", "static"], env, "")
         self.assertEqual(result, (0, "Order of Main set to static.\n", ""))
         self.assertEqual((config / "playlists" / "main.conf").read_text(encoding="utf-8"),

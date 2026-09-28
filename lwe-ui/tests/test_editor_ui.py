@@ -225,6 +225,7 @@ def main() -> None:
         from lwe_ui import version as _version
         from lwe_ui.engine import marker as _marker
         _marker.clear(_marker.read()["generation"])   # the commits above left their work pending
+        _marker.record_served(1)
         pushes = []
         on_screen = ["synthwp_fit"]
         _editor_mod.api_client.available = lambda: True

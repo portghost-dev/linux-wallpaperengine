@@ -10,7 +10,11 @@ The service switch rebuilds engine-env, the unit and daemon-reload before system
 existing notice when that fails, and bundles once the engine answers; a restart takes only an engine
 whose pid is a new MainPID and keeps sync while its unit stops or starts, up to its cap, and meanwhile
 every other sync attempt in the window, one already waiting included, ends at once, pending or busy;
-every end of the hold gives later attempts their wait again.
+every end of the hold gives later attempts their wait again. When a start or restart delivered to the
+old engine (an unreadable MainPID, a hold that ended early, a start that took the engine answering on
+the socket), the new engine is served by the next poll, and so is an engine the panel did not start: a
+pid that changes between polls, or one that arrives after the marker was cleared. Each gets one bundle
+and is then recorded as served.
 A manual switch while the engine is away with the schedule on writes nothing. A switch to a playlist
 being deleted, made by another writer while the delete reads, waits for the delete: the delete raises
 nothing and changes ACTIVE_PLAYLIST only in a change that carries the active row. A hand-broken store
@@ -179,6 +183,7 @@ class WindowSyncTest(unittest.TestCase):
                                         lambda *a, _n=name, **k: self.env_writes.append(_n) or "written")
             patcher.start()
             self.addCleanup(patcher.stop)
+        marker.record_served(4242, 0, time.time() - 120.0)
         self.backend = models.Backend()
 
     @contextlib.contextmanager
@@ -547,6 +552,71 @@ class WindowSyncTest(unittest.TestCase):
         self.assertEqual(sent, [])
         self.assertIn((45,), [args for verb, args, _kwargs in rec.calls if verb == "set_fps"])
         self.assertEqual(marker.read()["classes"], [])
+
+    def _replaced(self, rec, fake: FakeUnit | None = None, polls: int = 1) -> list[str]:
+        """The engine becomes 5000 after 4242 was seen; `polls` window polls follow. The requests they
+        sent."""
+        self.backend._engine_pid_seen = 4242
+        rec.status_reply = status(pid=5000)
+        if fake is not None:
+            fake.main = 5000
+        sent = len(rec.calls)
+        for _ in range(polls):
+            self.backend.status()
+        return [verb for verb, _a, _k in rec.calls[sent:] if verb not in ("status", "ping")]
+
+    def test_an_unreadable_main_pid_lets_the_old_engine_take_the_bundle_and_the_new_one_is_served_next(self) -> None:
+        fake = FakeUnit(4242)
+        reads = [None]
+
+        def main_pid():
+            return reads.pop() if reads else fake.main_pid()
+        with self.engine(status(pid=4242)) as rec, self.systemd(fake), \
+                mock.patch.object(daemon_unit, "_service_main_pid", main_pid):
+            self.assertTrue(self.backend.restartMaster())
+            self._finish_restart()
+            self.assertIn("lanes_set", rec.verbs(), "the restart delivered to the old engine")
+            after = self._replaced(rec, fake)
+        self.assertEqual(after.count("lanes_set"), 1, after)
+        self.assertEqual((marker.served(), marker.read()["classes"]), (5000, []))
+
+    def test_a_restart_hold_that_ends_early_leaves_the_new_engine_to_the_next_poll(self) -> None:
+        for name, fake, cap in (("queued job not begun", FakeUnit(4242), 10.0),
+                                ("cap", FakeUnit(4242, on_restart="deactivating"), 0.3)):
+            with self.subTest(case=name):
+                marker.clear(marker.ensure(("BUNDLE",)))
+                marker.record_served(4242, 0, time.time() - 120.0)
+                with self.engine(status(pid=4242)) as rec, self.systemd(fake, cap_s=cap):
+                    self.assertTrue(self.backend.restartMaster())
+                    self._finish_restart()
+                    self.assertEqual(marker.read()["classes"], ["BUNDLE"], "the hold ended with the record kept")
+                    self.backend._drain()
+                    self.assertIn("lanes_set", rec.verbs(), "an ordinary drain delivered to the old engine")
+                    after = self._replaced(rec, fake, polls=3)
+                self.assertEqual(after.count("lanes_set"), 1, after)
+                self.assertEqual((marker.served(), marker.read()["classes"]), (5000, []))
+
+    def test_a_start_that_bundled_the_engine_on_the_socket_leaves_the_new_one_to_the_next_poll(self) -> None:
+        def run(args, **kwargs):
+            return subprocess.CompletedProcess(args, 0, "inactive\n" if "is-active" in args else "", "")
+        with self.engine(status(pid=4242)) as rec, mock.patch.object(models, "_sandboxed", lambda: False), \
+                mock.patch.object(models.subprocess, "run", run), \
+                mock.patch.object(daemon_unit, "_service_main_pid", return_value=5000):
+            self.assertTrue(self.backend.setMaster(True))
+            self.backend._ready_tick()
+            self.assertFalse(self.backend._ready_timer.isActive())
+            self.assertIn("lanes_set", rec.verbs(), "the start delivered to the engine on the socket")
+            after = self._replaced(rec)
+        self.assertEqual(after.count("lanes_set"), 1, after)
+        self.assertEqual(marker.served(), 5000)
+
+    def test_an_engine_the_panel_did_not_start_is_bundled_by_the_next_poll(self) -> None:
+        with self.engine(status(pid=4242)) as rec:
+            self.backend.status()
+            self.assertIn("lanes_set", rec.verbs(), "the first sight bundles 4242")
+            after = self._replaced(rec, polls=2)
+        self.assertEqual(after.count("lanes_set"), 1, after)
+        self.assertEqual((marker.served(), marker.read()["classes"]), (5000, []))
 
     def test_readiness_takes_only_an_engine_whose_pid_is_a_new_non_zero_main_pid(self) -> None:
         # (status pid, MainPID, MainPID before the launch, ready)

@@ -55,6 +55,8 @@ class ScheduleBridgeTests(unittest.TestCase):
         from lwe_ui import version
         self.status = {"version": version.panel_stamp(), "pid": 7, "current": {"id": "", "ui_id": ""},
                        "schedule": {"enabled": False}}
+        from lwe_ui.engine import marker
+        marker.record_served(7)
         self.api.available = lambda: True
         self.api.status = lambda: dict(self.status)
         self.api.playlist_set = lambda slug, entries, order, interval, **kw: (

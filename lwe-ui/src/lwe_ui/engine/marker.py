@@ -2,15 +2,20 @@
 what the store holds.
 
 The file holds {"version": 1, "generation": N, "classes": [...], "sent": {"pid": N or null,
-"playlists": [...]}}. BUNDLE means the engine needs the full sync from the store, and CURRENT
-that the wallpaper on screen also needs a re-show. sent lists the playlists a window run has
-already transferred in this generation to that engine pid. A writer raises the generation of
-the marker; ensure makes a fresh one when no marker exists and raises it when it adds a class
-the marker did not hold; a clear keeps it. So a generation value never repeats, and a clear
-succeeds only for the generation its caller read. A service start or restart holds the sync
-lock from its record through its own sync, so no other run can clear the record in between.
-Every read and write holds the marker lock, and every write is an atomic replace followed by
-an fsync of the directory. Plain Python, no Qt import.
+"playlists": [...]}, "served": {"pid": P, "at": T, "short": C}}. BUNDLE means the engine needs the
+full sync from the store, and CURRENT that the wallpaper on screen also needs a re-show. sent lists
+the playlists a window run has already transferred in this generation to that engine pid. served
+names the engine that last took a whole bundle, the time T it was written and the count C of engines
+before it that were replaced soon after being served; it is written without raising the generation,
+every other write keeps it, and a file without it reads as none, so an engine it does not name is
+owed the bundle.
+A record that holds only served has no generation, and reads as no marker for everything else.
+A writer raises the generation of the marker; ensure makes a fresh one when no marker exists and
+raises it when it adds a class the marker did not hold; a clear keeps it. So a generation value
+never repeats, and a clear succeeds only for the generation its caller read. A service start or
+restart holds the sync lock from its record through its own sync, so no other run can clear the
+record in between. Every read and write holds the marker lock, and every write is an atomic
+replace followed by an fsync of the directory. Plain Python, no Qt import.
 """
 from __future__ import annotations
 
@@ -32,14 +37,21 @@ def _file() -> Path:
 
 
 def _state(generation: int | None, classes: Iterable[str], pid: int | None = None,
-           playlists: Iterable[str] = ()) -> dict[str, Any]:
+           playlists: Iterable[str] = (), served: dict[str, Any] | None = None) -> dict[str, Any]:
     return {"generation": generation, "classes": list(classes),
-            "sent": {"pid": pid, "playlists": list(playlists)}}
+            "sent": {"pid": pid, "playlists": list(playlists)}, "served": served}
+
+
+def _public(state: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in state.items() if key != "served"}
 
 
 def _write(state: dict[str, Any]) -> None:
     path = _file()
-    atomic.atomic_write_text(path, json.dumps({"version": 1, **state}) + "\n")
+    doc = {"version": 1, **_public(state)}
+    if state["served"] is not None:
+        doc["served"] = state["served"]
+    atomic.atomic_write_text(path, json.dumps(doc) + "\n")
     fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
         os.fsync(fd)
@@ -48,9 +60,11 @@ def _write(state: dict[str, Any]) -> None:
 
 
 def _load() -> dict[str, Any]:
-    """The marker's state; the caller holds the marker lock. A malformed file, or one with
-    another version, is rewritten as BUNDLE and CURRENT with an empty sent and a fresh
-    generation."""
+    """The marker's state, served included; the caller holds the marker lock. A malformed file,
+    or one with another version, is rewritten as BUNDLE and CURRENT with an empty sent, a fresh
+    generation and no served record; a served entry without an int pid reads as none, and one
+    whose time is not a number, or whose count is not a whole number of at least 0, reads with no
+    time or a count of 0."""
     try:
         doc = json.loads(_file().read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -59,13 +73,20 @@ def _load() -> dict[str, Any]:
         doc = None
     sent = doc.get("sent") if isinstance(doc, dict) else None
     if (isinstance(sent, dict) and type(doc.get("version")) is int and doc["version"] == 1
-            and type(doc.get("generation")) is int
+            and (type(doc.get("generation")) is int
+                 or ("generation" in doc and doc["generation"] is None and doc.get("classes") == []))
             and isinstance(doc.get("classes"), list) and all(c in _CLASSES for c in doc["classes"])
             and "pid" in sent and (sent["pid"] is None or type(sent["pid"]) is int)
             and isinstance(sent.get("playlists"), list)
             and all(isinstance(slug, str) for slug in sent["playlists"])):
+        served = doc.get("served")
+        record = None
+        if isinstance(served, dict) and type(served.get("pid")) is int:
+            at, short = served.get("at"), served.get("short")
+            record = {"pid": served["pid"], "at": at if type(at) in (int, float) else None,
+                      "short": short if type(short) is int and short >= 0 else 0}
         return _state(doc["generation"], (c for c in _CLASSES if c in doc["classes"]),
-                      sent["pid"], sent["playlists"])
+                      sent["pid"], sent["playlists"], record)
     state = _state(time.time_ns(), _CLASSES)
     _write(state)
     return state
@@ -93,7 +114,32 @@ def read() -> dict[str, Any]:
     generation None, no classes and an empty sent. A malformed file, or one with another
     version, reads as BUNDLE and CURRENT with an empty sent and is rewritten in place."""
     with lock.held("marker"):
-        return _load()
+        return _public(_load())
+
+
+def served() -> int | None:
+    """The pid of the engine that last took a whole bundle, read under the marker lock; None when
+    none is recorded."""
+    return served_record()[0]
+
+
+def served_record() -> tuple[int | None, float | None, int]:
+    """The served record as (pid, the time it was written, the short-lived count), read under the
+    marker lock; (None, None, 0) when none is recorded."""
+    with lock.held("marker"):
+        record = _load()["served"]
+    return (None, None, 0) if record is None else (record["pid"], record["at"], record["short"])
+
+
+def record_served(pid: int, short: int = 0, at: float | None = None) -> None:
+    """The engine whose status pid is `pid` has taken a whole bundle: write served under the
+    marker lock with the time `at` (now when not given) and the short-lived count `short`, keeping
+    the generation, the classes and sent; a record that already names `pid` is left as it is. With
+    no marker, the record holds served alone."""
+    with lock.held("marker"):
+        state = _load()
+        if (state["served"] or {}).get("pid") != pid:
+            _write({**state, "served": {"pid": pid, "at": time.time() if at is None else at, "short": short}})
 
 
 @contextmanager
@@ -106,7 +152,7 @@ def writing(classes: Iterable[str]) -> Iterator[tuple[int, bool]]:
     with lock.held("marker"):
         state = _load()
         generation = _fresh(state)
-        _write(_state(generation, _merged(state["classes"], classes)))
+        _write(_state(generation, _merged(state["classes"], classes), served=state["served"]))
         yield generation, bool(state["classes"])
 
 
@@ -121,7 +167,7 @@ def ensure(classes: Iterable[str]) -> int:
         if state["classes"] and merged == state["classes"]:
             return state["generation"]
         generation = _fresh(state)
-        _write(_state(generation, merged))
+        _write(_state(generation, merged, served=state["served"]))
         return generation
 
 
@@ -141,7 +187,7 @@ def clear(generation: int, keep: Iterable[str] = ()) -> bool:
         state = _load()
         if not _matches(state, generation):
             return False
-        cleared = _state(generation, (c for c in state["classes"] if c in keep))
+        cleared = _state(generation, (c for c in state["classes"] if c in keep), served=state["served"])
         if cleared != state:
             try:
                 _write(cleared)
@@ -169,7 +215,7 @@ def start_sent(generation: int, pid: int) -> None:
         state = _load()
         listed = state["sent"]["pid"]
         if _matches(state, generation) and listed is not None and listed != pid:
-            _write(_state(state["generation"], state["classes"]))
+            _write(_state(state["generation"], state["classes"], served=state["served"]))
 
 
 def record_sent(generation: int, pid: int, slug: str) -> bool:
@@ -182,5 +228,5 @@ def record_sent(generation: int, pid: int, slug: str) -> bool:
             return False
         if listed != pid or slug not in playlists:
             _write(_state(state["generation"], state["classes"], pid,
-                          playlists + ([] if slug in playlists else [slug])))
+                          playlists + ([] if slug in playlists else [slug]), state["served"]))
         return True

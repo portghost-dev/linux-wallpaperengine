@@ -6,7 +6,9 @@ answers from that verb's script, one step per request: done(result), fail(messag
 an accepted line, or silent(), which answers nothing until the client hangs up; done and fail wait
 their delay before the final line. A verb with no step left answers done: status with the status
 built from the fields the test sets, any other verb with an empty result. A field set to None is left
-out of the status. stop() closes the socket and removes its file.
+out of the status. stop() closes the socket and removes its file. Unless served=False, the engine is
+recorded in the sync marker as the served engine at its start, as an engine that has already taken
+the panel's settings would be.
 """
 from __future__ import annotations
 
@@ -48,8 +50,9 @@ def silent() -> Step:
 
 
 class FakeEngine:
-    def __init__(self, path: str | os.PathLike, **fields: Any) -> None:
+    def __init__(self, path: str | os.PathLike, served: bool = True, **fields: Any) -> None:
         from lwe_ui import version
+        from lwe_ui.engine import marker
         self.path = Path(path)
         self.calls: list[tuple[str, dict]] = []
         self.fields: dict[str, Any] = {
@@ -66,6 +69,8 @@ class FakeEngine:
             "audio_smooth": 90.0,
         }
         self.set(**fields)
+        if served:
+            marker.record_served(self.fields["pid"])
         self._scripts: dict[str, list[Step]] = {}
         self._lock = threading.Lock()
         self._stopping = threading.Event()

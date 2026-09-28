@@ -4,7 +4,8 @@ The first word names the verb and the rest are its arguments; -j or --json anywh
 asks for JSON output. Verbs come from the modules in lwe_ui.cli.verbs (see registry), and each
 returns its exit code: DONE 0, REFUSED 1, ENGINE_DOWN 2, USAGE 3. Every line goes out as UTF-8
 through clean(), as the engine writes its own output, and a closed output pipe ends the command
-quietly with PIPE_CLOSED.
+quietly with PIPE_CLOSED. A crash-loop brake applied during the verb prints its reason on stderr
+after the verb's own output (engine/push.brake_notes).
 """
 from __future__ import annotations
 
@@ -126,6 +127,9 @@ def _main(argv: list[str], sender_stamp: str | None, cwd_entered: bool) -> int:
                 return REFUSED
         code = verb.run(ctx, words[1:])
         ctx.out.flush()
+        push = sys.modules.get("lwe_ui.engine.push")
+        for note in push.brake_notes() if push is not None else ():
+            print(note, file=ctx.err)
         return code
     except StoreBusy as exc:
         ctx.error(str(exc))

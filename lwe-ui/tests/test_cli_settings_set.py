@@ -86,7 +86,7 @@ class SettingSetTest(unittest.TestCase):
             folder.mkdir(parents=True)
 
     def engine(self, **fields) -> _fake_engine.FakeEngine:
-        engine = _fake_engine.FakeEngine(_sandbox.SOCKET, **fields)
+        engine = _fake_engine.FakeEngine(_sandbox.SOCKET, served=False, **fields)
         self.addCleanup(engine.stop)
         return engine
 

@@ -14,8 +14,13 @@ ignores both. sync_all makes a marker with a fresh generation when none exists, 
 keeps it; a writer that raises the generation during a run that ends all ok keeps the marker too.
 A reload's run re-shows whatever the marker holds when it starts, also when a window reload's
 budget stops its bundle, and beside an older drain it shows once and loses no CURRENT. Two drains never send at once, and an engine-only action holds
-sync. The engine is an api_client recorder with a scripted status unless a test names the socket
-server.
+sync. A bundle with a step not ok records no served engine, and a whole one records the answering pid.
+After a restart command that timed out and an ordinary drain that reached the old engine, the next
+command change finds the new engine unserved and sends it the whole bundle before its own verb. When the
+last two engines were each replaced within 60 s of being served, the next one gets the settings but no
+show and no lanes-set that starts rotation, is recorded as served and the reason is logged; an engine
+replaced more than 60 s after being served resets the count, and an explicit show during the brake goes
+out. The engine is an api_client recorder with a scripted status unless a test names the socket server.
 
 Run: PYTHONPATH=src python3 tests/test_sync_bundle.py
 """
@@ -130,6 +135,7 @@ class SyncBundleTest(unittest.TestCase):
                                   "MEMBERS": members})
         settings.update({"ACTIVE_PLAYLIST": "main", "SCHEDULE": "07:00=main;20:00=night",
                          "SCHEDULE_ENABLED": False})
+        marker.record_served(4242)
 
     @contextlib.contextmanager
     def engine(self, reply: dict):
@@ -440,6 +446,88 @@ class SyncBundleTest(unittest.TestCase):
             thread.start()
             thread.join(10)
         self.assertEqual(busy, [True])
+
+    def test_a_bundle_with_a_step_not_ok_records_no_served_engine(self) -> None:
+        with self.engine(status(pid=5151)) as rec:
+            rec.answer("set_particles", {"id": 1, "ok": False, "error": "rebuild failed"})
+            self.assertEqual(push.sync_all("command").kind, "refused")
+        self.assertEqual(marker.served(), 4242)
+        with self.engine(status(pid=5151)):
+            self.assertEqual(push.sync_all("command").kind, "applied")
+        self.assertEqual(marker.served(), 5151)
+
+    def test_after_a_timed_out_restart_command_the_new_engine_is_served_by_the_next_command(self) -> None:
+        from lwe_ui.cli.verbs import service
+        from lwe_ui.engine import daemon_unit
+
+        def runner(args, timeout=30.0):
+            if "restart" in args:
+                return 1, "", "Failed to restart lwe-engine.service: Connection timed out"
+            return 0, "", ""
+        with self.engine(status()) as rec, mock.patch.object(daemon_unit, "RUNNER", runner), \
+                mock.patch.object(daemon_unit, "_service_main_pid", return_value=4242):
+            with self.assertRaises(service._Stop):
+                service._launch(["restart"])
+            self.assertEqual(marker.read()["classes"], ["BUNDLE"])
+            self.assertEqual(push.sync_all("command").kind, "applied", "an ordinary drain reached the old engine")
+            rec.status_reply = status(pid=5000)
+            sent = len(rec.calls)
+            outcome = push.run_change(("settings",), lambda: settings.update({"ENGINE_FPS": 45}),
+                                      [("verb", "ENGINE_FPS")], run="command")
+        after = [verb for verb, _a, _k in rec.calls[sent:] if verb != "status"]
+        self.assertEqual(outcome.kind, "applied")
+        self.assertIn("lanes_set", after)
+        self.assertEqual(after[-1], "set_fps")
+        self.assertEqual((marker.served(), marker.read()["classes"]), (5000, []))
+
+    def _served_runs(self, clock: list, pids: list[int]) -> list[list[tuple]]:
+        """One command sync_all per pid, the clock 10 s later each time; the requests of each run."""
+        runs = []
+        for pid in pids:
+            clock[0] += 10.0
+            with self.engine(status(pid=pid)) as rec:
+                push.sync_all("command")
+            runs.append([call for call in rec.calls if call[0] != "status"])
+        return runs
+
+    def test_two_engines_gone_within_60_s_brake_the_third_to_settings_without_a_show(self) -> None:
+        clock = [1000.0]
+        marker.record_served(100, 0, clock[0])
+        with mock.patch.object(push, "_now", lambda: clock[0]), \
+                self.assertLogs("lwe_ui.engine.push", "INFO") as logs:
+            second, third = self._served_runs(clock, [200, 300])
+        verbs = lambda run: [verb for verb, _a, _k in run]
+        self.assertIn("show", verbs(second), "one short-lived engine does not brake")
+        self.assertIn(True, [lane["enabled"] for verb, args, _k in second if verb == "lanes_set" for lane in args[0]])
+        self.assertNotIn("show", verbs(third))
+        self.assertEqual([args[0] for verb, args, _k in third if verb == "lanes_set"], [])
+        self.assertIn("set_fps", verbs(third))
+        self.assertIn("playlist_set", verbs(third))
+        self.assertEqual(marker.served_record(), (300, 1020.0, 2))
+        self.assertEqual(push.brake_notes(), [push.BRAKED])
+        self.assertTrue(any(push.BRAKED in line for line in logs.output), logs.output)
+
+    def test_an_engine_that_lived_past_60_s_resets_the_count(self) -> None:
+        clock = [1000.0]
+        marker.record_served(300, 2, clock[0])
+        clock[0] += 90.0
+        with mock.patch.object(push, "_now", lambda: clock[0]):
+            (run,) = self._served_runs(clock, [400])
+        self.assertIn("show", [verb for verb, _a, _k in run])
+        self.assertEqual(marker.served_record(), (400, 1100.0, 0))
+        self.assertEqual(push.brake_notes(), [])
+
+    def test_an_explicit_show_during_the_brake_goes_out(self) -> None:
+        clock = [1000.0]
+        marker.record_served(100, 1, clock[0])
+        with mock.patch.object(push, "_now", lambda: clock[0]):
+            (run,) = self._served_runs(clock, [300])
+            self.assertNotIn("show", [verb for verb, _a, _k in run], "the owed bundle is braked")
+            with self.engine(status(pid=300)) as rec:
+                self.assertTrue(push.show("111"))
+        self.assertIn("show", rec.verbs())
+        self.assertEqual(marker.served_record(), (300, 1010.0, 2))
+        push.brake_notes()
 
     def test_a_started_transfer_runs_to_its_last_part_past_the_budget(self) -> None:
         clock = Clock()

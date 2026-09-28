@@ -188,8 +188,9 @@ class TestEditorLiveCommit(unittest.TestCase):
 
     def _recorder(self, on_screen: str | None) -> _ApiRecorder:
         """The recorder as the change runner's engine too, reporting `on_screen` as shown (None:
-        the engine is away)."""
-        from lwe_ui.engine import push
+        the engine is away); its engine is the served one."""
+        from lwe_ui.engine import marker, push
+        marker.record_served(1)
         rec = _ApiRecorder()
         rec.on_screen = on_screen
         self.editor_mod.api_client = rec
@@ -409,10 +410,12 @@ class TestEditorLiveCommit(unittest.TestCase):
 
     def _ordered_rig(self, ok: bool = True, available: bool = True):
         """A shared timeline the store write and the engine push both write into, so the ORDER
-        itself is observable. The backend is the real one, saving through the change runner."""
+        itself is observable. The backend is the real one, saving through the change runner, and
+        its engine is the served one."""
         from lwe_ui import models
-        from lwe_ui.engine import push
+        from lwe_ui.engine import marker, push
         from lwe_ui.storage import settings
+        marker.record_served(1)
         timeline: list[str] = []
 
         class _Api(_ApiRecorder):
