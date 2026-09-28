@@ -31,9 +31,11 @@
 #include "WallpaperEngine/Debugging/CallStack.h"
 #include "WallpaperEngine/FileSystem/Adapters/MediaCover.h"
 #include "WallpaperEngine/Media/DBusMediaSource.h"
+#include <cerrno>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <fstream>
 #include <set>
@@ -690,6 +692,15 @@ std::vector<WallpaperApplication::WebLibraryEntry> WallpaperApplication::enumera
 
 	    try {
 		std::ifstream file (projectFile);
+
+		if (!file.is_open ()) {
+		    const int reason = errno;
+		    sLog.error (
+			"Skipping ", entry.path ().string (), ": cannot open its project.json: ", std::strerror (reason)
+		    );
+		    continue;
+		}
+
 		contents.assign (std::istreambuf_iterator<char> (file), std::istreambuf_iterator<char> ());
 	    } catch (const std::exception& e) {
 		sLog.error ("Skipping ", entry.path ().string (), ": cannot read its project.json: ", e.what ());

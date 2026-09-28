@@ -123,6 +123,9 @@ TEST_CASE (
     { std::ofstream (library / "big" / "project.json"); }
     std::filesystem::resize_file (library / "big" / "project.json", 5 * 1024 * 1024);
 
+    std::filesystem::create_directories (library / "memlink");
+    std::filesystem::create_symlink ("/proc/self/mem", library / "memlink" / "project.json");
+
     auto* errors = new std::ostringstream ();
     sLog.addError (errors);
 
@@ -160,6 +163,7 @@ TEST_CASE (
     CHECK (mentions (library / "fifo") == 1);
     CHECK (mentions (library / "devlink") == 1);
     CHECK (mentions (library / "big") == 1);
+    CHECK (mentions (library / "memlink") == 1);
 
     const auto lineFor = [&lines] (const std::filesystem::path& folder) {
 	std::istringstream in (lines);
@@ -175,4 +179,58 @@ TEST_CASE (
     CHECK (lineFor (library / "fifo").find ("a named pipe, not a regular file") != std::string::npos);
     CHECK (lineFor (library / "devlink").find ("a device, not a regular file") != std::string::npos);
     CHECK (lineFor (library / "big").find ("larger than 4 MiB") != std::string::npos);
+    CHECK (lineFor (library / "memlink").find ("cannot read its project.json") != std::string::npos);
+}
+
+TEST_CASE ("a project.json that cannot be opened is skipped with the reason", "[weblibrary]") {
+    if (::geteuid () == 0) {
+	SKIP ("running as root: a mode-000 file still opens, so this case cannot produce an open failure");
+    }
+
+    const auto base = std::filesystem::temp_directory_path () / ("lwe-web-locked-test-" + std::to_string (::getpid ()));
+    std::filesystem::remove_all (base);
+    const RemoveOnExit cleanup (base);
+    const auto library = base / "data" / "lwe" / "wallpapers";
+    std::filesystem::create_directories (base / "home");
+
+    write (library / "good" / "project.json", R"({"type": "web", "workshopid": "4242"})");
+    write (library / "locked" / "project.json", R"({"type": "web", "workshopid": "5555"})");
+    std::filesystem::permissions (library / "locked" / "project.json", std::filesystem::perms::none);
+
+    auto* errors = new std::ostringstream ();
+    sLog.addError (errors);
+
+    std::vector<WallpaperApplication::WebLibraryEntry> found;
+
+    {
+	const EnvGuard data ("XDG_DATA_HOME", (base / "data").string ());
+	const EnvGuard home ("HOME", (base / "home").string ());
+	REQUIRE_NOTHROW (found = WallpaperApplication::enumerateWebBackgrounds ());
+    }
+
+    const std::string lines = errors->str ();
+    errors->setstate (std::ios::badbit);
+
+    std::vector<std::string> ids;
+    for (const auto& entry : found) {
+	ids.push_back (entry.workshopId);
+    }
+
+    REQUIRE (ids == std::vector<std::string> { "4242" });
+
+    size_t mentions = 0;
+    std::string named;
+    std::istringstream in (lines);
+
+    for (std::string line; std::getline (in, line);) {
+	if (line.find ((library / "locked").string ()) != std::string::npos) {
+	    mentions++;
+	    named = line;
+	}
+    }
+
+    CHECK (mentions == 1);
+    CHECK (named.find ("cannot open its project.json: Permission denied") != std::string::npos);
+    CHECK (lines.find ("does not parse") == std::string::npos);
+    CHECK (lines.find ("JSON strict parse failed") == std::string::npos);
 }

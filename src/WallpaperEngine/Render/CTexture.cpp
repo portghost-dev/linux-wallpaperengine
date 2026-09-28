@@ -516,7 +516,7 @@ void CTexture::createGL () {
 			GL_TEXTURE_2D, glLevel, internalFormat, width, height, 0, bufferSize, dataptr
 		    );
 		    imageBytes += bufferSize;
-		    if (glLevel == 0 && getenv ("LWE_AUDIT") != nullptr && width >= 1024) {
+		    if (glLevel == 0 && getenv ("LWE_AUDIT") != nullptr && width >= 1024 && height > 0) {
 			std::vector<uint8_t> rb (static_cast<size_t> (width) * height * 4);
 			glGetTexImage (GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, rb.data ());
 			uint64_t rs = 0, gs = 0, bs = 0, asum = 0, sat = 0, n = 0;
