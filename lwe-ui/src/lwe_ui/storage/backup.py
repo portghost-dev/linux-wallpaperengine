@@ -228,14 +228,14 @@ def snapshot(r: dict[str, Any]) -> bool:
 
 
 def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
-    """Write a preflight's plan through this build's stores, after a snapshot of what is
-    there now. The locks of the stores it writes (each Store's name is its lock's) are taken
-    in rank order, then the sync marker records BUNDLE and CURRENT with a raised generation and
-    stays held until the last store write ends, so the engine side is owed before any store
-    changes and no clearer can clear it first; the marker is released before the store locks.
-    A busy store lock, or a marker that cannot be set, refuses the import with nothing written.
-    Returns the receipt with the plan removed and any write failure added to errors; the
-    receipt is refused only when nothing was written."""
+    """Write a preflight's plan through this build's stores. The locks of the stores it writes
+    (each Store's name is its lock's) are taken first, in rank order, then the sync marker records
+    BUNDLE and CURRENT with a raised generation, and only then is the pre-restore snapshot of what
+    is there now written; a busy store lock or a marker that cannot be set refuses the import
+    before anything is written, the snapshot included. The marker stays held until the last store
+    write ends, so the engine side is owed before any store changes and no clearer can clear it
+    first; it is released before the store locks. Returns the receipt with the plan removed and
+    any write failure added to errors; the receipt is refused only when nothing was written."""
     r = dict(plan_receipt)
     plan = r.pop("plan", None) or {}
     if r.get("refused"):
@@ -248,8 +248,6 @@ def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
         except OSError:
             r["errors"].append({"file": "restore", "reason": "Another restore is running."})
             r["refused"] = True
-            return r
-        if not snapshot(r):
             return r
         from ..engine import marker
         with contextlib.ExitStack() as held:
@@ -266,6 +264,8 @@ def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
             except OSError as exc:
                 r["errors"].append({"file": "sync-pending", "reason": f"The sync marker could not be written: {exc}"})
                 r["refused"] = True
+                return r
+            if not snapshot(r):
                 return r
             written = 0
             for st in registry.STORES:

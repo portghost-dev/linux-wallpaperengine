@@ -17,8 +17,10 @@ spans another change's pending record bundles it before its own push. A burst go
 inside a burst's debounce leaves the re-show to the burst, which clears the marker, and so do a
 backup import and the readiness bundle of a service start. A backup restore records BUNDLE and
 CURRENT before its store writes and holds the marker until the last one ends, so a drain admitted
-before the first store write cannot clear it. The engine is an api_client recorder with a scripted
-status; the child process gets an environment built from scratch.
+before the first store write, or before the last write, cannot clear it; an import refused by a busy
+store writes no pre-restore snapshot, so five of them leave the snapshots as they were. The engine is
+an api_client recorder with a scripted status; the child process gets an environment built from
+scratch.
 
 Run: PYTHONPATH=src python3 tests/test_bridge_sync.py
 """
@@ -51,7 +53,7 @@ _APP = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
 
 from lwe_ui import deck_popup, editor, models, settings_bridge, version  # noqa: E402
 from lwe_ui.engine import daemon_unit, marker, push  # noqa: E402
-from lwe_ui.storage import backup, lock, paths, playlists, registry, settings, wp  # noqa: E402
+from lwe_ui.storage import backup, foreign, lock, paths, playlists, registry, settings, wp  # noqa: E402
 
 OK = {"id": 1, "ok": True, "status": "done", "result": {}}
 REFUSED = {"id": 1, "ok": False, "error": "no"}
@@ -523,6 +525,43 @@ class BridgeSyncTest(unittest.TestCase):
         self.assertEqual([args for verb, args, _k in rec.calls if verb == "set_fps"], [])
         self.assertEqual(marker.read()["classes"], ["BUNDLE", "CURRENT"],
                          "restore must remain recoverable if caller dies before its push")
+
+    def test_a_drain_before_the_restores_last_write_cannot_clear_its_marker(self) -> None:
+        archive = self._archive()
+        real = foreign.apply_plan
+        drained: list = []
+
+        def before_last_write(plan, receipt):
+            def drain() -> None:
+                try:
+                    drained.append(push.sync_all("command"))
+                except lock.StoreBusy as exc:
+                    drained.append(exc)
+            worker = threading.Thread(target=drain)
+            worker.start()
+            worker.join(5)
+            self.assertFalse(worker.is_alive(), "drain stuck")
+            return real(plan, receipt)
+
+        with self.engine(status()) as rec, mock.patch.object(foreign, "apply_plan", before_last_write):
+            receipt = backup.apply(backup.preflight(archive))
+        self.assertFalse(receipt.get("refused"), receipt)
+        self.assertEqual([type(d) for d in drained], [lock.StoreBusy])
+        self.assertEqual([args for verb, args, _k in rec.calls if verb == "set_fps"], [])
+        self.assertEqual(marker.read()["classes"], ["BUNDLE", "CURRENT"])
+
+    def test_refused_imports_leave_the_snapshots_as_they_were(self) -> None:
+        archive = self._archive()
+        backups = paths.state_dir() / "backups"
+        self.assertFalse(backup.apply(backup.preflight(archive)).get("refused"))
+        before = sorted(p.name for p in backups.iterdir())
+        self.assertEqual(len(before), 1)
+        with self.held_elsewhere("rules"), mock.patch.object(lock, "LOCK_WAIT_S", 0.05):
+            for _ in range(5):
+                receipt = backup.apply(backup.preflight(archive))
+                self.assertTrue(receipt.get("refused"), receipt)
+                self.assertTrue(receipt["errors"][-1]["reason"].startswith("Store busy"), receipt["errors"])
+        self.assertEqual(sorted(p.name for p in backups.iterdir()), before)
 
     def test_import_during_burst(self) -> None:
         archive = self._archive()
