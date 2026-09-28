@@ -251,6 +251,8 @@ ApplicationContext::ApplicationContext (int argc, char* argv[]) : m_argc (argc),
 void ApplicationContext::loadSettingsFromArgv () {
     std::string lastScreen;
     Config::Flags flags;
+    std::optional<std::string> fullscreenWord;
+    bool noFullscreenPause = false;
 
     argparse::ArgumentParser program ("linux-wallpaperengine", LWE_VERSION, argparse::default_arguments::help);
 
@@ -305,7 +307,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.render.window.geometry.w = strtol (delim3 + 1, nullptr, 10);
 	})
 	.append ();
-    backgroundMode.add_argument ("-r", "--screen-root")
+    backgroundMode.add_argument ("-r", "--screen-root", "--screen")
 	.help ("The screen the following settings will have an effect on")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
 	    if (this->settings.general.screenBackgrounds.find (value)
@@ -328,7 +330,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.general.screenClamps[lastScreen] = this->settings.render.window.clamp;
 	})
 	.append ();
-    backgroundGroup.add_argument ("--screen-span")
+    backgroundGroup.add_argument ("--screen-span", "--span")
 	.help ("Comma-separated list of screens to span a single wallpaper across")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
 	    if (this->settings.render.mode == EXPLICIT_WINDOW) {
@@ -376,7 +378,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    this->settings.general.screenBackgrounds[lastScreen] = "";
 	})
 	.append ();
-    backgroundGroup.add_argument ("-b", "--bg")
+    backgroundGroup.add_argument ("-b", "--bg", "--wallpaper")
 	.help ("After --screen-root or --screen-span, specifies the background to use")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
 	    this->settings.general.screenBackgrounds[lastScreen] = translateBackground (value);
@@ -388,7 +390,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 	})
 	.append ();
-    backgroundGroup.add_argument ("--playlist")
+    backgroundGroup.add_argument ("--playlist", "--steamplaylist")
 	.help (
 	    "Uses a playlist from wallpaper engine's config.json. If used after --screen-root it is applied to that "
 	    "screen, otherwise it is used in window mode."
@@ -445,20 +447,20 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 	})
 	.append ();
-    backgroundGroup.add_argument ("--clamp")
+    backgroundGroup.add_argument ("--clamp", "--edge")
 	.help (
 	    "Clamp mode to use when rendering the background, this applies to the previous --window, --screen-root, "
 	    "or --screen-span output, or the default background if no other background is specified"
 	)
-	.choices ("clamp", "border", "repeat")
+	.choices ("clamp", "border", "repeat", "extend", "blank", "tile")
 	.action ([this, &lastScreen] (const std::string& value) -> void {
 	    TextureFlags flags;
 
-	    if (value == "clamp") {
+	    if (value == "clamp" || value == "extend") {
 		flags = TextureFlags_ClampUVs;
-	    } else if (value == "border") {
+	    } else if (value == "border" || value == "blank") {
 		flags = TextureFlags_ClampUVsBorder;
-	    } else if (value == "repeat") {
+	    } else if (value == "repeat" || value == "tile") {
 		flags = TextureFlags_NoFlags;
 	    } else {
 		sLog.exception ("Invalid clamp mode: ", value);
@@ -509,19 +511,25 @@ void ApplicationContext::loadSettingsFromArgv () {
     performanceGroup.add_argument ("--no-fullscreen-pause")
 	.help ("Prevents the background pausing when an app is fullscreen")
 	.flag ()
-	.action ([this] (const std::string& value) -> void {
+	.action ([this, &noFullscreenPause] (const std::string& value) -> void {
 	    this->settings.render.pauseOnFullscreen = false;
 	    this->settings.render.fullscreenBehavior = FullscreenBehavior::Off;
+	    noFullscreenPause = true;
 	});
 
-    performanceGroup.add_argument ("--fullscreen-pause-only-active")
+    performanceGroup.add_argument ("--fullscreen")
+	.help ("While something is fullscreen: keep playing, pause, or stop and free the screens")
+	.choices ("keep", "pause", "stop")
+	.action ([&fullscreenWord] (const std::string& value) -> void { fullscreenWord = value; });
+
+    performanceGroup.add_argument ("--fullscreen-pause-only-active", "--fullscreen-active-only")
 	.help ("Wayland only: pause only when a fullscreen window is active (activated)")
 	.flag ()
 	.action ([this] (const std::string& value) -> void {
 	    this->settings.render.pauseOnFullscreenOnlyWhenActive = true;
 	});
 
-    performanceGroup.add_argument ("--fullscreen-pause-ignore-appid")
+    performanceGroup.add_argument ("--fullscreen-pause-ignore-appid", "--fullscreen-ignore")
 	.help ("Wayland only: ignore fullscreen windows whose app_id contains this value (repeatable)")
 	.action ([this] (const std::string& value) -> void {
 	    if (!value.empty ()) {
@@ -538,24 +546,24 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.default_value (15)
 	.store_into (this->settings.audio.volume);
 
-    audioSettingsGroup.add_argument ("-s", "--silent")
+    audioSettingsGroup.add_argument ("-s", "--silent", "--mute")
 	.help ("Mutes all the sound the wallpaper might produce")
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.audio.enabled = false; });
 
-    audioGroup.add_argument ("--noautomute")
+    audioGroup.add_argument ("--noautomute", "--no-automute")
 	.help ("Disables the automute when an app is playing sound")
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.audio.automute = false; });
 
-    audioGroup.add_argument ("--no-audio-processing")
+    audioGroup.add_argument ("--no-audio-processing", "--no-audioreactive")
 	.help ("Disables audio processing for backgrounds")
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.audio.audioprocessing = false; });
 
     auto& apiGroup = program.add_group ("Daemon API");
 
-    apiGroup.add_argument ("--api-socket")
+    apiGroup.add_argument ("--api-socket", "--listen")
 	.help ("Listen for commands on the unix socket ($LWE_SOCKET or $XDG_RUNTIME_DIR/lwe/engine.sock)")
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.general.apiSocket = true; });
@@ -589,7 +597,7 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     auto& contentGroup = program.add_group ("Content options");
 
-    contentGroup.add_argument ("--assets-dir")
+    contentGroup.add_argument ("--assets-dir", "--assetsfolder")
 	.help ("Folder where the assets are stored")
 	.default_value ("")
 	.action ([this] (const std::string& value) -> void { this->settings.general.assets = value; });
@@ -683,16 +691,16 @@ void ApplicationContext::loadSettingsFromArgv () {
 
     auto& configurationGroup = program.add_group ("Wallpaper configuration options");
 
-    configurationGroup.add_argument ("--disable-particles")
+    configurationGroup.add_argument ("--disable-particles", "--no-particles")
 	.help ("Disables particles for the backgrounds")
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.general.disableParticles = true; });
 
-    configurationGroup.add_argument ("--disable-mouse")
+    configurationGroup.add_argument ("--disable-mouse", "--no-mouse")
 	.help ("Disables mouse interaction with the backgrounds")
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.mouse.enabled = false; });
-    configurationGroup.add_argument ("--disable-parallax")
+    configurationGroup.add_argument ("--disable-parallax", "--no-parallax")
 	.help ("Disables parallax effect for the backgrounds")
 	.flag ()
 	.action ([this] (const std::string& value) -> void { this->settings.mouse.disableparallax = true; });
@@ -785,6 +793,25 @@ void ApplicationContext::loadSettingsFromArgv () {
 	}
 
 	Config::setFlags (flags);
+
+	if (fullscreenWord.has_value ()) {
+	    if (fullscreenWord->empty ()) {
+		throw std::runtime_error ("--fullscreen takes keep, pause or stop; got an empty value");
+	    }
+
+	    if (noFullscreenPause) {
+		throw std::runtime_error ("--fullscreen and --no-fullscreen-pause cannot be used together");
+	    }
+
+	    if (*fullscreenWord == "keep") {
+		this->settings.render.pauseOnFullscreen = false;
+		this->settings.render.fullscreenBehavior = FullscreenBehavior::Off;
+	    } else if (*fullscreenWord == "pause") {
+		this->settings.render.fullscreenBehavior = FullscreenBehavior::Pause;
+	    } else if (*fullscreenWord == "stop") {
+		this->settings.render.fullscreenBehavior = FullscreenBehavior::Stop;
+	    }
+	}
 
 	// idle-daemon mode boots with NO backgrounds and awaits `show` over the socket
 	if (this->settings.general.defaultBackground.empty () && !this->settings.general.daemonMode) {
