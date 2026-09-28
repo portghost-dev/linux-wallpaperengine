@@ -17,6 +17,8 @@ _LISTS = ("reresolved", "held", "dropped", "adjusted", "preserved", "notes", "er
 _SYNC = {"applied": "Sent to the engine.",
          "pending": "The service is not running or is busy, so it is not applied yet. " + report.OPPORTUNITIES,
          "uncertain": "The engine did not answer in time, so it may have applied."}
+_STEPS = {"sync": "sending it to the engine", "engine-env": "rebuilding engine-env",
+          "restart": "checking which settings wait for a service restart"}
 
 
 def _print(ctx: Context, headline: str, r: dict, extra: list[str] = ()) -> None:
@@ -55,6 +57,9 @@ def _export(ctx: Context, path: str) -> int:
     if os.path.isdir(path):
         ctx.error(f"cannot write {path}: it is a folder")
         return REFUSED
+    if path.endswith(("/", os.sep)):
+        ctx.error(f"cannot write {path}: it names a folder")
+        return REFUSED
     paths.ensure_dirs()
     replaced = os.path.exists(path)
     r = backup.export_to(path)
@@ -75,25 +80,70 @@ def _preview(ctx: Context, path: str) -> int:
     return REFUSED if r.get("refused") else DONE
 
 
+def _stores(r: dict) -> tuple[list[str], list[str]]:
+    """(written, failed): the stores an apply wrote and the ones an error names a member of."""
+    import fnmatch
+    from ...storage import registry
+    files = [str(e.get("file") or "") for e in r.get("errors") or []]
+    failed = [st.name for st in registry.STORES if any(fnmatch.fnmatch(f, pat) for f in files for pat in st.owns)]
+    return [st.name for st in registry.STORES if st.name not in failed], failed
+
+
+def _after(failures: list[dict], step: str, fn):
+    """fn() for a step after the stores were written; a failure is recorded and gives None."""
+    try:
+        return fn()
+    except Exception as exc:
+        failures.append({"step": step, "reason": f"{type(exc).__name__}: {exc}"})
+        return None
+
+
 def _import(ctx: Context, path: str) -> int:
+    from ... import api_client, version
     from ...engine import daemon_unit, push
     from ...storage import backup, paths
+    status = api_client.status()
+    if status is not None:
+        try:
+            refusal = version.running_refusal(status, version.panel_stamp())
+        except version.StampError as exc:
+            refusal = str(exc)
+        if refusal is not None:
+            ctx.error(refusal)
+            return REFUSED
     paths.ensure_dirs()
     r = backup.apply(backup.preflight(path))
     r.pop("plan", None)
     if r.get("refused"):
         _print(ctx, f"Refused {path}", r)
         return REFUSED
-    outcome = push.sync_all("command", ("BUNDLE", "CURRENT"))
-    env_state = daemon_unit.write_env()
-    waiting = restart_line()
-    sync = (f"The engine refused it: {outcome.message}" if outcome.kind == "refused" else _SYNC[outcome.kind])
-    extra = [sync] + ([NO_SCREENS + "."] if env_state == "no screens" else []) + ([waiting] if waiting else [])
+    failures: list[dict] = []
+    outcome = _after(failures, "sync", lambda: push.sync_all("command", ("BUNDLE", "CURRENT")))
+    env_state = _after(failures, "engine-env", daemon_unit.write_env)
+    waiting = _after(failures, "restart", restart_line)
+    extra = []
+    if outcome is not None:
+        extra.append(f"The engine refused it: {outcome.message}" if outcome.kind == "refused"
+                     else _SYNC[outcome.kind])
+    extra += ([NO_SCREENS + "."] if env_state == "no screens" else []) + ([waiting] if waiting else [])
     extra += [FOLLOWUPS[f["kind"]] for f in r.get("followups") or [] if f.get("kind") in FOLLOWUPS]
-    r.update(sync={"outcome": outcome.kind, "reason": outcome.reason, "message": outcome.message},
+    r.update(sync=None if outcome is None else {"outcome": outcome.kind, "reason": outcome.reason,
+                                                "message": outcome.message},
              engine_env=env_state, restart=waiting)
+    if r.get("errors") or failures:
+        written, failed = _stores(r)
+        snapshot = next((n.get("path") for n in r.get("notes") or [] if n.get("kind") == "snapshot"), None)
+        r.update(written=written, failed=failed, failures=failures)
+        extra += [f"The stores were restored, but {_STEPS[f['step']]} failed: {f['reason']}" for f in failures]
+        extra.append("Restored: " + (", ".join(written) or "nothing"))
+        if failed:
+            extra.append("Not restored: " + ", ".join(failed))
+        if snapshot:
+            extra.append(f"The configuration from before this import is in {snapshot}; "
+                         f"lwe backup import {snapshot} puts it back.")
     _print(ctx, backup.receipt_line(r), r, extra)
-    return REFUSED if r.get("errors") or outcome.kind == "refused" else DONE
+    refused = outcome is not None and outcome.kind == "refused"
+    return REFUSED if r.get("errors") or failures or refused else DONE
 
 
 def run(ctx: Context, args: list[str]) -> int:

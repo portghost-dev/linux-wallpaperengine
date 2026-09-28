@@ -112,6 +112,73 @@ class BackupHandoffTest(unittest.TestCase):
         env_text = (self.config / "engine-env").read_text(encoding="utf-8")
         self.assertIn("--screen-root DP-1 --layer top", env_text)
 
+    def restored_with_a_failure(self) -> tuple[int, str, str, Path]:
+        """Import the archive at self.archive; returns the run and the one pre-restore snapshot."""
+        code, out, err = self.lwe("backup", "import", str(self.archive))
+        snapshots = sorted((Path(self.env["XDG_STATE_HOME"]) / "lwe" / "backups").glob("pre-restore-*"))
+        self.assertEqual(len(snapshots), 1, out)
+        return code, out, err, snapshots[0]
+
+    def assertWayBack(self, out: str, snapshot: Path) -> None:
+        lines = out.splitlines()
+        self.assertIn("Restored: settings, theme, discovery, playlists, overrides, tags, meta, rules", lines)
+        self.assertIn(f"The configuration from before this import is in {snapshot}; lwe backup import {snapshot} "
+                      "puts it back.", lines)
+
+    def test_an_engine_env_that_cannot_be_built_after_the_restore_prints_the_receipt_and_the_way_back(self) -> None:
+        assets = Path(self.env["HOME"]) / "My Assets"
+        assets.mkdir()
+        self.settings(f"ASSETS_DIR={assets}\n")
+        self.archive = self.root / "a.lwebackup"
+        self.assertEqual(self.lwe("backup", "export", str(self.archive))[0], 0)
+        self.settings("ASSETS_DIR=\n")
+        code, out, err, snapshot = self.restored_with_a_failure()
+        self.assertEqual((code, err), (1, ""), out)
+        self.assertEqual(out.splitlines()[0], "Restored settings")
+        self.assertIn("\nThe stores were restored, but rebuilding engine-env failed: ValueError: ", out)
+        self.assertWayBack(out, snapshot)
+
+    def test_an_engine_env_that_cannot_be_written_after_the_restore_prints_the_receipt_and_the_way_back(self) -> None:
+        self.settings("ENGINE_FPS=45\n")
+        self.archive = self.root / "a.lwebackup"
+        self.assertEqual(self.lwe("backup", "export", str(self.archive))[0], 0)
+        self.settings("ENGINE_FPS=30\n")
+        (self.config / "engine-env").mkdir()
+        code, out, err, snapshot = self.restored_with_a_failure()
+        self.assertEqual((code, err), (1, ""), out)
+        self.assertIn("\nThe stores were restored, but rebuilding engine-env failed: IsADirectoryError: ", out)
+        self.assertIn("ENGINE_FPS=45", (self.config / "settings.conf").read_text(encoding="utf-8"))
+        self.assertWayBack(out, snapshot)
+
+    def test_another_build_refuses_the_import(self) -> None:
+        self.settings("ENGINE_FPS=45\n")
+        archive = self.root / "a.lwebackup"
+        self.assertEqual(self.lwe("backup", "export", str(archive))[0], 0)
+        self.settings("ENGINE_FPS=30\n")
+        before = (self.config / "settings.conf").read_bytes()
+        with _fake_engine.FakeEngine(self.env["LWE_SOCKET"], version="0.0.0-other-build") as engine:
+            code, out, err = self.lwe("backup", "import", str(archive))
+        self.assertEqual((code, out), (1, ""), err)
+        self.assertIn("0.0.0-other-build", err)
+        self.assertEqual((self.config / "settings.conf").read_bytes(), before)
+        self.assertFalse((Path(self.env["XDG_STATE_HOME"]) / "lwe" / "backups").exists(), "a snapshot was taken")
+        self.assertEqual([cmd for cmd, _args in engine.calls], ["status"])
+
+    def test_an_engine_refusal_of_the_restore_exits_1(self) -> None:
+        self.settings("ENGINE_FPS=45\n")
+        archive = self.root / "a.lwebackup"
+        self.assertEqual(self.lwe("backup", "export", str(archive))[0], 0)
+        with _fake_engine.FakeEngine(self.env["LWE_SOCKET"]) as engine:
+            engine.script("schedule-set", _fake_engine.fail("no schedule here"))
+            code, out, err = self.lwe("backup", "import", str(archive))
+        self.assertEqual((code, err), (1, ""), out)
+        self.assertIn("\nThe engine refused it: no schedule here\n", out)
+
+    def test_an_export_to_a_path_ending_in_a_slash_is_refused(self) -> None:
+        self.assertEqual(self.lwe("backup", "export", "newdir/"),
+                         (1, "", f"cannot write {self.sender}/newdir/: it names a folder\n"))
+        self.assertFalse((self.sender / "newdir").exists())
+
     def test_refusals(self) -> None:
         not_a_backup = self.root / "notes.txt"
         not_a_backup.write_text("hello\n", encoding="utf-8")
@@ -178,6 +245,28 @@ class RestartLineTest(unittest.TestCase):
         code, out, err = self.lwe("backup", "import", str(self.archive))
         self.assertEqual((code, err), (0, ""))
         self.assertIn("\nlayer: waiting for lwe service restart.\n", out)
+
+    def test_the_import_syncs_then_rebuilds_engine_env_then_reads_what_waits(self) -> None:
+        order: list[str] = []
+        write_env, restart_state = self.du.write_env, self.du.restart_state
+
+        def sync_all(*args, **kwargs):
+            order.append("sync_all")
+            return self.push.Outcome("applied")
+
+        def env(*args, **kwargs):
+            order.append("write_env")
+            return write_env(*args, **kwargs)
+
+        def waits(*args, **kwargs):
+            order.append("restart_state")
+            return restart_state(*args, **kwargs)
+
+        with mock.patch.object(self.push, "sync_all", sync_all), mock.patch.object(self.du, "write_env", env), \
+                mock.patch.object(self.du, "restart_state", waits):
+            code, _out, err = self.lwe("backup", "import", str(self.archive))
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(order, ["sync_all", "write_env", "restart_state"])
 
     def test_no_restart_line_when_no_engine_process_can_be_read(self) -> None:
         self.live = None
