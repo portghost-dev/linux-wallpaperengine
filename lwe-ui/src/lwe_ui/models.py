@@ -370,6 +370,7 @@ class Backend(QObject):
         self._schedule_held = False
         self._schedule_refused = False
         self._drain_generation: int | None = None
+        self._drain_pid: int | None = None
         self._drain_failures = 0
         self._drain_after = 0.0
         self._version_logged: str | None = None
@@ -472,7 +473,9 @@ class Backend(QObject):
 
     @Slot(str, result=bool)
     def showNow(self, wid: str) -> bool:
-        """Show this wallpaper on the desktop now (engine `show` verb, ack-only ~30ms)."""
+        """Show this wallpaper on the desktop now (engine `show` verb, ack-only ~30ms). While this
+        process's restart holds sync it starts no service and is refused at once; an accepted show
+        then starts the rotation of an engine served under the brake (push.rearm_rotation)."""
         wid = (wid or "").strip()
         if not paths.is_safe_wid(wid):
             self.notice.emit(REFUSED_REASON)
@@ -480,7 +483,7 @@ class Backend(QObject):
         # card-play re-arms a stopped engine (v1.0 acceptance 7): master off is a hold,
         # not a lockout
         try:
-            if self.masterState() != "active":
+            if not push.restart_holding() and self.masterState() != "active":
                 self.setMaster(True)
         except Exception:
             pass
@@ -491,6 +494,8 @@ class Backend(QObject):
         try:
             with push.engine_only():
                 shown = push.show(wid)
+                if shown:
+                    push.rearm_rotation()
             if shown:
                 self.statusChanged.emit()
                 return True
@@ -1000,24 +1005,28 @@ class Backend(QObject):
         else:
             self._delivery_owners.discard(owner)
 
-    def _drain(self, pid: Any = None) -> None:
+    def _drain(self, status: Any = None) -> None:
         """The poll's drain: while no readiness wait or bridge delivery is due, the window's bundle
-        without waiting for sync when the marker has classes, or when `pid`, the engine the poll
-        just read, is not the marker's served pid. Failed drains of one generation are retried after
-        5 s, 15 s and 45 s, and when the retry after the 45 s wait fails, none follows until a writer
-        raises the generation. A run that found sync busy, an unresponsive status or another build's
-        engine counts nothing; an away one counts, as the poll has just read status."""
+        without waiting for sync when the marker has classes, or when the engine whose status the poll
+        just read is not the served one (push._unserved). Failed drains of one generation and one
+        engine pid are retried after 5 s, 15 s and 45 s, and when the retry after the 45 s wait fails,
+        none follows until a writer raises the generation or another pid answers. A run that found
+        sync busy, an unresponsive status or another build's engine counts nothing; an away one
+        counts, as the poll has just read status."""
         if self._ready_timer.isActive() or self.delivery_due():
             return
+        pid = status.get("pid") if isinstance(status, dict) else None
         try:
             state = marker.read()
-            unserved = isinstance(pid, int) and not isinstance(pid, bool) and marker.served() != pid
         except OSError:
             return
-        if not state["classes"] and not unserved:
+        if not state["classes"] and not (isinstance(status, dict) and push._unserved(status)):
             return
-        if state["generation"] != self._drain_generation:
+        other = isinstance(pid, int) and not isinstance(pid, bool) and pid != self._drain_pid
+        if state["generation"] != self._drain_generation or other:
             self._drain_generation, self._drain_failures, self._drain_after = state["generation"], 0, 0.0
+            if other:
+                self._drain_pid = pid
         if state["classes"] and (self._drain_failures >= 4 or monotonic() < self._drain_after):
             return
         try:
@@ -1045,6 +1054,8 @@ class Backend(QObject):
         try:
             with push.engine_only():
                 reply = api_client.next_wallpaper()
+                if reply is not None and reply.get("ok"):
+                    push.rearm_rotation()
         except Exception:
             return False
         if reply is not None and reply.get("ok"):
@@ -1786,7 +1797,7 @@ class Backend(QObject):
                         except OSError:
                             pass
                 if not first_sight:
-                    self._drain(pid)
+                    self._drain(api)
 
                 # the fullscreen ignore-list is a FILE the user edits in their own
                 # editor, so there is no save hook to hang a push on. Watch its

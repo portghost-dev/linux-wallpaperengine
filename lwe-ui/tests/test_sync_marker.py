@@ -11,8 +11,11 @@ marker write syncs the file, replaces it, then syncs the directory. A malformed 
 another version and an empty one read as BUNDLE and CURRENT and are rewritten. A window run
 records a sent playlist only for its generation and pid, and another pid empties the list at a
 run's start. The served pid is written without raising the generation, survives a clear, a writer's
-step, ensure and a sent record, and a file without it reads as none. Every child process gets an
-environment built from scratch.
+step, ensure and a sent record, and a file without it reads as none. The served record names one engine of
+this boot, its start within 5 s, and one that still carries "short" without boot and start reads without
+error and names none. owe ensures CURRENT and records the engine it is owed to, which every other write
+keeps; drop_owed takes back only the CURRENT owe added, while the generation is the one it recorded. Every
+child process gets an environment built from scratch.
 
 Run: PYTHONPATH=src python3 tests/test_sync_marker.py
 """
@@ -241,6 +244,42 @@ class SyncMarkerTest(unittest.TestCase):
         self.file.write_text(json.dumps(doc), encoding="utf-8")
         self.assertIsNone(marker.served())
         self.assertEqual(marker.generation(), raised + 1)
+
+    def test_the_served_record_names_one_engine_of_this_boot_and_a_record_without_boot_names_none(self) -> None:
+        marker.record_served(4242, 1000.0, braked=True, at=5.0)
+        record = marker.served_record()
+        self.assertEqual(record, {"pid": 4242, "at": 5.0, "boot": marker.boot_id(), "start": 1000.0, "braked": True})
+        self.assertEqual([marker.names(record, pid, start) for pid, start in
+                          ((4242, 1004.5), (4242, 994.0), (4243, 1000.0), (4242, None))],
+                         [True, False, False, False])
+        with mock.patch.object(marker, "boot_id", return_value="another boot"):
+            self.assertFalse(marker.names(record, 4242, 1000.0))
+        doc = json.loads(self.file.read_text(encoding="utf-8"))
+        doc["served"] = {"pid": 4242, "at": 5.0, "short": 1}
+        self.file.write_text(json.dumps(doc), encoding="utf-8")
+        self.assertEqual(marker.served(), 4242)
+        self.assertFalse(marker.names(marker.served_record(), 4242, None))
+
+    def test_owe_records_its_engine_every_write_keeps_it_and_drop_owed_takes_back_only_its_current(self) -> None:
+        generation = marker.owe(5000, None)
+        owed = {"pid": 5000, "boot": marker.boot_id(), "start": None, "current": generation}
+        self.assertEqual((marker.read()["classes"], marker.owed_record()), (["BUNDLE", "CURRENT"], owed))
+        self.assertTrue(marker.record_sent(generation, 5000, "main"))
+        marker.start_sent(generation, 5000)
+        marker.record_served(4242)
+        marker.drop_owed(5001, None)
+        self.assertEqual((marker.read()["classes"], marker.owed_record()), (["BUNDLE", "CURRENT"], owed))
+        marker.drop_owed(5000, None)
+        self.assertEqual((marker.read(), marker.owed_record()),
+                         ({"generation": generation, "classes": ["BUNDLE"], "sent": {"pid": 5000, "playlists": ["main"]}},
+                          {**owed, "current": None}))
+        raised = marker.owe(5000, None)
+        with marker.writing(("BUNDLE",)):
+            pass
+        marker.drop_owed(5000, None)
+        self.assertEqual((raised, marker.read()["classes"]), (generation + 1, ["BUNDLE", "CURRENT"]))
+        self.assertTrue(marker.clear(marker.generation()))
+        self.assertEqual(marker.owed_record()["pid"], 5000)
 
     def test_record_sent_refuses_a_stale_generation_and_another_pid(self) -> None:
         stale = marker.ensure(("BUNDLE",))

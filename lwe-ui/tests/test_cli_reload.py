@@ -1,7 +1,7 @@
 """lwe reload: every file checked from its raw text; any error applies and writes nothing; otherwise what
 changed since reload's own snapshot, the warnings and the cleanup are printed, the store is applied
-through sync_all with the re-show, engine-env is rebuilt, and the restart line names what waits. Under the
-crash-loop brake the reload sends no show and no rotation start, and the command prints the reason.
+through sync_all with the re-show, engine-env is rebuilt, and the restart line names what waits. An engine
+that refused its restore still gets the reload's re-show and its rotation lanes-set, and no note is printed.
 
 Each form runs through cli.main in this process with HOME and the XDG folders at scratch
 (_cli_env.scratch_home), daemon_unit's subprocess call replaced by a recorder, one screen faked, the
@@ -106,16 +106,18 @@ class ReloadTest(unittest.TestCase):
         self.assertIn("show", self.sent(engine), "the reload re-shows the wallpaper on screen")
         self.assertEqual(self.lwe("reload")[1].splitlines(), [SAME, "Applied."])
 
-    def test_under_the_crash_loop_brake_the_reload_sends_no_show_and_says_why(self) -> None:
+    def test_an_engine_that_refused_its_restore_still_gets_the_reload_reshow_and_rotation(self) -> None:
         import time
-        from lwe_ui.engine import marker, push
-        marker.record_served(os.getpid() + 1, 1, time.time() - 10.0)
-        engine = self.engine(served=False)
+        self.paths.panel_state_dir().mkdir(parents=True, exist_ok=True)
+        (self.paths.panel_state_dir() / "sync-pending").write_text(json.dumps(
+            {"version": 1, "generation": None, "classes": [], "sent": {"pid": None, "playlists": []},
+             "served": {"pid": os.getpid() + 1, "at": time.time() - 10.0, "short": 1}}), encoding="utf-8")
+        engine = self.engine(served=False, restore_refused=True)
         code, out, err = self.lwe("reload")
-        self.assertEqual((code, out.splitlines()[-1], err), (0, "Applied.", push.BRAKED + "\n"))
-        self.assertNotIn("show", self.sent(engine))
-        self.assertNotIn("lanes-set", self.sent(engine))
-        self.assertEqual(marker.served_record()[::2], (os.getpid(), 2))
+        self.assertEqual((code, out.splitlines()[-1], err), (0, "Applied.", ""))
+        self.assertIn("show", self.sent(engine))
+        self.assertIn(("lanes-set", {"lanes": [{"id": "all", "playlist": "main", "enabled": True}]}), engine.calls)
+        self.assertEqual(self.marker.served(), os.getpid())
 
     def test_a_hand_edit_prints_what_changed_and_applies(self) -> None:
         engine = self.engine()

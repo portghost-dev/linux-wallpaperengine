@@ -3,24 +3,29 @@
 A change made while the engine is away is delivered whole by the next poll's drain, and the marker
 clears. A pause emits the lane clock its lanes-set reply carries. Failed drains of one generation are
 retried after 5 s, 15 s and 45 s, none follows a failed retry after the 45 s wait until a writer
-raises the generation, and polls that find the engine away count nothing. The schedule follow never
+raises the generation or another engine pid answers, which gets retries of its own, and polls that find
+the engine away count nothing. The schedule follow never
 runs inside the sync hold.
 With sync held by another process a change returns pending, and the poll's drain returns at once.
 The service switch rebuilds engine-env, the unit and daemon-reload before systemctl, fails with the
 existing notice when that fails, and bundles once the engine answers; a restart takes only an engine
 whose pid is a new MainPID and keeps sync while its unit stops or starts, up to its cap, and meanwhile
-every other sync attempt in the window, one already waiting included, ends at once, pending or busy;
-every end of the hold gives later attempts their wait again. When a start or restart delivered to the
+every other sync attempt in the window, one already waiting included, ends at once, pending or busy, and
+card play starts no service and returns at once; every end of the hold gives later attempts their wait
+again. When a start or restart delivered to the
 old engine (an unreadable MainPID, a hold that ended early, a start that took the engine answering on
 the socket), the new engine is served by the next poll, and so is an engine the panel did not start: a
 pid that changes between polls, or one that arrives after the marker was cleared. Each gets one bundle
-and is then recorded as served.
+and is then recorded as served. While the engine reports that it refused its restore, a new window's first
+sight sends no show and no lanes-set that enables rotation, and an explicit show or next, from the window
+or the tray, then sends the rotation lanes-set.
 A manual switch while the engine is away with the schedule on writes nothing. A switch to a playlist
 being deleted, made by another writer while the delete reads, waits for the delete: the delete raises
 nothing and changes ACTIVE_PLAYLIST only in a change that carries the active row. A hand-broken store
 line refuses the change before any request. The tray's next and pause send nothing while sync is
 held elsewhere. An import pass runs one sync_all. The start-up reconcile writes engine-env only. A
-settings reset sends the bundle with one re-show and rewrites engine-env. The engine is an
+settings reset sends the bundle with one re-show and rewrites engine-env, also while the engine
+refused its restore. The engine is an
 api_client recorder with a scripted status; the one child process gets an environment built from
 scratch.
 
@@ -30,6 +35,7 @@ import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import ast
 import contextlib
 import copy
+import json
 import os
 import shutil
 import subprocess
@@ -183,7 +189,7 @@ class WindowSyncTest(unittest.TestCase):
                                         lambda *a, _n=name, **k: self.env_writes.append(_n) or "written")
             patcher.start()
             self.addCleanup(patcher.stop)
-        marker.record_served(4242, 0, time.time() - 120.0)
+        marker.record_served(4242)
         self.backend = models.Backend()
 
     @contextlib.contextmanager
@@ -585,7 +591,7 @@ class WindowSyncTest(unittest.TestCase):
                                 ("cap", FakeUnit(4242, on_restart="deactivating"), 0.3)):
             with self.subTest(case=name):
                 marker.clear(marker.ensure(("BUNDLE",)))
-                marker.record_served(4242, 0, time.time() - 120.0)
+                marker.record_served(4242)
                 with self.engine(status(pid=4242)) as rec, self.systemd(fake, cap_s=cap):
                     self.assertTrue(self.backend.restartMaster())
                     self._finish_restart()
@@ -617,6 +623,37 @@ class WindowSyncTest(unittest.TestCase):
             after = self._replaced(rec, polls=2)
         self.assertEqual(after.count("lanes_set"), 1, after)
         self.assertEqual((marker.served(), marker.read()["classes"]), (5000, []))
+
+    def test_a_new_engine_gets_its_own_retries_after_the_old_one_spent_them(self) -> None:
+        marker.ensure(("BUNDLE", "CURRENT"))
+        self.backend._engine_pid_seen = 4242
+        clock = Clock()
+        with mock.patch.object(models, "monotonic", clock):
+            for step in range(4):
+                clock.now = 1000.0 + 100.0 * step
+                with self.engine(status(pid=4242)) as rec:
+                    rec.answer("set_particles", REFUSED)
+                    self.backend.status()
+                self.assertIn("set_particles", rec.verbs())
+            self.assertEqual(self.backend._drain_failures, 4)
+            with self.engine(status(pid=5000)) as rec:
+                for _ in range(3):
+                    clock.now += 100.0
+                    self.backend.status()
+        self.assertEqual(rec.verbs().count("lanes_set"), 1, rec.verbs())
+        self.assertEqual((marker.served(), marker.read()["classes"]), (5000, []))
+
+    def test_a_new_window_sends_no_show_and_starts_no_rotation_while_the_engine_refused_its_restore(self) -> None:
+        with self.engine(status(pid=300, restore_refused=True)) as rec:
+            self.assertEqual(push.sync_all("command").kind, "applied")
+            push.brake_notes()
+            sent = len(rec.calls)
+            models.Backend().status()
+        after = rec.calls[sent:]
+        self.assertIn("lanes_set", [verb for verb, _a, _k in after], "the first sight bundled")
+        self.assertNotIn("show", [verb for verb, _a, _k in after])
+        self.assertEqual([lane for verb, args, _k in after if verb == "lanes_set" for lane in args[0]],
+                         [{"id": "all", "playlist": "main"}])
 
     def test_readiness_takes_only_an_engine_whose_pid_is_a_new_non_zero_main_pid(self) -> None:
         # (status pid, MainPID, MainPID before the launch, ready)
@@ -667,6 +704,46 @@ class WindowSyncTest(unittest.TestCase):
         self.assertEqual(notices, [f"Store busy: another writer holds {paths.locks_dir() / 'sync.lock'}"])
         self.assertEqual(sum("restart" in call for call in fake.calls), 1, "the second click launched nothing")
         self.assertEqual((first.is_alive(), marker.read()["classes"]), (False, []))
+
+    def test_card_play_while_a_restart_holds_sync_starts_no_service_and_returns_at_once(self) -> None:
+        parked, release = threading.Event(), threading.Event()
+        fake = FakeUnit(4242, on_restart="deactivating")
+
+        def wait(old_pid=None, timeout_s=20.0):
+            parked.set()
+            release.wait(15)
+            return None
+
+        with self.engine(status(pid=4242)) as rec, self.systemd(fake), mock.patch.object(push, "wait_ready", wait):
+            self.assertTrue(self.backend.restartMaster())
+            try:
+                self.assertTrue(parked.wait(10))
+                start = time.monotonic()
+                shown = self.backend.showNow("111")
+                took = time.monotonic() - start
+            finally:
+                fake.state = "active"
+                release.set()
+            self._finish_restart()
+        self.assertEqual((shown, [call for call in fake.calls if "enable" in call]), (False, []))
+        self.assertLess(took, 0.1)
+        self.assertEqual(rec.verbs(), [])
+
+    def test_after_a_braked_bundle_an_explicit_show_or_next_starts_the_rotation(self) -> None:
+        shell = types.SimpleNamespace()
+        for name, action in (("showNow", lambda: self.backend.showNow("111")),
+                             ("rotateNext", self.backend.rotateNext),
+                             ("the tray's next", lambda: tray.TrayProcess._next(shell))):
+            with self.subTest(action=name):
+                with self.engine(status(pid=300, restore_refused=True)) as rec:
+                    self.assertEqual(push.sync_all("window").kind, "applied")
+                    sent = len(rec.calls)
+                    action()
+                self.assertNotIn({"id": "all", "playlist": "main", "enabled": True},
+                                 [lane for verb, args, _k in rec.calls[:sent] if verb == "lanes_set" for lane in args[0]])
+                self.assertEqual([lane for verb, args, _k in rec.calls[sent:] if verb == "lanes_set" for lane in args[0]],
+                                 [{"id": "all", "playlist": "main", "enabled": True}])
+                self.assertFalse(marker.served_record()["braked"])
 
     def test_a_delivery_already_taking_sync_when_a_restart_hold_begins_does_not_wait_for_it(self) -> None:
         go, held, release = threading.Event(), threading.Event(), threading.Event()
@@ -971,6 +1048,17 @@ class WindowSyncTest(unittest.TestCase):
         self.assertNotIn("set_speed", verbs[:verbs.index("show")], "the bundle leaves speed out at 0")
         self.assertEqual(self.env_writes, ["write_env"])
         self.assertEqual(marker.read()["classes"], [])
+
+    def test_a_settings_reset_still_reshows_and_starts_rotation_while_the_engine_refused_its_restore(self) -> None:
+        (paths.panel_state_dir() / "sync-pending").write_text(json.dumps(
+            {"version": 1, "generation": None, "classes": [], "sent": {"pid": None, "playlists": []},
+             "served": {"pid": 4200, "at": time.time() - 10.0, "short": 1}}), encoding="utf-8")
+        with self.engine(status(restore_refused=True)) as rec:
+            self.assertTrue(self.backend.resetConfig())
+        self.assertEqual(rec.verbs().count("show"), 1)
+        lanes = [lane for verb, args, _k in rec.calls if verb == "lanes_set" for lane in args[0]]
+        self.assertTrue(lanes and all("enabled" in lane for lane in lanes), lanes)
+        self.assertEqual((marker.served(), marker.read()["classes"]), (4242, []))
 
 
 if __name__ == "__main__":

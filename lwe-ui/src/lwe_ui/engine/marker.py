@@ -2,13 +2,15 @@
 what the store holds.
 
 The file holds {"version": 1, "generation": N, "classes": [...], "sent": {"pid": N or null,
-"playlists": [...]}, "served": {"pid": P, "at": T, "short": C}}. BUNDLE means the engine needs the
-full sync from the store, and CURRENT that the wallpaper on screen also needs a re-show. sent lists
-the playlists a window run has already transferred in this generation to that engine pid. served
-names the engine that last took a whole bundle, the time T it was written and the count C of engines
-before it that were replaced soon after being served; it is written without raising the generation,
-every other write keeps it, and a file without it reads as none, so an engine it does not name is
-owed the bundle.
+"playlists": [...]}, "served": {"pid": P, "at": T, "boot": B, "start": S, "braked": F}, "owed": {"pid": P,
+"boot": B, "start": S, "current": G}}. BUNDLE means the engine needs the full sync from the store, and
+CURRENT that the wallpaper on screen also needs a re-show. sent lists the playlists a window run has
+already transferred in this generation to that engine pid. served names the engine that last took a
+whole bundle: its pid, the boot_id of the boot it ran in, its start time S (None when its status gave no
+uptime) and whether it took the bundle under the brake F, written at time T. owed names the engine the
+owed bundle was last owed to, with the generation G at which owe added CURRENT for it (None once taken
+back). Both are written without raising the generation, every other write keeps them, and a file without
+them reads as none, so an engine the served record does not name is owed the bundle.
 A record that holds only served has no generation, and reads as no marker for everything else.
 A writer raises the generation of the marker; ensure makes a fresh one when no marker exists and
 raises it when it adds a class the marker did not hold; a clear keeps it. So a generation value
@@ -30,6 +32,9 @@ from typing import Any
 from ..storage import atomic, lock, paths
 
 _CLASSES = ("BUNDLE", "CURRENT")
+_SIDE = ("served", "owed")
+_START_SLACK_S = 5.0
+_BOOT_ID = Path("/proc/sys/kernel/random/boot_id")
 
 
 def _file() -> Path:
@@ -37,20 +42,22 @@ def _file() -> Path:
 
 
 def _state(generation: int | None, classes: Iterable[str], pid: int | None = None,
-           playlists: Iterable[str] = (), served: dict[str, Any] | None = None) -> dict[str, Any]:
+           playlists: Iterable[str] = (), served: dict[str, Any] | None = None,
+           owed: dict[str, Any] | None = None) -> dict[str, Any]:
     return {"generation": generation, "classes": list(classes),
-            "sent": {"pid": pid, "playlists": list(playlists)}, "served": served}
+            "sent": {"pid": pid, "playlists": list(playlists)}, "served": served, "owed": owed}
 
 
 def _public(state: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in state.items() if key != "served"}
+    return {key: value for key, value in state.items() if key not in _SIDE}
 
 
 def _write(state: dict[str, Any]) -> None:
     path = _file()
     doc = {"version": 1, **_public(state)}
-    if state["served"] is not None:
-        doc["served"] = state["served"]
+    for key in _SIDE:
+        if state[key] is not None:
+            doc[key] = state[key]
     atomic.atomic_write_text(path, json.dumps(doc) + "\n")
     fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -60,11 +67,10 @@ def _write(state: dict[str, Any]) -> None:
 
 
 def _load() -> dict[str, Any]:
-    """The marker's state, served included; the caller holds the marker lock. A malformed file,
-    or one with another version, is rewritten as BUNDLE and CURRENT with an empty sent, a fresh
-    generation and no served record; a served entry without an int pid reads as none, and one
-    whose time is not a number, or whose count is not a whole number of at least 0, reads with no
-    time or a count of 0."""
+    """The marker's state, served and owed included; the caller holds the marker lock. A malformed
+    file, or one with another version, is rewritten as BUNDLE and CURRENT with an empty sent, a fresh
+    generation and no served or owed record; a served or owed entry without an int pid reads as none,
+    and one with an int pid is kept as written, for names() to read."""
     try:
         doc = json.loads(_file().read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -79,14 +85,10 @@ def _load() -> dict[str, Any]:
             and "pid" in sent and (sent["pid"] is None or type(sent["pid"]) is int)
             and isinstance(sent.get("playlists"), list)
             and all(isinstance(slug, str) for slug in sent["playlists"])):
-        served = doc.get("served")
-        record = None
-        if isinstance(served, dict) and type(served.get("pid")) is int:
-            at, short = served.get("at"), served.get("short")
-            record = {"pid": served["pid"], "at": at if type(at) in (int, float) else None,
-                      "short": short if type(short) is int and short >= 0 else 0}
+        side = {key: doc[key] if isinstance(doc.get(key), dict) and type(doc[key].get("pid")) is int else None
+                for key in _SIDE}
         return _state(doc["generation"], (c for c in _CLASSES if c in doc["classes"]),
-                      sent["pid"], sent["playlists"], record)
+                      sent["pid"], sent["playlists"], **side)
     state = _state(time.time_ns(), _CLASSES)
     _write(state)
     return state
@@ -117,29 +119,102 @@ def read() -> dict[str, Any]:
         return _public(_load())
 
 
+def boot_id() -> str:
+    """The text of /proc/sys/kernel/random/boot_id, which names this boot; "" when it cannot be read."""
+    try:
+        return _BOOT_ID.read_text(encoding="ascii").strip()
+    except OSError:
+        return ""
+
+
+def names(record: dict[str, Any] | None, pid: int, start: float | None) -> bool:
+    """Whether a served or owed record names the engine whose status pid is `pid` and whose start is
+    `start` (None when its status gave no uptime): the same pid, the boot_id of this boot, and starts
+    within 5 s of each other, or both None. A record without "boot" or "start" names no engine."""
+    if not isinstance(record, dict) or record.get("pid") != pid or "boot" not in record or "start" not in record:
+        return False
+    if record["boot"] != boot_id():
+        return False
+    have = record["start"]
+    if have is None or start is None:
+        return have is None and start is None
+    return type(have) in (int, float) and abs(have - start) <= _START_SLACK_S
+
+
 def served() -> int | None:
-    """The pid of the engine that last took a whole bundle, read under the marker lock; None when
-    none is recorded."""
-    return served_record()[0]
+    """The pid the served record names, read under the marker lock; None when none is recorded."""
+    record = served_record()
+    return None if record is None else record["pid"]
 
 
-def served_record() -> tuple[int | None, float | None, int]:
-    """The served record as (pid, the time it was written, the short-lived count), read under the
-    marker lock; (None, None, 0) when none is recorded."""
+def served_record() -> dict[str, Any] | None:
+    """The served record as written, read under the marker lock; None when none is recorded."""
     with lock.held("marker"):
         record = _load()["served"]
-    return (None, None, 0) if record is None else (record["pid"], record["at"], record["short"])
+    return None if record is None else dict(record)
 
 
-def record_served(pid: int, short: int = 0, at: float | None = None) -> None:
-    """The engine whose status pid is `pid` has taken a whole bundle: write served under the
-    marker lock with the time `at` (now when not given) and the short-lived count `short`, keeping
-    the generation, the classes and sent; a record that already names `pid` is left as it is. With
-    no marker, the record holds served alone."""
+def owed_record() -> dict[str, Any] | None:
+    """The owed record as written, read under the marker lock; None when none is recorded."""
+    with lock.held("marker"):
+        record = _load()["owed"]
+    return None if record is None else dict(record)
+
+
+def record_served(pid: int, start: float | None = None, braked: bool = False, at: float | None = None) -> None:
+    """The engine whose status pid is `pid` and whose start is `start` has taken a whole bundle, under
+    the brake when `braked`: write served as {"pid", "at", "boot", "start", "braked"} under the marker
+    lock, with the time `at` (now when not given) and this boot's boot_id, keeping the generation, the
+    classes, sent and owed. A record that already names that engine with the same braked is left as it
+    is. With no marker, the record holds served alone."""
     with lock.held("marker"):
         state = _load()
-        if (state["served"] or {}).get("pid") != pid:
-            _write({**state, "served": {"pid": pid, "at": time.time() if at is None else at, "short": short}})
+        if names(state["served"], pid, start) and state["served"].get("braked") is braked:
+            return
+        _write({**state, "served": {"pid": pid, "at": time.time() if at is None else at, "boot": boot_id(),
+                                    "start": start, "braked": braked}})
+
+
+def clear_braked(pid: int, start: float | None) -> None:
+    """While the served record names that engine as braked, write it with braked false."""
+    with lock.held("marker"):
+        state = _load()
+        if names(state["served"], pid, start) and state["served"].get("braked") is True:
+            _write({**state, "served": {**state["served"], "braked": False}})
+
+
+def owe(pid: int, start: float | None) -> int:
+    """The owed bundle for the engine whose status pid is `pid` and whose start is `start`: BUNDLE and
+    CURRENT ensured as ensure() does, and owed written as {"pid", "boot", "start", "current"} for that
+    engine, current being the generation when this call added CURRENT, or when the CURRENT an earlier
+    owe added is still held at the generation it recorded, else None. Returns the generation."""
+    with lock.held("marker"):
+        state = _load()
+        merged = _merged(state["classes"], _CLASSES)
+        earlier = (state["owed"] or {}).get("current")
+        ours = "CURRENT" not in state["classes"] or (earlier is not None and earlier == state["generation"])
+        if state["classes"] and merged == state["classes"]:
+            generation, kept = state["generation"], state
+        else:
+            generation = _fresh(state)
+            kept = _state(generation, merged, served=state["served"], owed=state["owed"])
+        _write({**kept, "owed": {"pid": pid, "boot": boot_id(), "start": start,
+                                 "current": generation if ours else None}})
+        return generation
+
+
+def drop_owed(pid: int, start: float | None) -> None:
+    """After a run to the engine the owed record names that ended refused or uncertain: while the marker
+    holds CURRENT at the generation owe recorded for it, CURRENT goes and owed keeps no generation; the
+    generation, the other classes and sent are kept."""
+    with lock.held("marker"):
+        state = _load()
+        owed = state["owed"]
+        if not names(owed, pid, start) or owed.get("current") is None or owed["current"] != state["generation"] \
+                or "CURRENT" not in state["classes"]:
+            return
+        _write({**state, "classes": [c for c in state["classes"] if c != "CURRENT"],
+                "owed": {**owed, "current": None}})
 
 
 @contextmanager
@@ -152,7 +227,7 @@ def writing(classes: Iterable[str]) -> Iterator[tuple[int, bool]]:
     with lock.held("marker"):
         state = _load()
         generation = _fresh(state)
-        _write(_state(generation, _merged(state["classes"], classes), served=state["served"]))
+        _write(_state(generation, _merged(state["classes"], classes), served=state["served"], owed=state["owed"]))
         yield generation, bool(state["classes"])
 
 
@@ -167,7 +242,7 @@ def ensure(classes: Iterable[str]) -> int:
         if state["classes"] and merged == state["classes"]:
             return state["generation"]
         generation = _fresh(state)
-        _write(_state(generation, merged, served=state["served"]))
+        _write(_state(generation, merged, served=state["served"], owed=state["owed"]))
         return generation
 
 
@@ -187,7 +262,8 @@ def clear(generation: int, keep: Iterable[str] = ()) -> bool:
         state = _load()
         if not _matches(state, generation):
             return False
-        cleared = _state(generation, (c for c in state["classes"] if c in keep), served=state["served"])
+        cleared = _state(generation, (c for c in state["classes"] if c in keep), served=state["served"],
+                         owed=state["owed"])
         if cleared != state:
             try:
                 _write(cleared)
@@ -215,7 +291,7 @@ def start_sent(generation: int, pid: int) -> None:
         state = _load()
         listed = state["sent"]["pid"]
         if _matches(state, generation) and listed is not None and listed != pid:
-            _write(_state(state["generation"], state["classes"], served=state["served"]))
+            _write(_state(state["generation"], state["classes"], served=state["served"], owed=state["owed"]))
 
 
 def record_sent(generation: int, pid: int, slug: str) -> bool:
@@ -228,5 +304,5 @@ def record_sent(generation: int, pid: int, slug: str) -> bool:
             return False
         if listed != pid or slug not in playlists:
             _write(_state(state["generation"], state["classes"], pid,
-                          playlists + ([] if slug in playlists else [slug]), state["served"]))
+                          playlists + ([] if slug in playlists else [slug]), state["served"], state["owed"]))
         return True

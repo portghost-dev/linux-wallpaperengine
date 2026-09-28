@@ -1,6 +1,8 @@
 """The live and next-wallpaper setting commands: each saves one line of settings.conf and sends the
 key's targeted push through the change runner, with the runner's outcome as the receipt; speed 0 and
-audiosmoothing go to the engine under sync and are never saved.
+audiosmoothing go to the engine under sync and are never saved. While the engine reports that it refused
+its restore, a braked bundle that ended applied prints its reason through the command's output, one
+{"note": ...} line on stderr under -j, and one that did not end applied prints none.
 
 Each form runs through cli.main in this process with HOME and the XDG folders at scratch
 (_cli_env.scratch_home), daemon_unit's subprocess call replaced by a recorder, one screen faked and a
@@ -11,6 +13,7 @@ Run: PYTHONPATH=src python3 tests/test_cli_settings_live.py
 import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import contextlib
 import io
+import json
 import shutil
 import tempfile
 import unittest
@@ -174,6 +177,20 @@ class LiveSettingTest(unittest.TestCase):
         self.assertEqual(verbs[-1], "set-volume")
         self.assertIn("lanes-set", verbs[:-1], "the bundle went first")
         self.assertEqual(self.marker.read()["classes"], [])
+
+    def test_a_braked_bundle_that_ended_applied_prints_its_reason_through_the_output(self) -> None:
+        from lwe_ui.engine import push
+        engine = self.engine(served=False, restore_refused=True)
+        note = json.dumps({"note": push.BRAKED}, ensure_ascii=False, separators=(",", ":"))
+        code, _out, err = self.lwe("-j", "volume", "40")
+        self.assertEqual((code, err), (0, note + "\n"))
+        self.marker.ensure(("BUNDLE",))
+        self.assertEqual(self.lwe("volume", "41"), (0, f"volume 41: saved; {NOW}.\n", push.BRAKED + "\n"))
+        self.marker.ensure(("BUNDLE",))
+        engine.script("set-particles", _fake_engine.fail("particles off"))
+        code, _out, err = self.lwe("volume", "42")
+        self.assertNotIn(push.BRAKED, err, "a braked bundle that did not end applied prints no note")
+        self.assertNotIn("show", [cmd for cmd, _args in self.sent(engine)])
 
     def test_with_the_engine_frozen_volume_sends_no_set_speed(self) -> None:
         engine = self.engine(speed=0.0)

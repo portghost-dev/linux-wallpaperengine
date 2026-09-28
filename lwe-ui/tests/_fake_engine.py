@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 FIELDS = ("version", "pid", "speed", "current", "rotation", "lanes", "schedule", "outputs", "config",
-          "audio_smooth")
+          "audio_smooth", "restore_refused")
 
 
 @dataclass(frozen=True)

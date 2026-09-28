@@ -4,8 +4,8 @@ The first word names the verb and the rest are its arguments; -j or --json anywh
 asks for JSON output. Verbs come from the modules in lwe_ui.cli.verbs (see registry), and each
 returns its exit code: DONE 0, REFUSED 1, ENGINE_DOWN 2, USAGE 3. Every line goes out as UTF-8
 through clean(), as the engine writes its own output, and a closed output pipe ends the command
-quietly with PIPE_CLOSED. A crash-loop brake applied during the verb prints its reason on stderr
-after the verb's own output (engine/push.brake_notes).
+quietly with PIPE_CLOSED. A braked bundle that ended applied during the verb prints its reason
+through ctx.note after the verb's own output (engine/push.brake_notes).
 """
 from __future__ import annotations
 
@@ -90,6 +90,14 @@ class Context:
         else:
             print(message if line is None else line, file=self.err)
 
+    def note(self, message: str) -> None:
+        """Print a note on err after the verb's own output: in text mode the message, under -j
+        {"note":message} on one line."""
+        if self.json:
+            print(json.dumps({"note": message}, ensure_ascii=False, separators=(",", ":")), file=self.err)
+        else:
+            print(message, file=self.err)
+
 
 def main(argv: list[str], *, sender_stamp: str | None = None, cwd_entered: bool = False) -> int:
     """The verb's exit code, or PIPE_CLOSED when a write or a flush on stdout or stderr meets a
@@ -129,7 +137,7 @@ def _main(argv: list[str], sender_stamp: str | None, cwd_entered: bool) -> int:
         ctx.out.flush()
         push = sys.modules.get("lwe_ui.engine.push")
         for note in push.brake_notes() if push is not None else ():
-            print(note, file=ctx.err)
+            ctx.note(note)
         return code
     except StoreBusy as exc:
         ctx.error(str(exc))

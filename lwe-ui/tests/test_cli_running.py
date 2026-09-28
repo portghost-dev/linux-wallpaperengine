@@ -2,7 +2,8 @@
 
 next and prev read status first, then send the engine's next or prev under the sync lock, held until
 the final reply, and print what is on screen from one more status read; they write nothing, leave the
-playlist timer alone and send no lanes-set. pause saves ROTATION_ENABLED through the change runner and
+playlist timer alone and send no lanes-set, but a next to an engine served under the brake is followed by
+the rotation lanes-set and clears the served record's braked flag. pause saves ROTATION_ENABLED through the change runner and
 sends one lanes-set with the lane's enabled state, never set-speed; a value already saved is neither
 written nor sent. The engine is always tests/_fake_engine.py on a socket the test made. "The only
 request" means apart from status reads, and the marker is read as engine/marker.py defines it: it exists while it
@@ -116,6 +117,14 @@ class NextPrevTest(RunningCase):
         self.assertEqual(engine.calls, [("status", {}), ("next", {}), ("status", {})])
         self.assertEqual(self.conf.read_bytes(), before)
         self.assertEqual(self.marker_classes(), [])
+
+    def test_a_next_to_an_engine_served_under_the_brake_then_sends_its_rotation_lanes_set(self) -> None:
+        engine = self.engine(current=DEEP, lanes=[{"id": "all", "playlist": "chill"}])
+        self.marker.record_served(engine.fields["pid"], braked=True)
+        self.assertEqual(self.lwe("next")[0], 0)
+        self.assertEqual(self.requests(engine)[1:],
+                         [("lanes-set", {"lanes": [{"id": "all", "playlist": "chill", "enabled": True}]})])
+        self.assertFalse(self.marker.served_record()["braked"])
 
     def test_a_done_without_a_status_answer_after_it_names_the_id_from_the_reply(self) -> None:
         engine = self.engine(current=DEEP)

@@ -188,22 +188,26 @@ class EngineSyncTest(unittest.TestCase):
         _API.prev_wallpaper = lambda: {"id": 1, "ok": False, "error": "history is empty"}
         self.assertFalse(self.backend.rotatePrev())
 
-    def test_first_sight_pushes_once_and_rearrival_does_not(self) -> None:
+    def test_first_sight_pushes_once_and_a_new_engine_is_bundled_once(self) -> None:
         self._seed_playlist(["111"])
+        shown: list[str] = []
+        self.addCleanup(setattr, _API, "show", _API.show)
+        _API.show = lambda wid, wait_done=False, **kw: shown.append(wid) or dict(_OK)
         api_state = {"api": 1, "version": version.panel_stamp(), "pid": 100, "uptime_s": 5,
                      "screens": {"DP-1": "/x/111"}, "current": {"id": "111", "ui_id": "111"}, "rotation": {}}
         _API.status = lambda: dict(api_state)
         self.backend.status()
         first = len(self.pushes)
-        self.assertEqual(len(self.binds), 1, "first sight is one bundle")
+        self.assertEqual((len(self.binds), len(shown)), (1, 1), "first sight is one bundle with its re-show")
         self.assertGreaterEqual(first, 1, "first sighting pushes the panel's policy")
         self.backend.status()
         self.assertEqual(len(self.pushes), first, "same pid, no re-push")
         api_state["pid"] = 200
         self.backend.status()
-        self.assertEqual(len(self.pushes), first,
-                         "engine re-arrival must NOT re-push: the engine restores its own "
-                         "state and an auto re-push would feed a crash loop")
+        self.assertEqual((len(self.binds), len(shown)), (2, 2),
+                         "an engine the marker does not name as served gets the bundle and its re-show")
+        self.backend.status()
+        self.assertEqual((len(self.binds), len(shown)), (2, 2), "once served, the same engine gets nothing more")
 
 
     def test_fullscreen_behavior_derives_from_legacy_policy(self) -> None:
