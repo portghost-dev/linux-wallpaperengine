@@ -49,6 +49,18 @@ class _FakeReload:
 _fake_reload = _FakeReload()
 daemon_unit.subprocess.run = _fake_reload
 
+PID = 4242
+
+
+def engine_status(pid: int = PID, **knobs: tuple) -> dict:
+    """A status reply from the engine: its pid and a config block holding the five restart knobs
+    at their defaults, each knob given as (value, source) replacing or adding its entry."""
+    config = {"LWE_SSFACTOR": (1.0, "default"), "LWE_CLAMPCOMPOSITES": (1.0, "default"),
+              "LWE_TEXCOMP": (True, "default"), "LWE_TEXDETAIL": ("auto", "default"),
+              "LWE_HWDEC": ("no", "default"), **knobs}
+    return {"pid": pid, "config": {name: {"value": value, "source": source}
+                                   for name, (value, source) in config.items()}}
+
 
 class DaemonUnitTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -334,52 +346,56 @@ class DaemonUnitTest(unittest.TestCase):
 
     def test_restart_pending_compares_only_the_settings_own_keys(self) -> None:
         """The clamp reaches the engine only at service start, so the row's restart verb
-        shows exactly while the live process and the file disagree on the clamp keys and
-        on nothing else: a foreign instrument the process carries must not hold it open."""
-        live_default = {"LWE_TEXCOMP": "1", "LWE_TEXCACHEDUMP": "1"}
+        shows exactly while the running engine's status and the file disagree on the clamp
+        keys and on nothing else: another knob status reports must not hold it open."""
+        self.enterContext(mock.patch.object(daemon_unit, "_service_main_pid", lambda: PID))
+        status_default = engine_status(LWE_DEADMAN=(60, "env"))
         file_default = "# GENERATED\nLWE_TEXCOMP=1\n"
         file_sharpfx = file_default + "LWE_CLAMPCOMPOSITES=0\n"
         file_wallpaper = file_default + "LWE_SSFACTOR=0\n"
-        pending = daemon_unit.restart_pending
-        self.assertFalse(pending("RENDER_RESOLUTION", live_default, file_default))
-        self.assertTrue(pending("RENDER_RESOLUTION", live_default, file_sharpfx))
-        self.assertTrue(pending("RENDER_RESOLUTION", live_default, file_wallpaper))
-        live_sharpfx = dict(live_default, LWE_CLAMPCOMPOSITES="0")
-        self.assertFalse(pending("RENDER_RESOLUTION", live_sharpfx, file_sharpfx))
-        self.assertTrue(pending("RENDER_RESOLUTION", live_sharpfx, file_default),
+
+        def pending(key: str, status: dict | None, text: str, live: dict | None = None) -> bool:
+            return daemon_unit.restart_pending(key, live or {}, text, status=status)
+        self.assertFalse(pending("RENDER_RESOLUTION", status_default, file_default))
+        self.assertTrue(pending("RENDER_RESOLUTION", status_default, file_sharpfx))
+        self.assertTrue(pending("RENDER_RESOLUTION", status_default, file_wallpaper))
+        status_sharpfx = engine_status(LWE_CLAMPCOMPOSITES=(0.0, "env"))
+        self.assertFalse(pending("RENDER_RESOLUTION", status_sharpfx, file_sharpfx))
+        self.assertTrue(pending("RENDER_RESOLUTION", status_sharpfx, file_default),
                         "back to the default clears the line, and that is a change too")
-        self.assertFalse(pending("ENGINE_LAYER", live_default, file_sharpfx),
+        self.assertFalse(pending("ENGINE_LAYER", status_default, file_sharpfx),
                          "a setting with no env keys registered never pends")
         # the sandbox reports no running engine: nothing pends, the next start reads the file
         self.assertFalse(pending("RENDER_RESOLUTION", None, file_sharpfx))
         # the other rows: one env line each
-        live = {"LWE_HWDEC": "no", "LWE_TEXCOMP": "1", "LWE_TEXDETAIL": "auto"}
         same = "LWE_HWDEC=no\nLWE_TEXCOMP=1\nLWE_TEXDETAIL=auto\n"
-        self.assertFalse(pending("ENGINE_HWDEC", live, same))
-        self.assertTrue(pending("ENGINE_HWDEC", live, same.replace("no", "auto")))
-        self.assertTrue(pending("ENGINE_TEXCOMP", live, same.replace("TEXCOMP=1", "TEXCOMP=0")))
-        self.assertTrue(pending("TEXTURE_DETAIL", live, same.replace("auto", "full")))
-        self.assertFalse(pending("TEXTURE_DETAIL", live, same.replace("TEXCOMP=1", "TEXCOMP=0")),
+        self.assertFalse(pending("ENGINE_HWDEC", status_default, same))
+        self.assertTrue(pending("ENGINE_HWDEC", status_default, same.replace("no", "auto")))
+        self.assertTrue(pending("ENGINE_TEXCOMP", status_default, same.replace("TEXCOMP=1", "TEXCOMP=0")))
+        self.assertTrue(pending("TEXTURE_DETAIL", status_default, same.replace("auto", "full")))
+        self.assertFalse(pending("TEXTURE_DETAIL", status_default, same.replace("TEXCOMP=1", "TEXCOMP=0")),
                          "another row's key must not light this one")
         # the layer is one token of the argument line beside the monitor list
         live_args = {"LWE_ENGINE_ARGS": "--assets-dir /a --screen-root DP-1 --layer top"}
-        self.assertFalse(pending("ENGINE_LAYER", live_args,
-                                 "LWE_ENGINE_ARGS=--assets-dir /a --screen-root DP-1 --screen-root DP-2 --layer top\n"),
+        self.assertFalse(pending("ENGINE_LAYER", status_default,
+                                 "LWE_ENGINE_ARGS=--assets-dir /a --screen-root DP-1 --screen-root DP-2 --layer top\n",
+                                 live_args),
                          "a monitor change must not light the layer row")
-        self.assertTrue(pending("ENGINE_LAYER", live_args,
-                                "LWE_ENGINE_ARGS=--assets-dir /a --screen-root DP-1\n"),
+        self.assertTrue(pending("ENGINE_LAYER", status_default,
+                                "LWE_ENGINE_ARGS=--assets-dir /a --screen-root DP-1\n", live_args),
                         "back to the default drops the token, and that is a change")
-        self.assertTrue(pending("ENGINE_LAYER", live_args,
-                                "LWE_ENGINE_ARGS=--assets-dir /a --screen-root DP-1 --layer overlay\n"))
+        self.assertTrue(pending("ENGINE_LAYER", status_default,
+                                "LWE_ENGINE_ARGS=--assets-dir /a --screen-root DP-1 --layer overlay\n", live_args))
         # one read answers every row
         both = daemon_unit.restart_pending_keys(
-            dict(live, LWE_ENGINE_ARGS="--screen-root DP-1"),
-            same.replace("auto", "full") + "LWE_ENGINE_ARGS=--screen-root DP-1 --layer top\n")
+            {"LWE_ENGINE_ARGS": "--screen-root DP-1"},
+            same.replace("auto", "full") + "LWE_ENGINE_ARGS=--screen-root DP-1 --layer top\n",
+            status=status_default)
         self.assertEqual({k for k, v in both.items() if v}, {"TEXTURE_DETAIL", "ENGINE_LAYER"})
-        observed, pend = daemon_unit.restart_state(None, same)
-        self.assertFalse(observed, "no readable process is not an observation")
+        observed, pend = daemon_unit.restart_state({}, same, status=None)
+        self.assertFalse(observed, "no status is not an observation")
         self.assertFalse(any(pend.values()))
-        observed, pend = daemon_unit.restart_state(live, same)
+        observed, pend = daemon_unit.restart_state({}, same, status=status_default)
         self.assertTrue(observed)
         self.assertEqual(set(daemon_unit.RESTART_ENV_KEYS),
                          {"ENGINE_LAYER", "ENGINE_HWDEC", "TEXTURE_DETAIL", "RENDER_RESOLUTION",
@@ -568,6 +584,100 @@ class EngineEnvWriterTest(unittest.TestCase):
             daemon_unit.write_files()
         self.assertNotEqual(self.unit_path.read_text(encoding="utf-8"), unit)
         self.assertEqual(_fake_reload.calls, [["systemctl", "--user", "daemon-reload"]] * 2)
+
+
+class RestartStatusTest(unittest.TestCase):
+    """restart_state against the engine's status: the five knobs read from the env file by the
+    engine's own rules, the flag rule, the service pid check and the layer's argv probe. Status
+    comes from a replaced api_client.status and the MainPID from a replaced _service_main_pid;
+    LWE_SANDBOX stays set."""
+
+    def setUp(self) -> None:
+        self.home = Path(tempfile.mkdtemp(prefix="lwe-restart-"))
+        self.addCleanup(shutil.rmtree, self.home, True)
+        scratch = {"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.home / "c"),
+                   "XDG_STATE_HOME": str(self.home / "s"), "XDG_DATA_HOME": str(self.home / "d"),
+                   "XDG_CACHE_HOME": str(self.home / "k")}
+        self.status: dict | None = engine_status()
+        self.live: dict | None = {"LWE_ENGINE_ARGS": "--screen-root DP-1"}
+        self.main_pid = self.real_main_pid = daemon_unit._service_main_pid
+        for patcher in (mock.patch.dict(os.environ, scratch),
+                        mock.patch.object(daemon_unit.api_client, "status", lambda *a, **k: self.status),
+                        mock.patch.object(daemon_unit, "_service_main_pid", lambda: self.main_pid()),
+                        mock.patch.object(daemon_unit, "live_engine_env", lambda: self.live)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.main_pid = lambda: PID
+        _fake_reload.calls.clear()
+
+    def pends(self, text: str, **knobs: tuple) -> set[str]:
+        """The rows that pend for env file `text` against a status reporting `knobs`."""
+        self.status = engine_status(**knobs)
+        return {key for key, value in daemon_unit.restart_pending_keys(env_text=text).items() if value}
+
+    def test_values_equal_under_the_engine_rules_do_not_pend(self) -> None:
+        self.assertEqual(self.pends("LWE_TEXDETAIL=auto\nLWE_SSFACTOR=1\n"), set())
+        for line, name, value in (("LWE_SSFACTOR=9", "LWE_SSFACTOR", 4.0), ("LWE_SSFACTOR=-2", "LWE_SSFACTOR", 0.0),
+                                  ("LWE_SSFACTOR=abc", "LWE_SSFACTOR", 0.0),
+                                  ("LWE_SSFACTOR=2.5x", "LWE_SSFACTOR", 2.5),
+                                  ("LWE_SSFACTOR=nan", "LWE_SSFACTOR", 1.0), ("LWE_SSFACTOR=", "LWE_SSFACTOR", 1.0),
+                                  ("LWE_CLAMPCOMPOSITES=0.5", "LWE_CLAMPCOMPOSITES", 0.5),
+                                  ("LWE_TEXCOMP=", "LWE_TEXCOMP", True), ("LWE_TEXCOMP=0", "LWE_TEXCOMP", False),
+                                  ("LWE_TEXDETAIL=Auto", "LWE_TEXDETAIL", "full"),
+                                  ("LWE_HWDEC=", "LWE_HWDEC", "no"), ("LWE_HWDEC=auto", "LWE_HWDEC", "auto")):
+            with self.subTest(line=line):
+                self.assertEqual(self.pends(line + "\n", **{name: (value, "env")}), set())
+
+    def test_a_float_compares_at_float32(self) -> None:
+        self.assertEqual(self.pends("LWE_SSFACTOR=1.3\n", LWE_SSFACTOR=(1.2999999523162842, "env")), set())
+
+    def test_a_differing_value_pends(self) -> None:
+        self.assertEqual(self.pends("LWE_SSFACTOR=1.3\n", LWE_SSFACTOR=(1.5, "env")), {"RENDER_RESOLUTION"})
+        self.assertEqual(self.pends("LWE_HWDEC=auto\n"), {"ENGINE_HWDEC"})
+        self.assertEqual(self.pends("LWE_TEXCOMP=0\n"), {"ENGINE_TEXCOMP"})
+        self.assertEqual(self.pends("LWE_TEXDETAIL=full\n"), {"TEXTURE_DETAIL"})
+
+    def test_a_knob_given_as_a_flag_or_not_reported_never_pends(self) -> None:
+        self.assertEqual(self.pends("LWE_SSFACTOR=1\n", LWE_SSFACTOR=(2.0, "flag")), set())
+        self.assertEqual(self.pends("LWE_HWDEC=auto\n", LWE_HWDEC=("no", "flag")), set())
+        self.status = engine_status()
+        del self.status["config"]["LWE_HWDEC"]
+        pending = daemon_unit.restart_pending_keys(env_text="LWE_HWDEC=auto\n")
+        self.assertFalse(pending["ENGINE_HWDEC"], "a knob status does not report never pends")
+
+    def test_no_status_or_no_config_block_is_not_observed(self) -> None:
+        for status in (None, {"pid": PID}, {"pid": PID, "config": []}):
+            with self.subTest(status=status):
+                self.status = status
+                observed, pending = daemon_unit.restart_state(env_text="LWE_HWDEC=auto\n")
+                self.assertEqual((observed, any(pending.values())), (False, False))
+
+    def test_a_status_pid_other_than_the_service_is_not_observed(self) -> None:
+        self.status = engine_status(pid=PID + 1)
+        self.assertEqual(daemon_unit.restart_state(env_text="LWE_HWDEC=auto\n")[0], False)
+        self.status = engine_status()
+        self.main_pid = lambda: None
+        self.assertEqual(daemon_unit.restart_state(env_text="LWE_HWDEC=auto\n")[0], False)
+        self.main_pid = self.real_main_pid
+        self.assertIsNone(daemon_unit._service_main_pid(), "the sandbox gate holds")
+        self.assertEqual(_fake_reload.calls, [])
+
+    def test_the_layer_still_pends_from_the_argv_probe(self) -> None:
+        self.live = {"LWE_ENGINE_ARGS": "--screen-root DP-1 --layer top"}
+        self.assertEqual(self.pends("LWE_ENGINE_ARGS=--screen-root DP-1\n"), {"ENGINE_LAYER"})
+        self.live = None
+        observed, pending = daemon_unit.restart_state(env_text="LWE_ENGINE_ARGS=--screen-root DP-1 --layer top\n")
+        self.assertEqual((observed, pending["ENGINE_LAYER"]), (True, False),
+                         "an unreadable process environment leaves the layer alone")
+
+    def test_with_nothing_given_it_reads_status_and_the_env_file(self) -> None:
+        env = daemon_unit.paths.config_dir() / daemon_unit.ENV_FILE_NAME
+        env.parent.mkdir(parents=True, exist_ok=True)
+        env.write_text("LWE_HWDEC=auto\n", encoding="utf-8")
+        observed, pending = daemon_unit.restart_state()
+        self.assertEqual((observed, {key for key, value in pending.items() if value}), (True, {"ENGINE_HWDEC"}))
+        env.unlink()
+        self.assertEqual(daemon_unit.restart_state()[0], False, "an unreadable env file is not an observation")
 
 
 def _test_cross_compositor_enumeration() -> None:

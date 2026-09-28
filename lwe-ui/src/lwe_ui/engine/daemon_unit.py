@@ -18,9 +18,11 @@ import math
 import os
 import re
 import shutil
+import struct
 import subprocess
 from pathlib import Path
 
+from .. import api_client
 from .. import constants as C
 from ..storage import atomic, lock, paths, settings
 
@@ -486,15 +488,8 @@ def parse_env(lines) -> dict[str, str]:
     return out
 
 
-def live_engine_env() -> dict[str, str] | None:
-    """The environment the running engine started with, read from its own process.
-
-    systemd hands the env file to the process at start and the unit reports none of it
-    back, so the process is the only record of what the engine actually read. None when
-    the service has no main process, when it cannot be read, or while the main process
-    is forked but has not exec'd the engine yet: a simple unit's start job completes at
-    the fork, and until the exec its environment is still the manager's own.
-    """
+def _service_main_pid() -> int | None:
+    """The engine service's MainPID from systemd; None under LWE_SANDBOX or when there is none."""
     if os.environ.get("LWE_SANDBOX") == "1":
         return None
     try:
@@ -505,6 +500,21 @@ def live_engine_env() -> dict[str, str] | None:
         return None
     pid = (proc.stdout or "").strip()
     if proc.returncode != 0 or not pid.isdigit() or pid == "0":
+        return None
+    return int(pid)
+
+
+def live_engine_env() -> dict[str, str] | None:
+    """The environment the running engine started with, read from its own process.
+
+    systemd hands the env file to the process at start and the unit reports none of it
+    back, so the process is the only record of what the engine actually read. None when
+    the service has no main process, when it cannot be read, or while the main process
+    is forked but has not exec'd the engine yet: a simple unit's start job completes at
+    the fork, and until the exec its environment is still the manager's own.
+    """
+    pid = _service_main_pid()
+    if pid is None:
         return None
     try:
         raw = Path(f"/proc/{pid}/environ").read_bytes()
@@ -524,38 +534,117 @@ def _read_env_file() -> dict[str, str] | None:
     return parse_env(text.splitlines())
 
 
-def restart_state(live: dict[str, str] | None = None,
-                  env_text: str | None = None) -> tuple[bool, dict[str, bool]]:
-    """(observed, pending). observed is False while the engine process or the env file
-    cannot be read, and pending is then all False: no running engine means nothing is
-    pending, the next start reads the file. Otherwise pending maps every restart-class
-    setting to True when the running engine started with other values than the file now
-    carries for the keys that setting owns. One read of the process and one of the file
-    answer all of them. `live` and `env_text` are injectable for tests.
+_LEADING_NUMBER_RE = re.compile(r"\s*[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+
+
+def _engine_factor(text: str | None) -> float:
+    """A clamp factor line as the engine reads it: absent or empty 1.0, atof's number, NaN 1.0, 0 to 4."""
+    if not text:
+        return 1.0
+    try:
+        value = float(text)
+    except ValueError:
+        match = _LEADING_NUMBER_RE.match(text)
+        value = float(match.group(0)) if match else 0.0
+    if math.isnan(value):
+        return 1.0
+    return 4.0 if value > 4.0 else 0.0 if value <= 0.0 else value
+
+
+def _engine_texcomp(text: str | None) -> bool:
+    """LWE_TEXCOMP as the engine reads it: on when absent, else anything but "0"."""
+    return text is None or text != "0"
+
+
+def _engine_texdetail(text: str | None) -> str:
+    """LWE_TEXDETAIL as the engine reads it: auto when absent or "auto", else full."""
+    return "auto" if text is None or text == "auto" else "full"
+
+
+def _engine_hwdec(text: str | None) -> str:
+    """LWE_HWDEC as the engine reads it: "no" when absent or empty, else the text."""
+    return text or "no"
+
+
+_STATUS_KNOBS = {
+    "LWE_SSFACTOR": (_engine_factor, float),
+    "LWE_CLAMPCOMPOSITES": (_engine_factor, float),
+    "LWE_TEXCOMP": (_engine_texcomp, bool),
+    "LWE_TEXDETAIL": (_engine_texdetail, str),
+    "LWE_HWDEC": (_engine_hwdec, str),
+}
+_UNREAD = object()
+
+
+def _f32(value: float) -> float:
+    """`value` as the float32 the engine holds it in."""
+    return struct.unpack("f", struct.pack("f", value))[0]
+
+
+def _knob_pends(name: str, wanted: dict[str, str], config: dict) -> bool:
+    """True when status reports knob `name` at another value than the engine reads from the file."""
+    rule, entry = _STATUS_KNOBS.get(name), config.get(name)
+    if rule is None or not isinstance(entry, dict) or "value" not in entry:
+        return False
+    # a restart re-applies the flag, so a knob given as a launch flag never pends
+    if entry.get("source") == "flag":
+        return False
+    read, kind = rule
+    running = entry["value"]
+    if kind is float:
+        if isinstance(running, bool) or not isinstance(running, (int, float)):
+            return False
+        # status floats are float32 widened to double
+        return _f32(read(wanted.get(name))) != _f32(running)
+    return isinstance(running, kind) and running != read(wanted.get(name))
+
+
+def restart_state(live: dict[str, str] | None = None, env_text: str | None = None, *,
+                  status: object = _UNREAD) -> tuple[bool, dict[str, bool]]:
+    """(observed, pending): whether each restart-class setting waits for a service restart.
+
+    observed needs the engine's status (read from the engine when not given) to answer with
+    a config block and a pid equal to the service's MainPID, and the env file to read;
+    otherwise nothing pends. A setting pends while status config reports another value for one
+    of its knobs (LWE_SSFACTOR, LWE_CLAMPCOMPOSITES, LWE_TEXCOMP, LWE_TEXDETAIL, LWE_HWDEC) than
+    the engine reads from the file's line by its own rules, floats compared at float32; a knob
+    given as a launch flag never pends, nor one status does not report. ENGINE_LAYER, which
+    status does not report, compares the file's --layer token with the running process's
+    environment (`live`, else live_engine_env()) and does not pend when that cannot be read.
+    `live`, `env_text` and `status` are injectable for tests.
 
     The file is read from the panel's config dir; the unit names it under the home
     directory, so a config home pointed elsewhere compares against a file the engine never
-    reads. Keys the writer always emits (LWE_HWDEC, LWE_TEXDETAIL) pend against an engine
-    started before the line existed; that engine did not read the setting.
+    reads.
     """
-    if live is None:
-        live = live_engine_env()
-    if live is None:
-        return False, {k: False for k in RESTART_ENV_KEYS}
+    nothing = {key: False for key in RESTART_ENV_KEYS}
+    if status is _UNREAD:
+        status = api_client.status()
+    if not isinstance(status, dict) or not isinstance(status.get("config"), dict):
+        return False, nothing
+    # a hand-run engine on the socket must not light a verb that restarts the service
+    pid = _service_main_pid()
+    if pid is None or status.get("pid") != pid:
+        return False, nothing
     wanted = parse_env(env_text.splitlines()) if env_text is not None else _read_env_file()
     if wanted is None:
-        return False, {k: False for k in RESTART_ENV_KEYS}
-    return True, {k: any(_probe(wanted, probe) != _probe(live, probe) for probe in probes)
-                  for k, probes in RESTART_ENV_KEYS.items()}
+        return False, nothing
+    if live is None:
+        live = live_engine_env()
+    config = status["config"]
+    return True, {key: any(_knob_pends(probe, wanted, config) if isinstance(probe, str)
+                           else live is not None and _probe(wanted, probe) != _probe(live, probe)
+                           for probe in probes)
+                  for key, probes in RESTART_ENV_KEYS.items()}
 
 
-def restart_pending_keys(live: dict[str, str] | None = None,
-                         env_text: str | None = None) -> dict[str, bool]:
+def restart_pending_keys(live: dict[str, str] | None = None, env_text: str | None = None, *,
+                         status: object = _UNREAD) -> dict[str, bool]:
     """The pending map of `restart_state`."""
-    return restart_state(live, env_text)[1]
+    return restart_state(live, env_text, status=status)[1]
 
 
 def restart_pending(setting_key: str, live: dict[str, str] | None = None,
-                    env_text: str | None = None) -> bool:
+                    env_text: str | None = None, *, status: object = _UNREAD) -> bool:
     """One setting's answer from `restart_pending_keys`; a key with no env keys never pends."""
-    return restart_pending_keys(live, env_text).get(setting_key, False)
+    return restart_pending_keys(live, env_text, status=status).get(setting_key, False)

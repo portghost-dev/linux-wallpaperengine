@@ -341,8 +341,10 @@ is to be the daemon API's reference client and the system's owner:
   from its three-state `RENDER_RESOLUTION` word (`Clamp resolution` on Engine > Advanced):
   everything clamped is 1 and 1, composites exempt 1 and 0, and off 0 and 0.
   The engine reads the file only at service start, so each restart-class row on Engine >
-  Advanced carries a restart verb while the running engine's own environment differs from the file on that
-  row's keys; one tap restarts the service in place for every row that is pending.
+  Advanced carries a restart verb while the running engine reports in its status another value than it
+  would read from the file on that row's keys (the layer, which status does not report, from its process
+  environment; a value given as a launch flag never counts); one tap restarts the service in place for
+  every row that is pending.
   The same three switches can be chosen per wallpaper in the scene editor's `Quality and
   memory` rule; a chosen value rides the show and the engine resolves it at scene load, an
   absent one inherits the engine's launch value (the flag when given, else the environment).

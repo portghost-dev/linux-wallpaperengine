@@ -196,10 +196,11 @@ class SettingsBridge(QObject):
     @Slot(str, result=bool)
     def restartPending(self, key: str) -> bool:
         """True while the running engine started with other values than the env file now
-        carries for the keys `key` reaches it through. Read from the engine's own process,
-        so it holds across panel launches and clears by itself once the engine comes back
-        up on the new file. Cached: a rewrite of the env file and `invalidateRestart` are
-        the only things that read the service again, and one read answers every row."""
+        carries for the keys `key` reaches it through. Read from the engine's status (the
+        layer from its process), so it holds across panel launches and clears by itself once
+        the engine comes back up on the new file. Cached: a rewrite of the env file and
+        `invalidateRestart` are the only things that read the service again, and one read
+        answers every row."""
         if self._pending is None:
             self._refresh_pending()
         return bool((self._pending or {}).get(str(key), False))

@@ -262,9 +262,17 @@ def _test_service_restart_keys_regenerate_the_env_file(sb) -> None:
     print("OK SERVICE-RESTART keys regenerate the env file, dials intact (sequencing law)")
 
 
+def _engine_status(hwdec: str) -> dict:
+    """A status from the service's engine (pid 4242): the five restart knobs at their defaults,
+    LWE_HWDEC at `hwdec`."""
+    knobs = {"LWE_SSFACTOR": 1.0, "LWE_CLAMPCOMPOSITES": 1.0, "LWE_TEXCOMP": True,
+             "LWE_TEXDETAIL": "auto", "LWE_HWDEC": hwdec}
+    return {"pid": 4242, "config": {name: {"value": value, "source": "env"} for name, value in knobs.items()}}
+
+
 def _test_restart_pending_and_restart_read_the_machine_never_the_sandbox(sb, b) -> None:
-    """The Clamp resolution row's restart verb asks the engine's own process; under the
-    sandbox there is none, so nothing pends and a restart is refused rather than taken."""
+    """The Clamp resolution row's restart verb asks the running engine's status; under the
+    sandbox none answers, so nothing pends and a restart is refused rather than taken."""
     assert sb.restartPending("RENDER_RESOLUTION") is False
     assert sb.restartPending("no-such-key") is False
     assert b.restartMaster() is False, "the sandbox must never restart the machine's engine"
@@ -284,31 +292,42 @@ def _test_restart_pending_and_restart_read_the_machine_never_the_sandbox(sb, b) 
     assert sb.restartBusy is False
     assert sb.takeRestart() is False
     assert sb.restartBusy is False, "a refused job must not grey the verbs for 20 s"
-    # an accepted restart settles only once the replacement engine is seen on the file:
-    # a tick with no readable process holds the window, a matching process closes it
-    saved = (b.restartMaster, daemon_unit.live_engine_env, daemon_unit._read_env_file)
+    # with the service's engine answering, the verb reads its status: a file on another value
+    # than the engine reports pends, one on the same value does not
+    saved = (b.restartMaster, api_client.status, daemon_unit._service_main_pid,
+             daemon_unit.live_engine_env, daemon_unit._read_env_file)
     try:
-        b.restartMaster = lambda: True
+        daemon_unit._service_main_pid = lambda: 4242
         daemon_unit.live_engine_env = lambda: None
+        daemon_unit._read_env_file = lambda: {"LWE_HWDEC": "auto"}
+        api_client.status = lambda *a, **k: _engine_status("no")
+        sb.invalidateRestart()
+        assert sb.restartPending("ENGINE_HWDEC") is True, "the engine reports another decoder"
+        assert sb.restartPending("TEXTURE_DETAIL") is False, "another row's knob matches"
+        # an accepted restart settles only once the replacement engine reports the file's values:
+        # a tick with no status holds the window, a matching status closes it
+        b.restartMaster = lambda: True
         daemon_unit._read_env_file = lambda: {"LWE_HWDEC": "no"}
+        api_client.status = lambda *a, **k: None
         assert sb.takeRestart() is True
         assert sb.restartBusy is True
         sb._settle_tick()
-        assert sb.restartBusy is True, "no process seen yet: the window must hold"
-        daemon_unit.live_engine_env = lambda: {"LWE_ENGINE_ARGS": "x", "LWE_HWDEC": "auto"}
+        assert sb.restartBusy is True, "no engine seen yet: the window must hold"
+        api_client.status = lambda *a, **k: _engine_status("auto")
         sb._settle_tick()
-        assert sb.restartBusy is True, "a process on other values is not settled"
-        daemon_unit.live_engine_env = lambda: {"LWE_ENGINE_ARGS": "x", "LWE_HWDEC": "no"}
+        assert sb.restartBusy is True, "an engine on other values is not settled"
+        api_client.status = lambda *a, **k: _engine_status("no")
         sb._settle_tick()
         assert sb.restartBusy is False, "the replacement engine on the file closes the window"
         # a start that never comes back closes on the timeout alone
-        daemon_unit.live_engine_env = lambda: None
+        api_client.status = lambda *a, **k: None
         assert sb.takeRestart() is True
         sb._settle_started -= 21
         sb._settle_tick()
         assert sb.restartBusy is False
     finally:
-        b.restartMaster, daemon_unit.live_engine_env, daemon_unit._read_env_file = saved
+        (b.restartMaster, api_client.status, daemon_unit._service_main_pid,
+         daemon_unit.live_engine_env, daemon_unit._read_env_file) = saved
         sb._settle.stop(); sb._settling = False
     # a restore that rewrites the env file forgets the cache like a commit does
     sb._pending = {"RENDER_RESOLUTION": True}
