@@ -192,7 +192,7 @@ def _commands() -> None:
     for name, words in (("base-download", ["add", "1400000006"]), ("base-held", ["add", "1400000007"]),
                         ("ambiguous", ["add", "Twin"]), ("trashed", ["add", "1400000011"]),
                         ("late-refusal", ["add", "1400000002", "1400000006"]), ("bare", ["add"]),
-                        ("option", ["add", "--playlist", "chill", "1400000001"]),
+                        ("option", ["add", "--now", "1400000001"]),
                         ("untrash-both", ["untrash", "--all", "1400000010"]),
                         ("untrash-option", ["untrash", "--bogus"]), ("pool", ["add", "1400000001"])):
         _run(name, words)

@@ -1,5 +1,7 @@
 """The receipt a setting change prints: the setting, the value, saved or unchanged, and when it
-applies, as one line of text or, under -j, one JSON object with the keys of RECEIPT_KEYS.
+applies, as one line of text or, under -j, one JSON object with the keys of RECEIPT_KEYS. A saved
+change of another kind, such as a playlist's members, prints the receipt of change_receipt, keys
+CHANGE_KEYS.
 
 A change the engine takes at once ends in one of four outcomes: applied, pending, refused or
 uncertain. A receipt that is not applied names the next chances to apply, never a promise. A change
@@ -17,6 +19,7 @@ REFUSED = "refused"
 UNCERTAIN = "uncertain"
 
 RECEIPT_KEYS = ("setting", "value", "saved", "outcome", "applies", "reason")
+CHANGE_KEYS = ("subject", "saved", "outcome", "reason", "message")
 
 OPPORTUNITIES = ("It can apply the next time the panel window opens or polls, an lwe command saves a setting "
                  "the engine uses, lwe reload or a backup import runs, or lwe service start or restart starts "
@@ -52,6 +55,24 @@ def text(r: dict[str, Any]) -> str:
         return f"{r['setting']} {r['value']}: {state}; {_WHEN[r['applies']]}."
     tail = _NOT_APPLIED[r["outcome"]].format(reason=r["reason"])
     return f"{r['setting']} {r['value']}: {state}{tail}. {OPPORTUNITIES}"
+
+
+def change_receipt(subject: str, outcome: Any) -> dict[str, Any]:
+    """The receipt of a saved change from its push.Outcome: the outcome's kind and reason, and its
+    message, the engine's refusal, the version refusal or the marker warning."""
+    return {"subject": subject, "saved": True, "outcome": outcome.kind, "reason": outcome.reason or "",
+            "message": outcome.message or outcome.warning or ""}
+
+
+def change_text(r: dict[str, Any]) -> str:
+    """A change receipt as one line."""
+    if r["outcome"] == APPLIED:
+        warning = f", but {r['message']}" if r["message"] else ""
+        return f"{r['subject']}: saved; applies now{warning}."
+    if r["reason"] == "version":
+        return f"{r['subject']}: saved, but nothing was sent. {r['message']}"
+    tail = _NOT_APPLIED[r["outcome"]].format(reason=r["message"])
+    return f"{r['subject']}: saved{tail}. {OPPORTUNITIES}"
 
 
 def emit(ctx: Any, r: dict[str, Any]) -> None:

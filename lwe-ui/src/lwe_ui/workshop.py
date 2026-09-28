@@ -308,24 +308,15 @@ class WorkshopBridge(QObject):
         if not paths.is_safe_wid(wid):
             return
         self._backend.trashWallpaper(wid)
-        if bool(meta.get(wid).get("depMissing")):
-            try:
-                meta.update(wid, {"depMissing": False})
-            except Exception:
-                pass
-        copy_dir = os.path.join(_wallpapers_dir(), wid) if self._copy_deletable(wid) else None
 
         # off the GUI thread (review F9): copy-mode trees can be GB-scale and the
         # texcache scan is IO; a POSIX unlink under the dying engine's open fds is
         # safe. Cleanup ends with a queued refresh so presence-derived state settles.
         def _cleanup() -> None:
             try:
-                from . import texcomp
-                texcomp.purge_wallpaper(wid)
+                actions.trash_tail(wid)
             except Exception:
                 pass
-            if copy_dir:
-                shutil.rmtree(copy_dir, ignore_errors=True)
             self._trashCleanupDone.emit()
 
         import threading
@@ -346,10 +337,7 @@ class WorkshopBridge(QObject):
         (simplicity first; the earlier only-if-re-obtainable
         guard was reverted). The fence stays: a real subdir of the library dir, never
         a symlink out of it."""
-        lib = _wallpapers_dir()
-        copy_dir = os.path.join(lib, wid)
-        return (os.path.isdir(copy_dir) and not os.path.islink(copy_dir)
-                and os.path.dirname(os.path.abspath(copy_dir)) == os.path.abspath(lib))
+        return actions.copy_deletable(wid)
 
     @Slot(result="QVariantList")
     def recordList(self) -> list:
@@ -430,21 +418,7 @@ class WorkshopBridge(QObject):
     def dependentCount(self, wid: str) -> int:
         """How many OTHER subscribed items declare this wid as their dependency (base). Trashing a
         base breaks the presets built on it, so the trash wizard warns when this is > 0."""
-        wid = str(wid)
-        wsdir = self._ws_dir()
-        n = 0
-        try:
-            from .discovery import project as _project
-            for name in os.listdir(wsdir):
-                if name == wid or not os.path.isdir(os.path.join(wsdir, name)):
-                    continue
-                dep = (_project.read(os.path.join(wsdir, name)).get("raw") or {}).get("dependency")
-                deps = dep if isinstance(dep, list) else ([dep] if dep else [])
-                if wid in [str(d) for d in deps]:
-                    n += 1
-        except Exception:
-            pass
-        return n
+        return actions.dependents(str(wid))
 
     @staticmethod
     def _safe_stem(name: str) -> str:

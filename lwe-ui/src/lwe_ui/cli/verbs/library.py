@@ -1,7 +1,7 @@
 """lwe list, workshop and scan print the library catalog and only read; lwe compress builds the
 engine's texture cache; lwe add brings wallpapers into the pool and lwe untrash lets trashed ones be
-imported again; lwe bench runs one wallpaper in a test window of its own. None of them sends anything
-to the running engine."""
+imported again; lwe bench runs one wallpaper in a test window of its own. add --playlist, remove and
+trash change playlists, and send each change to the running engine through the change runner."""
 from __future__ import annotations
 
 import json
@@ -221,15 +221,86 @@ def _add_one(row, cfg: dict) -> tuple[str, dict]:
                   "bases": bases}
 
 
-def _add(ctx: Context, args: list[str]) -> int:
-    if not args or any(a.startswith("-") for a in args):
-        return _refuse(ctx, "add takes wallpapers")
+def _split_playlists(args: list[str]) -> tuple[list[str], list[str]] | None:
+    """(wallpaper words, playlist words) from words and --playlist <playlist> pairs; None for another
+    option or a --playlist with nothing after it."""
+    words: list[str] = []
+    lists: list[str] = []
+    rest = iter(args)
+    for arg in rest:
+        if arg == "--playlist":
+            value = next(rest, None)
+            if value is None:
+                return None
+            lists.append(value)
+        elif arg.startswith("-"):
+            return None
+        else:
+            words.append(arg)
+    return words, lists
+
+
+def _first_status(ctx: Context) -> tuple[tuple[str, dict | None] | None, bool]:
+    """The one status read before any lock, and whether the running engine is another build (the
+    refusal printed)."""
+    from ... import version
+    from ...engine import push
+
+    first = push.read_status()
+    if first[0] == "ok":
+        try:
+            refusal = version.running_refusal(first[1], version.panel_stamp())
+        except version.StampError as exc:
+            refusal = str(exc)
+        if refusal is not None:
+            ctx.error(refusal, "lwe: " + refusal)
+            return first, True
+    return first, False
+
+
+def _subject(names: list[str]) -> str:
+    return ("Playlist " if len(names) == 1 else "Playlists ") + ", ".join(names)
+
+
+def _receipt(ctx: Context, names: list[str], outcome) -> dict | None:
+    """The change receipt for the playlists named, printed in text mode; None when none changed."""
+    from .. import report
+
+    if not names:
+        return None
+    r = report.change_receipt(_subject(list(dict.fromkeys(names))), outcome)
+    if not ctx.json:
+        print(report.change_text(r), file=ctx.out)
+    return r
+
+
+def _code(receipt: dict | None) -> int:
+    """Exit 1 for a receipt the engine refused or another build left unsent, else 0."""
+    refused = receipt is not None and (receipt["outcome"] == "refused" or receipt["reason"] == "version")
+    return REFUSED if refused else DONE
+
+
+def _pair_line(ctx: Context, pair: dict, texts: dict[str, str]) -> None:
     from ...library import catalog, compress
-    from ...storage import importer
+
+    if not ctx.json:
+        row = catalog.Row(0, pair["id"], pair["title"], "", "", "", False)
+        print(compress.row_line(row, f"{texts[pair['result']]} {pair['name']}"), file=ctx.out)
+
+
+def _add(ctx: Context, args: list[str]) -> int:
+    parsed = _split_playlists(args)
+    if parsed is None or not parsed[0]:
+        return _refuse(ctx, "add takes wallpapers")
+    words, lists = parsed
+    from ...engine import push
+    from ...library import actions, catalog, compress
+    from ...storage import importer, playlists
     from .. import select
 
     try:
-        picks = select.wallpapers(args)
+        picks = select.wallpapers(words)
+        chosen = list({pl.slug: pl for pl in (select.playlist(word) for word in lists)}.values())
     except select.PickError as exc:
         return select.report(ctx, exc)
     cfg = importer._snapshot()
@@ -246,6 +317,11 @@ def _add(ctx: Context, args: list[str]) -> int:
             message = f"{label} needs its base {base}, which is not here"
         ctx.error(message, "lwe: " + message)
         return REFUSED
+    first = None
+    if chosen:
+        first, refused = _first_status(ctx)
+        if refused:
+            return REFUSED
     results = []
     for p in picks:
         rows = {r.id: r for r in catalog.wallpaper_rows()[0]}
@@ -254,10 +330,108 @@ def _add(ctx: Context, args: list[str]) -> int:
         results.append(facts)
         if not ctx.json:
             print(compress.row_line(row, text), file=ctx.out, flush=True)
+    imported = [f["id"] for f in results if f["result"] == "imported"]
+    imported += [b["id"] for f in results for b in f.get("bases", [])]
+    held = {push.derived_active(first[1] if first else None)[0], *push._scheduled()} - {None}
+    listing = sorted(slug for slug in held if set(imported) & set(playlists.members(slug)))
+    synced = push.sync_all("command") if listing else None
+    pairs: list[dict] = []
+    changed: list[str] = []
+    if chosen:
+        titles = {f["id"]: f["title"] for f in results}
+        pooled = [f["id"] for f in results if f["result"] != "failed"]
+        pairs, outcome = actions.add_to_playlists([pl.slug for pl in chosen], pooled, run="command",
+                                                  status=first)
+        for pair in pairs:
+            pair["title"] = titles[pair["id"]]
+            _pair_line(ctx, pair, {"appended": "appended to", "already": "already in"})
+        changed = [pair["name"] for pair in pairs if pair["result"] == "appended"]
+    if changed:
+        receipt = _receipt(ctx, changed, outcome)
+    else:
+        names = [str(playlists.load(slug).get("NAME") or slug) for slug in listing]
+        receipt = _receipt(ctx, names, synced) if synced is not None else None
     if ctx.json:
-        print(json.dumps({"results": results, "receipt": None}, ensure_ascii=False,
+        print(json.dumps({"results": results + pairs, "receipt": receipt}, ensure_ascii=False,
                          separators=(",", ":")), file=ctx.out)
-    return REFUSED if any(f["result"] == "failed" for f in results) else DONE
+    return REFUSED if any(f["result"] == "failed" for f in results) else _code(receipt)
+
+
+def _remove(ctx: Context, args: list[str]) -> int:
+    parsed = _split_playlists(args)
+    if parsed is not None and not parsed[1]:
+        return _refuse(ctx, "remove only takes wallpapers out of playlists; use trash to take one out of the "
+                            "pool")
+    if parsed is None or not parsed[0]:
+        return _refuse(ctx, "remove takes wallpapers and --playlist <playlist>")
+    words, lists = parsed
+    from ...library import actions
+    from .. import select
+
+    try:
+        chosen = list({pl.slug: pl for pl in (select.playlist(word) for word in lists)}.values())
+        picks = select.wallpapers(words, member_of=[pl.slug for pl in chosen])
+    except select.PickError as exc:
+        return select.report(ctx, exc)
+    first, refused = _first_status(ctx)
+    if refused:
+        return REFUSED
+    titles = {p.ui_id: p.title for p in picks}
+    pairs, outcome = actions.remove_from_playlists([pl.slug for pl in chosen], list(titles),
+                                                   run="command", status=first)
+    for pair in pairs:
+        pair["title"] = titles[pair["id"]]
+        _pair_line(ctx, pair, {"removed": "taken out of", "absent": "not in"})
+    receipt = _receipt(ctx, [pair["name"] for pair in pairs if pair["result"] == "removed"], outcome)
+    if ctx.json:
+        print(json.dumps({"results": pairs, "receipt": receipt}, ensure_ascii=False, separators=(",", ":")),
+              file=ctx.out)
+    return _code(receipt)
+
+
+def _trash(ctx: Context, args: list[str]) -> int:
+    if not args or any(a.startswith("-") for a in args):
+        return _refuse(ctx, "trash takes wallpapers")
+    import os
+
+    from ...library import actions, catalog, compress
+    from ...storage import importer
+    from .. import select
+
+    try:
+        picks = select.wallpapers(args)
+    except select.PickError as exc:
+        return select.report(ctx, exc)
+    first, refused = _first_status(ctx)
+    if refused:
+        return REFUSED
+    results, outcome = actions.trash([(p.ui_id, p.title) for p in picks], record=True, run="command",
+                                     status=first)
+    facts = []
+    for r in results:
+        if r["already"]:
+            text, fact = "already in the trash", {"id": r["id"], "title": r["title"], "result": "already"}
+        else:
+            deleted = actions.trash_tail(r["id"])
+            steam = os.path.isdir(os.path.join(importer.workshop_dir(), r["id"]))
+            text = "trashed; " + ("LWE's copy was deleted" if deleted else "LWE had no copy of its own")
+            if steam:
+                text += "; the Steam download stays"
+            if r["left"]:
+                text += "; left " + ", ".join(r["left"])
+            if r["dependents"] > 0:
+                text += f"; {r['dependents']} other downloads use it as their base"
+            fact = {"id": r["id"], "title": r["title"], "result": "trashed", "copy_deleted": deleted,
+                    "steam_download": steam, "left": r["left"], "dependents": r["dependents"]}
+        facts.append(fact)
+        if not ctx.json:
+            row = catalog.Row(0, r["id"], r["title"], "", "", "", False)
+            print(compress.row_line(row, text), file=ctx.out)
+    receipt = _receipt(ctx, [name for r in results for name in r["left"]], outcome)
+    if ctx.json:
+        print(json.dumps({"results": facts, "receipt": receipt}, ensure_ascii=False, separators=(",", ":")),
+              file=ctx.out)
+    return _code(receipt)
 
 
 def _untrash(ctx: Context, args: list[str]) -> int:
@@ -378,6 +552,10 @@ VERBS = (
          "less video memory.", "library"),
     Verb("add", _add, "Brings wallpapers into the pool: checks them, compresses them and registers them.",
          "library"),
+    Verb("remove", _remove, "Takes wallpapers out of that playlist; repeat --playlist for more than one.",
+         "library"),
+    Verb("trash", _trash, "Takes wallpapers out of the pool: deletes LWE's own copy if it made one and stops "
+         "them being imported again.", "library"),
     Verb("untrash", _untrash, "Lifts that block so a wallpaper can be imported again; it does not bring "
          "deleted files back.", "library"),
     Verb("bench", _bench, "Opens a test window beside your wallpaper and prints its log summary when you "

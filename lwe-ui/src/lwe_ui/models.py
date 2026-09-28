@@ -581,8 +581,15 @@ class Backend(QObject):
     def _change(self, what: str, locks: tuple[str, ...], write: Any, rows: list, **kwargs: Any) -> Any:
         """One window change through the change runner; its Outcome, or None when nothing was saved.
         A refused switch or a store refusal logs one warning; any other failure returns None."""
+        return self._guarded(what, lambda: push.run_change(locks, write, rows, **kwargs),
+                             schedule=any(row == "schedule" for row, _key in rows))
+
+    def _guarded(self, what: str, change: Any, schedule: bool = False) -> Any:
+        """Run change(), which returns an Outcome, with _change's handling: a refused switch or a
+        store refusal logs one warning and returns None, as any other failure does; the Outcome goes
+        to _note."""
         try:
-            outcome = push.run_change(locks, write, rows, **kwargs)
+            outcome = change()
         except push.SwitchRefused as exc:
             logging.getLogger(__name__).warning("%s not made: %s", what, exc)
             return None
@@ -591,7 +598,7 @@ class Backend(QObject):
             return None
         except Exception:
             return None
-        self._note(outcome, schedule=any(row == "schedule" for row, _key in rows))
+        self._note(outcome, schedule=schedule)
         return outcome
 
     def _note(self, outcome: Any, schedule: bool = False) -> None:
@@ -1371,20 +1378,12 @@ class Backend(QObject):
 
     @Slot(str)
     def trashWallpaper(self, wid: str) -> None:
-        """Card trash: tombstone (tags bad) + drop from the active playlist. Restorable by
-        re-importing; the files are not deleted."""
+        """Card trash through the one trash chain: tombstone (tags bad) and out of every playlist.
+        Restorable by re-importing; the files are not deleted."""
         if not wid:
             return
         title = self._model.title_of(wid)
-        slug = self._active_slug()
-        member = bool(slug) and wid in playlists.members(slug)
-
-        def write() -> None:
-            tags.set_state(wid, title, "bad")
-            if member and wid in playlists.members(slug):
-                playlists.toggle_member(slug, wid)
-        if self._change("trash", ("playlists", "tags"), write,
-                        [("members", "MEMBERS")] if member else [("none", None)], slug=slug or None) is None:
+        if self._guarded("trash", lambda: actions.trash([(wid, title)], record=False, run="window")[1]) is None:
             return
         self.refresh()
         self.playlistsChanged.emit()

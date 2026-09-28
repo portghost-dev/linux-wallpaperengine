@@ -558,6 +558,15 @@ def _bundle(run: _Run, derived: str | None, reshow: bool, reload: bool = False) 
         _reshow(run, wid)
 
 
+_MEMBER_KEYS = (None, "MEMBERS", "NAME")
+
+
+def _member_slug(key: str | None, ticket: Ticket) -> str | None:
+    """The playlist a members row names: its key, or the change's slug when the key is one of
+    _MEMBER_KEYS, which name no playlist."""
+    return ticket.slug if key in _MEMBER_KEYS else key
+
+
 def _carried(row: str, key: str | None, ticket: Ticket, derived: str | None, held: list[str],
              active: str | None) -> list[str]:
     """The playlists one row's entry refresh sends."""
@@ -567,7 +576,8 @@ def _carried(row: str, key: str | None, ticket: Ticket, derived: str | None, hel
         target = ticket.slug or derived
         return [target] if target else []
     if row == "members":
-        return [ticket.slug] if ticket.slug in held else []
+        slug = _member_slug(key, ticket)
+        return [slug] if slug in held else []
     if row == "schedule":
         return _scheduled()
     if row in ("live", "next_show"):
@@ -590,7 +600,7 @@ def _own(run: _Run, row: str, key: str | None, ticket: Ticket, derived: str | No
     elif row == "pause":
         _lanes_set(run, {"id": "all", "enabled": run.enabled(derived)})
     elif row in ("policy", "members"):
-        target = ticket.slug or derived
+        target = (ticket.slug if row == "policy" else _member_slug(key, ticket)) or derived
         if sent.get(target) and (row == "policy" or target == derived):
             _lanes_set(run, {"id": "all", "enabled": run.enabled(derived)})
     elif row == "schedule":
@@ -784,7 +794,9 @@ def run_change(locks: Iterable[str], write: Callable[[], Any], rows: Iterable[tu
                status: tuple[str, dict[str, Any] | None] | None = None, run: str = "window") -> Outcome:
     """One change from any caller. rows are (row, key) pairs: the row from SETTING_ROWS,
     WP_ROWS or active, policy, members, reload and none; the key the verb, live, tuning and
-    wallpaper rows name (None where a row names none). locks names every store write touches;
+    wallpaper rows name (None where a row names none). A members row's key names its playlist, so
+    one change can carry several; a key of MEMBERS, NAME or None stands for slug. locks names
+    every store write touches;
     status is a read_status() result already taken. Status is read before any lock, and it raises
     SwitchRefused for a manual switch it cannot make; the store locks are taken in rank order; the
     marker is set and held across write(); engine-env is written for a tuning or restart row; the

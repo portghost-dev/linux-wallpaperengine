@@ -17,8 +17,10 @@ store write, or between the store write and the push, leaves the marker for the 
 which delivers the stored value and clears it. A refused write sends nothing and reaches the
 caller; a manual switch while the engine is away and the schedule is on is refused before any
 lock; a busy sync lock, a status that fails inside sync or another build's engine leaves the change
-pending with the marker kept. The engine is an api_client recorder with a scripted status; every
-child process gets an environment built from scratch.
+pending with the marker kept. Members rows that name their playlists push every engine-held one in
+one change, with one marker set and one clear, and a members row that names none uses the change's
+slug. The engine is an api_client recorder with a scripted status; every child process gets an
+environment built from scratch.
 
 Run: PYTHONPATH=src python3 tests/test_change_runner.py
 """
@@ -369,6 +371,37 @@ class ChangeRunnerTest(unittest.TestCase):
                     self.assertIsNone(marker.read()["generation"])
                 else:
                     self.assertEqual(marker.read()["classes"], [])
+
+    def test_members_rows_that_name_their_playlists_push_each_engine_held_one_in_one_change(self) -> None:
+        playlists.save("other", {"NAME": "Other", "MODE": "shuffle", "INTERVAL": 900, "UNIT": "min",
+                                 "MEMBERS": "444"})
+        sets: list[list[str]] = []
+        clears: list[int] = []
+        writing, clear = marker.writing, marker.clear
+
+        def write() -> None:
+            playlists.update("main", {"MEMBERS": "111"})
+            playlists.update("night", {"MEMBERS": ""})
+            playlists.update("other", {"MEMBERS": ""})
+        with mock.patch.object(marker, "writing", lambda classes: sets.append(list(classes)) or writing(classes)), \
+                mock.patch.object(marker, "clear", lambda generation: clears.append(generation) or clear(generation)), \
+                self.engine(status()) as rec:
+            outcome = push.run_change(("playlists",), write,
+                                      [("members", "night"), ("members", "main"), ("members", "other")])
+        self.assertEqual(outcome, push.Outcome("applied"))
+        self.assertEqual(sent(rec), [("playlist_set", "night"), ("playlist_set", "main"),
+                                     ("lanes_set", [{"id": "all", "enabled": True}])])
+        self.assertEqual((sets, len(clears)), ([["BUNDLE"]], 1))
+        self.assertEqual(marker.read()["classes"], [])
+
+    def test_a_members_row_without_a_playlist_of_its_own_uses_the_changes_slug(self) -> None:
+        for key in (None, "MEMBERS", "NAME"):
+            with self.subTest(key=key):
+                self._fresh()
+                with self.engine(status()) as rec:
+                    push.run_change(("playlists",), lambda: playlists.update("night", {"MEMBERS": "333 666"}),
+                                    [("members", key)], slug="night")
+                self.assertEqual(sent(rec), [("playlist_set", "night")])
 
     def test_with_a_marker_set_the_bundle_goes_first_and_the_clear_waits_for_both(self) -> None:
         for name, script, cleared in (("both ok", {}, True),
