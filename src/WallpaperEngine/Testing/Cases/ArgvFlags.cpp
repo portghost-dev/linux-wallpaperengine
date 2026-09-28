@@ -362,3 +362,42 @@ TEST_CASE (
 	   "information"
     );
 }
+
+TEST_CASE ("--debug sets or clears a debugging variable while the arguments are parsed", "[argv]") {
+    EnvGuard audit ("LWE_AUDIT");
+    EnvGuard bloom ("LWE_NOBLOOM");
+
+    SECTION ("audit=on sets LWE_AUDIT to 1") {
+	loadArgv ({ "--debug", "audit=on" });
+	REQUIRE (getenv ("LWE_AUDIT") != nullptr);
+	CHECK (std::string (getenv ("LWE_AUDIT")) == "1");
+    }
+
+    SECTION ("audit=off removes an inherited LWE_AUDIT") {
+	setenv ("LWE_AUDIT", "1", 1);
+	loadArgv ({ "--debug", "audit=off" });
+	CHECK (getenv ("LWE_AUDIT") == nullptr);
+    }
+
+    SECTION ("bloom=off sets LWE_NOBLOOM to 1") {
+	loadArgv ({ "--debug", "bloom=off" });
+	REQUIRE (getenv ("LWE_NOBLOOM") != nullptr);
+	CHECK (std::string (getenv ("LWE_NOBLOOM")) == "1");
+    }
+
+    SECTION ("two --debug in one argv both apply") {
+	loadArgv ({ "--debug", "audit=on", "--debug", "bloom=off" });
+	REQUIRE (getenv ("LWE_AUDIT") != nullptr);
+	REQUIRE (getenv ("LWE_NOBLOOM") != nullptr);
+	CHECK (std::string (getenv ("LWE_AUDIT")) == "1");
+	CHECK (std::string (getenv ("LWE_NOBLOOM")) == "1");
+    }
+}
+
+TEST_CASE ("--debug with an unknown switch stops the launch, pointing at --help-debug and --help", "[argv]") {
+    CHECK (
+	refusal ({ "--debug", "nosuch=on" })
+	== "unknown debugging switch nosuch; --help-debug lists them. Use linux-wallpaperengine --help for more "
+	   "information"
+    );
+}

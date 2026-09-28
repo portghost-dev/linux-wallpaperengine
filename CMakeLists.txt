@@ -342,6 +342,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Application/ApplicationContext.cpp
     src/WallpaperEngine/Application/ApplicationContext.h
     src/WallpaperEngine/Application/Config.cpp
+    src/WallpaperEngine/Application/DebugSwitches.cpp
+    src/WallpaperEngine/Application/DebugSwitches.h
     src/WallpaperEngine/Application/FlagValues.cpp
     src/WallpaperEngine/Application/FlagValues.h
     src/WallpaperEngine/Application/WallpaperApplication.cpp
@@ -639,7 +641,8 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/Schedule.cpp
         src/WallpaperEngine/Testing/Cases/CommandDispatcher.cpp
         src/WallpaperEngine/Testing/Cases/FlagValues.cpp
-        src/WallpaperEngine/Testing/Cases/ArgvFlags.cpp)
+        src/WallpaperEngine/Testing/Cases/ArgvFlags.cpp
+        src/WallpaperEngine/Testing/Cases/DebugSwitches.cpp)
 endif()
 
 add_library(

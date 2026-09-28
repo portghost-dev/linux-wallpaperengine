@@ -2,6 +2,7 @@
 
 #include "Steam/FileSystem/FileSystem.h"
 #include "WallpaperEngine/Application/Config.h"
+#include "WallpaperEngine/Application/DebugSwitches.h"
 #include "WallpaperEngine/Application/FlagValues.h"
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Logging/Log.h"
@@ -769,6 +770,27 @@ void ApplicationContext::loadSettingsFromArgv () {
 	    }
 	})
 	.append ();
+
+    debuggingGroup.add_argument ("--debug")
+	.help ("Set a debugging switch by its plain name, as switch=value; repeat for more")
+	.action ([] (const std::string& token) -> void {
+	    const auto action = DebugSwitches::resolve (token);
+
+	    if (action.setTo.has_value ()) {
+		setenv (action.variable.c_str (), action.setTo->c_str (), 1);
+	    } else {
+		unsetenv (action.variable.c_str ());
+	    }
+	})
+	.append ();
+
+    debuggingGroup.add_argument ("--help-debug")
+	.help ("List the debugging switches and exit")
+	.flag ()
+	.action ([] (const std::string& value) -> void {
+	    std::cout << DebugSwitches::helpText ();
+	    std::exit (0);
+	});
 
     program.add_epilog (
 	"Usage examples:\n"
