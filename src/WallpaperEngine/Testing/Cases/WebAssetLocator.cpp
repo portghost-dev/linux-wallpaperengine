@@ -10,6 +10,7 @@
 
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Assets/AssetLocator.h"
+#include "WallpaperEngine/WebBrowser/CEF/SchemeLocator.h"
 
 using namespace WallpaperEngine::Assets;
 
@@ -68,6 +69,27 @@ TEST_CASE ("the web locator serves the wallpaper and the assets, never the worki
 	CHECK_THROWS_AS (locator->read (".probe"), AssetLoadException);
 	CHECK (locator->readString ("index.html") == "<html>");
 	CHECK (locator->readString ("shaders/common.h") == "asset");
+    }
+
+    std::filesystem::remove_all (base);
+}
+
+TEST_CASE ("the web scheme builds its locator with the web locator", "[weblocator]") {
+    const auto base
+	= std::filesystem::temp_directory_path () / ("lwe-scheme-locator-test-" + std::to_string (::getpid ()));
+    std::filesystem::remove_all (base);
+    write (base / "home" / ".probe", "private");
+    write (base / "wallpaper" / "index.html", "<html>");
+    write (base / "assets" / "shaders" / "common.h", "asset");
+
+    {
+	const WorkingFolder cwd (base / "home");
+	REQUIRE (std::filesystem::exists (std::filesystem::current_path () / ".probe"));
+
+	const auto locator = WallpaperEngine::WebBrowser::CEF::schemeAssetLocator (base / "wallpaper", base / "assets");
+
+	CHECK_THROWS_AS (locator->read (".probe"), AssetLoadException);
+	CHECK (locator->readString ("index.html") == "<html>");
     }
 
     std::filesystem::remove_all (base);

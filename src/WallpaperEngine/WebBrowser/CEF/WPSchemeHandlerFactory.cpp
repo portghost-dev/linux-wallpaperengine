@@ -1,4 +1,5 @@
 #include "WPSchemeHandlerFactory.h"
+#include "SchemeLocator.h"
 #include "WPSchemeHandler.h"
 #include "WallpaperEngine/Assets/AssetLocator.h"
 #include "WallpaperEngine/Data/Parsers/ProjectParser.h"
@@ -26,7 +27,7 @@ CefRefPtr<CefResourceHandler> WPSchemeHandlerFactory::Create (
 
     if (this->m_project == nullptr) {
 	try {
-	    auto locator = WallpaperEngine::Assets::setupWebAssetLocator (this->m_path.string (), this->m_assetsPath);
+	    auto locator = schemeAssetLocator (this->m_path, this->m_assetsPath);
 	    const auto json = WallpaperEngine::Data::JSON::parseLenient (locator->readString ("project.json"));
 	    this->m_project = WallpaperEngine::Data::Parsers::ProjectParser::parse (json, std::move (locator));
 	} catch (const std::exception& e) {

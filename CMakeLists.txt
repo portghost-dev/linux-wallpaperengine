@@ -825,6 +825,7 @@ add_executable(lwe-web-service
     src/WallpaperEngine/WebBrowser/CEF/BrowserClient.h
     src/WallpaperEngine/WebBrowser/CEF/BrowserApp.cpp
     src/WallpaperEngine/WebBrowser/CEF/BrowserApp.h
+    src/WallpaperEngine/WebBrowser/CEF/SchemeLocator.h
     src/WallpaperEngine/WebBrowser/CEF/SchemeName.h
     src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.cpp
     src/WallpaperEngine/WebBrowser/CEF/SubprocessApp.h
