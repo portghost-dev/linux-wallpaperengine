@@ -64,12 +64,14 @@ def _rebuild() -> list[str]:
     return [] if outputs else ["No screens were found; engine-env keeps the screens it already names."]
 
 
-def _launch(args: list[str], old_pid: int | None) -> tuple[list[str], int]:
+def _launch(args: list[str]) -> tuple[list[str], int]:
     """Hold the sync lock from the owed bundle's record through the start or restart, the wait for
     the engine and its sync, so no other run can clear the record in between; returns the outcome
-    line and the exit code. A busy lock is StoreBusy, reported by cli.main. A crash, an interrupt,
-    a timeout or a refused launch releases the lock and leaves BUNDLE for the next drain."""
-    from ...engine import marker, push
+    line and the exit code. A restart reads the service's MainPID once it holds the lock, and the
+    wait takes only an engine whose status pid is a new, non-zero MainPID (push.wait_ready). A busy
+    lock is StoreBusy, reported by cli.main. A crash, an interrupt, a timeout or a refused launch
+    releases the lock and leaves BUNDLE for the next drain."""
+    from ...engine import daemon_unit, marker, push
     from ...storage import lock
     from .. import report
     not_taken = "The engine has not taken your saved configuration yet"
@@ -80,6 +82,7 @@ def _launch(args: list[str], old_pid: int | None) -> tuple[list[str], int]:
             raise
         except OSError as exc:
             raise _Stop(f"The sync record could not be written ({exc}), so nothing was started.") from None
+        old_pid = daemon_unit._service_main_pid() if args[0] == "restart" else None
         _call(args)
         if push.wait_ready(old_pid=old_pid, timeout_s=READY_S) is None:
             raise _Stop(f"The service started, but the engine did not answer within {READY_S} s; {LOG} shows why. "
@@ -173,10 +176,10 @@ def _act(ctx: Context, form: str, word: str | None) -> int:
         _say(ctx, "already running", [f"The service is already running. {unchanged}", *notes], state)
         return DONE
     if form == "start":
-        extra, code = _launch(["start", unit], None)
+        extra, code = _launch(["start", unit])
         _say(ctx, "started", [f"Started the service. {unchanged}", *notes, *extra], state)
         return code
-    extra, code = _launch(["restart", unit], _pid(state))
+    extra, code = _launch(["restart", unit])
     first = "Restarted the service; the settings marked restart now apply." if running else "Started the service."
     _say(ctx, "restarted" if running else "started", [first, *notes, *extra], state)
     return code

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import threading
 import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
@@ -179,6 +180,7 @@ _log = logging.getLogger(__name__)
 
 _WINDOW_BUDGET_S = 8.0
 _READY_POLL_S = 0.25
+_restart_holding = threading.Event()
 
 _LIVE_VERBS = {"ENGINE_TIMESCALE": "speed", "ENGINE_VOLUME": "volume", "OVERRIDE_MUTE": "volume",
                "OVERRIDE_AUDIO_OFF": "audio", "AUDIO_REACTIVE_DEFAULT": "audio",
@@ -280,6 +282,20 @@ def engine_only() -> contextlib.AbstractContextManager[None]:
     return lock.held("sync")
 
 
+@contextlib.contextmanager
+def restart_hold() -> Iterator[None]:
+    """The window restart's sync hold, which lasts through the wait for the new engine and its sync.
+    While it is held, every run through _synced tries sync once, so a delivery from another thread
+    of this process ends pending(busy) at once instead of waiting for a hold it cannot outwait; the
+    holder's own runs take the lock again at once, as the lock is re-entrant per thread."""
+    with lock.held("sync"):
+        _restart_holding.set()
+        try:
+            yield
+        finally:
+            _restart_holding.clear()
+
+
 def show_final(wid: str, tuned: Callable[[dict[str, Any] | None], Any] | None = None) -> dict[str, Any] | None:
     """Show `wid` with its resolved arguments and wait for the load to finish; set-tuning follows
     only a done ok, and its reply goes to `tuned` when given. Returns the final reply, None when
@@ -294,13 +310,17 @@ def show_final(wid: str, tuned: Callable[[dict[str, Any] | None], Any] | None = 
 
 
 def wait_ready(old_pid: int | None = None, timeout_s: float = 20.0) -> dict[str, Any] | None:
-    """Read status every 250 ms for up to `timeout_s`; the first ok status whose pid differs from
-    `old_pid`, or None."""
+    """Read status every 250 ms for up to `timeout_s`; the first ok status whose pid is the service's
+    MainPID from systemd, once that MainPID is not 0 and not `old_pid` (the MainPID before the
+    launch, None when there was none), or None. No other engine counts: not the one a restart
+    replaces, and not one started by hand on the socket."""
     deadline = time.monotonic() + timeout_s
     while True:
         cls, status = read_status()
         if cls == "ok" and status.get("pid") != old_pid:
-            return status
+            main = daemon_unit._service_main_pid()
+            if main is not None and main != old_pid and status.get("pid") == main:
+                return status
         if time.monotonic() >= deadline:
             return None
         time.sleep(_READY_POLL_S)
@@ -675,9 +695,10 @@ def _version_refusal(status: dict[str, Any]) -> str | None:
 
 def _synced(stack: contextlib.ExitStack, wait_s: float, env: str | None) -> dict[str, Any] | Outcome:
     """Take sync on `stack`, read status inside it and check the running engine's version: the
-    status, or the pending outcome that stops the run with nothing sent."""
+    status, or the pending outcome that stops the run with nothing sent. While a restart_hold is
+    held, sync is tried once, whatever `wait_s` says."""
     try:
-        stack.enter_context(lock.held("sync", wait_s=wait_s))
+        stack.enter_context(lock.held("sync", wait_s=0 if _restart_holding.is_set() else wait_s))
     except lock.StoreBusy:
         return Outcome("pending", reason="busy", env=env)
     cls, status = read_status()

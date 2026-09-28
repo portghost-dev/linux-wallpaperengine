@@ -63,6 +63,11 @@ _ROLE_REFUSED = Qt.ItemDataRole.UserRole + 9  # folder name outside the id allow
 # path component, a word in the shell-sourced playlist files and an engine verb argument.
 REFUSED_REASON = "Rename this folder: letters, digits, dot, underscore and hyphen only"
 
+# the longest a window restart keeps sync while its unit stops or starts, counted from the queued
+# restart: systemd's default stop timeout is 90 s, and an engine still answering while its unit
+# stops must not take the bundle
+_RESTART_CAP_S = 120.0
+
 
 def _sandboxed() -> bool:
     """True when LWE_SANDBOX=1 (tests/_sandbox.py). Host-wide probes - the /proc engine
@@ -809,11 +814,11 @@ class Backend(QObject):
         """Restart the master service in place, so a change that reaches the engine only through
         its env file lands now. The enable state is left as it is.
 
-        The restart runs on a worker that holds the sync lock from the owed bundle's record through
-        the queued restart, the wait for the new engine and its sync, so no other drain runs in
-        between; this call waits only for the restart to be queued. False when the record cannot be
-        written, the sync lock is busy or systemd refuses the job, with nothing launched in the first
-        two cases."""
+        The restart runs on a worker that holds the sync lock (push.restart_hold) from the owed
+        bundle's record through the queued restart, the wait for the new engine and its sync, so no
+        other drain runs in between; this call waits only for the restart to be queued. False when
+        the record cannot be written, the sync lock is busy or systemd refuses the job, with nothing
+        launched in the first two cases."""
         if _sandboxed():
             return False
         try:
@@ -821,11 +826,8 @@ class Backend(QObject):
         except (ValueError, RuntimeError) as exc:
             self.notice.emit(f"Engine service config not updated: {exc}")
             return False
-        cls, before = push.read_status()
-        old_pid = before.get("pid") if cls == "ok" and before else None
         launched, result = threading.Event(), {}
-        self._restart_thread = threading.Thread(target=self._restart_worker, args=(old_pid, launched, result),
-                                                daemon=True)
+        self._restart_thread = threading.Thread(target=self._restart_worker, args=(launched, result), daemon=True)
         self._restart_thread.start()
         launched.wait(30)
         self.statusChanged.emit()
@@ -833,13 +835,19 @@ class Backend(QObject):
             self.notice.emit(result["notice"])
         return result.get("ok", False)
 
-    def _restart_worker(self, old_pid: Any, launched: threading.Event, result: dict) -> None:
-        """restartMaster's sequence under the sync lock; sets `launched` once the restart is queued or
-        refused, and hands the sync's outcome to the window through _restartSynced."""
+    def _restart_worker(self, launched: threading.Event, result: dict) -> None:
+        """restartMaster's sequence under the sync lock: the record, the service's MainPID from
+        systemd, then the queued restart (`launched` is set once it is queued or refused) and the wait
+        for the new engine, whose status pid is a new, non-zero MainPID (push.wait_ready). When that
+        wait ends while systemd reports the unit deactivating or activating, the lock stays held
+        until the unit settles, at most _RESTART_CAP_S after the restart was queued, so an engine that
+        is being stopped never takes the bundle. The new engine's sync goes to the window through
+        _restartSynced; with no new engine, BUNDLE stays for the drain."""
         try:
-            with lock.held("sync"):
+            with push.restart_hold():
                 if not self._record_bundle(result):
                     return
+                old_pid = daemon_unit._service_main_pid()
                 try:
                     proc = subprocess.run(
                         ["systemctl", "--user", "--no-block", "restart", self._master_service()],
@@ -848,7 +856,13 @@ class Backend(QObject):
                     return
                 result["ok"] = proc.returncode == 0
                 launched.set()
-                if not result["ok"] or push.wait_ready(old_pid=old_pid, timeout_s=20.0) is None:
+                if not result["ok"]:
+                    return
+                cap = monotonic() + _RESTART_CAP_S
+                ready = push.wait_ready(old_pid=old_pid, timeout_s=20.0)
+                while ready is None and monotonic() < cap and self.masterState() in ("deactivating", "activating"):
+                    ready = push.wait_ready(old_pid=old_pid, timeout_s=1.0)
+                if ready is None:
                     return
                 try:
                     self._restartSynced.emit(push.sync_all("window", defer_current=self.delivery_due()))

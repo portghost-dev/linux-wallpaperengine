@@ -7,7 +7,9 @@ raises the generation, and polls that find the engine away count nothing. The sc
 runs inside the sync hold.
 With sync held by another process a change returns pending, and the poll's drain returns at once.
 The service switch rebuilds engine-env, the unit and daemon-reload before systemctl, fails with the
-existing notice when that fails, and bundles once the engine answers; a restart waits for a new pid.
+existing notice when that fails, and bundles once the engine answers; a restart takes only an engine
+whose pid is a new MainPID, keeps sync while its unit stops or starts, and window deliveries meanwhile
+end pending at once.
 A manual switch while the engine is away with the schedule on writes nothing. A switch to a playlist
 being deleted, made by another writer while the delete reads, waits for the delete: the delete raises
 nothing and changes ACTIVE_PLAYLIST only in a change that carries the active row. A hand-broken store
@@ -116,6 +118,32 @@ def status(current: str = "111", speed=1.0, pid: int = 4242, **extra) -> dict:
             "lanes": [{"id": "all", "playlist": "main"}], **extra}
 
 
+class FakeUnit:
+    """systemd's side of lwe-engine.service for the window's restart: the ActiveState and MainPID it
+    reports, the window's systemctl calls recorded, and a queued restart moving the unit to
+    `on_restart` when given. state_read is set once the state is read after the restart."""
+
+    def __init__(self, main: int, on_restart: str | None = None) -> None:
+        self.main, self.state, self.on_restart = main, "active", on_restart
+        self.calls: list[list[str]] = []
+        self.restarted = False
+        self.state_read = threading.Event()
+
+    def run(self, args, **kwargs):
+        self.calls.append(list(args))
+        if "is-active" in args:
+            if self.restarted:
+                self.state_read.set()
+            return subprocess.CompletedProcess(args, 0, self.state + "\n", "")
+        if "restart" in args:
+            self.restarted = True
+            self.state = self.on_restart or self.state
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def main_pid(self):
+        return self.main or None
+
+
 class Clock:
     def __init__(self) -> None:
         self.now = 1000.0
@@ -186,6 +214,21 @@ class WindowSyncTest(unittest.TestCase):
         finally:
             release.set()
             holder.join(10)
+
+    @contextlib.contextmanager
+    def systemd(self, fake: FakeUnit, ready_s: float = 0.5):
+        """The window's restart against `fake`: its readiness waits cut to `ready_s`, its hold capped at
+        10 s."""
+        real = push.wait_ready
+
+        def short(old_pid=None, timeout_s=20.0):
+            return real(old_pid=old_pid, timeout_s=min(timeout_s, ready_s))
+        with mock.patch.object(models, "_sandboxed", lambda: False), \
+                mock.patch.object(models.subprocess, "run", fake.run), \
+                mock.patch.object(daemon_unit, "_service_main_pid", fake.main_pid), \
+                mock.patch.object(push, "wait_ready", short), \
+                mock.patch.object(models, "_RESTART_CAP_S", 10.0, create=True):
+            yield fake
 
     def _env(self) -> dict[str, str]:
         for d in ("bin", "rt"):
@@ -402,6 +445,116 @@ class WindowSyncTest(unittest.TestCase):
         self.assertGreater(sent, 0)
         self.assertEqual(len(rec.verbs()), sent, "later polls send nothing")
 
+    def _first_read_unresponsive(self):
+        real_read = push.read_status
+        first = [True]
+
+        def read():
+            if first:
+                first.pop()
+                return "unresponsive", None
+            return real_read()
+        return mock.patch.object(push, "read_status", read)
+
+    def test_a_restart_never_bundles_the_engine_it_replaces_when_the_first_status_read_fails(self) -> None:
+        with self.engine(status(pid=4242)) as rec, self.systemd(FakeUnit(4242)), self._first_read_unresponsive():
+            self.assertTrue(self.backend.restartMaster())
+            self._finish_restart()
+        self.assertEqual((rec.verbs(), marker.read()["classes"]), ([], ["BUNDLE"]))
+
+    def test_a_restart_that_waited_for_sync_reads_the_old_main_pid_once_it_holds_it(self) -> None:
+        fake = FakeUnit(4242)
+        taken = threading.Event()
+
+        def restart_elsewhere() -> None:
+            with lock.held("sync"):
+                taken.set()
+                for _ in range(200):
+                    if self.backend._restart_thread is not None:
+                        break
+                    time.sleep(0.01)
+                rec.status_reply = status(pid=5000)
+                fake.main = 5000
+
+        with self.engine(status(pid=4242)) as rec, self.systemd(fake):
+            holder = threading.Thread(target=restart_elsewhere, daemon=True)
+            holder.start()
+            self.assertTrue(taken.wait(5))
+            self.assertTrue(self.backend.restartMaster())
+            holder.join(5)
+            self._finish_restart()
+        self.assertEqual((holder.is_alive(), rec.verbs(), marker.read()["classes"]), (False, [], ["BUNDLE"]))
+
+    def test_a_restart_bundles_the_new_engine_once_it_is_the_main_pid_and_never_the_old_one(self) -> None:
+        fake = FakeUnit(4242)
+        with self.engine(status(pid=4242)) as rec, self.systemd(fake, ready_s=5.0), self._first_read_unresponsive():
+            self.assertTrue(self.backend.restartMaster())
+            self.backend._restart_thread.join(0.8)
+            to_old = list(rec.verbs())
+            rec.status_reply = status(pid=5000)
+            fake.main = 5000
+            self._finish_restart()
+        self.assertEqual(to_old, [])
+        self.assertIn("lanes_set", rec.verbs())
+        self.assertEqual(marker.read()["classes"], [])
+
+    def test_a_restart_keeps_sync_while_its_unit_stops_so_no_drain_reaches_the_old_engine(self) -> None:
+        fake = FakeUnit(4242, on_restart="deactivating")
+        with self.engine(status(pid=4242)) as rec, self.systemd(fake):
+            self.assertTrue(self.backend.restartMaster())
+            held = fake.state_read.wait(3)
+            self.backend._drain()
+            during = (list(rec.verbs()), marker.read()["classes"])
+            rec.status_reply = status(pid=5000)
+            fake.main, fake.state = 5000, "activating"
+            self._finish_restart()
+        self.assertEqual((held, during), (True, ([], ["BUNDLE"])))
+        self.assertIn("lanes_set", rec.verbs())
+        self.assertEqual(marker.read()["classes"], [])
+
+    def test_window_deliveries_while_a_restart_holds_sync_end_pending_at_once(self) -> None:
+        parked, release = threading.Event(), threading.Event()
+        took, outcomes = {}, {}
+
+        def wait(old_pid=None, timeout_s=20.0):
+            parked.set()
+            release.wait(15)
+            rec.status_reply = status(pid=5000)
+            return status(pid=5000)
+
+        with self.engine(status(pid=4242)) as rec, self.systemd(FakeUnit(4242)), \
+                mock.patch.object(push, "wait_ready", wait):
+            self.assertTrue(self.backend.restartMaster())
+            try:
+                self.assertTrue(parked.wait(10))
+                for name, action in (("save_setting", lambda: self.backend.save_setting("ENGINE_FPS", 45)),
+                                     ("deletePlaylist", lambda: self.backend.deletePlaylist("main")),
+                                     ("setSessionOverride", lambda: self.backend.setSessionOverride("mute", True)),
+                                     ("drain_now", self.backend.drain_now)):
+                    start = time.monotonic()
+                    outcomes[name] = action()
+                    took[name] = time.monotonic() - start
+                sent = list(rec.verbs())
+            finally:
+                release.set()
+            self._finish_restart()
+        self.assertTrue(all(seconds < 1.0 for seconds in took.values()), took)
+        self.assertEqual([(outcomes[name].kind, outcomes[name].reason) for name in ("save_setting", "drain_now")],
+                         [("pending", "busy")] * 2)
+        self.assertEqual(sent, [])
+        self.assertIn((45,), [args for verb, args, _kwargs in rec.calls if verb == "set_fps"])
+        self.assertEqual(marker.read()["classes"], [])
+
+    def test_readiness_takes_only_an_engine_whose_pid_is_a_new_non_zero_main_pid(self) -> None:
+        # (status pid, MainPID, MainPID before the launch, ready)
+        cases = ((4242, 4242, 4242, False), (7000, 5000, 4242, False), (5000, None, None, False),
+                 (5000, 5000, 4242, True), (5000, 5000, None, True))
+        for pid, main, old, ready in cases:
+            with self.subTest(pid=pid, main=main, old=old):
+                with self.engine(status(pid=pid)), \
+                        mock.patch.object(daemon_unit, "_service_main_pid", return_value=main):
+                    self.assertEqual(push.wait_ready(old_pid=old, timeout_s=0.3) is not None, ready)
+
     def test_the_service_switch_rebuilds_first_and_bundles_once_the_engine_answers(self) -> None:
         events: list = []
         notices: list[str] = []
@@ -451,10 +604,11 @@ class WindowSyncTest(unittest.TestCase):
                     waited.append(old_pid)
                     return status(pid=200)
 
-                with self.engine(status(pid=100)), mock.patch.object(push, "wait_ready", ready):
+                with self.engine(status(pid=100)), mock.patch.object(push, "wait_ready", ready), \
+                        mock.patch.object(daemon_unit, "_service_main_pid", return_value=90):
                     self.assertTrue(self.backend.restartMaster())
                     self._finish_restart()
-                self.assertEqual(waited, [100], "the restart waits for an engine other than the old pid")
+                self.assertEqual(waited, [90], "the restart waits for an engine other than the old MainPID")
                 self.assertEqual(len(runs), 2, "the new pid runs the bundle")
                 self.assertFalse(self.backend._ready_timer.isActive())
 

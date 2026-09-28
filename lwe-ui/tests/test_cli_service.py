@@ -1,7 +1,8 @@
 """lwe service: the status read and the start, stop, restart and autostart forms, in this process
 through cli.main, with every systemctl call, write_files' daemon-reload included, recorded by a fake
-daemon_unit.RUNNER, enumerate_outputs, push.wait_ready and push.sync_all patched,
-and HOME and the XDG folders at scratch (_cli_env). Nothing reaches systemctl or an engine.
+daemon_unit.RUNNER, the MainPID read from the same fake state, enumerate_outputs, push.wait_ready and
+push.sync_all patched, and HOME and the XDG folders at scratch (_cli_env). Nothing reaches systemctl
+or an engine.
 
 Run: PYTHONPATH=src python3 tests/test_cli_service.py
 """
@@ -11,6 +12,8 @@ import io
 import json
 import shutil
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -29,6 +32,12 @@ STOPPED = {"LoadState": "loaded", "ActiveState": "inactive", "SubState": "dead",
 FAILED = {**STOPPED, "ActiveState": "failed", "SubState": "failed"}
 MISSING = {**STOPPED, "LoadState": "not-found"}
 ACTIVATING = {**RUNNING, "ActiveState": "activating", "SubState": "auto-restart", "MainPID": "0"}
+
+
+def _main_pid(state: dict) -> int | None:
+    """The fake state's MainPID as daemon_unit._service_main_pid reads it: None for 0."""
+    pid = state.get("MainPID", "")
+    return int(pid) if pid.isdigit() and pid != "0" else None
 
 
 class FakeSystemctl:
@@ -76,6 +85,7 @@ class ServiceTest(unittest.TestCase):
         self.sync = mock.Mock(return_value=outcome or self.push.Outcome("applied"))
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(self.unit, "RUNNER", FakeSystemctl(self.events, state, fail or {})), \
+                mock.patch.object(self.unit, "_service_main_pid", lambda: _main_pid(state)), \
                 mock.patch.object(self.unit, "enumerate_outputs", return_value=list(outputs)), \
                 mock.patch.object(self.unit, "restart_state",
                                   return_value=(True, waiting) if waiting else (False, {})), \
@@ -144,6 +154,28 @@ class ServiceTest(unittest.TestCase):
         self.events.clear()
         self.assertEqual(self.run_lwe(["restart"], STOPPED), (0, "Started the service.\n", ""))
         self.assert_no_now()
+
+    def test_a_restart_reads_the_old_main_pid_after_it_takes_the_sync_lock(self) -> None:
+        from lwe_ui.storage import lock
+        state = dict(RUNNING)
+        taken = threading.Event()
+
+        def restart_elsewhere() -> None:
+            with lock.held("sync"):
+                taken.set()
+                for _ in range(150):
+                    if ("systemctl", "daemon-reload") in self.events:
+                        break
+                    time.sleep(0.01)
+                state["MainPID"] = "5000"
+
+        holder = threading.Thread(target=restart_elsewhere, daemon=True)
+        holder.start()
+        self.assertTrue(taken.wait(5))
+        code = self.run_lwe(["restart"], state)[0]
+        holder.join(5)
+        self.assertEqual((code, holder.is_alive()), (0, False))
+        self.wait.assert_called_once_with(old_pid=5000, timeout_s=20)
 
     def test_autostart_enables_or_disables_without_now(self) -> None:
         self.assertEqual(self.run_lwe(["autostart", "on"], STOPPED),
@@ -242,7 +274,7 @@ class ServiceTest(unittest.TestCase):
                         mock.patch.object(self.push, "wait_ready", side_effect=KeyboardInterrupt), \
                         mock.patch.object(self.push, "sync_all") as sync:
                     with self.assertRaises(KeyboardInterrupt):
-                        service._launch([action, "lwe-engine.service"], None)
+                        service._launch([action, "lwe-engine.service"])
                 self.assertEqual((calls, sync.call_count), ([[action, "lwe-engine.service"]], 0))
                 self.assertIn("BUNDLE", marker.read()["classes"])
 

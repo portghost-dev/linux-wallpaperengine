@@ -588,7 +588,7 @@ class BridgeSyncTest(unittest.TestCase):
 
     def test_a_launch_holds_sync_so_a_drain_in_between_ends_busy_and_the_record_stays(self) -> None:
         from lwe_ui.cli.verbs import service
-        for action, old_pid, answer in (("restart", 4242, status(pid=4242)), ("start", None, None)):
+        for action, answer in (("restart", status(pid=4242)), ("start", None)):
             with self.subTest(action=action):
                 (paths.panel_state_dir() / "sync-pending").unlink(missing_ok=True)
                 drained = []
@@ -603,7 +603,7 @@ class BridgeSyncTest(unittest.TestCase):
                 with self.engine(answer, "ok" if answer else "away"), mock.patch.object(service, "_call", launch), \
                         mock.patch.object(push, "wait_ready", side_effect=KeyboardInterrupt):
                     with self.assertRaises(KeyboardInterrupt):
-                        service._launch([action, "lwe-engine.service"], old_pid)
+                        service._launch([action, "lwe-engine.service"])
                 self.assertEqual([(o.kind, o.reason) for o in drained], [("pending", "busy")])
                 self.assertEqual(marker.read()["classes"], ["BUNDLE"])
 
@@ -611,7 +611,7 @@ class BridgeSyncTest(unittest.TestCase):
         from lwe_ui.cli.verbs import service
         with mock.patch.object(service, "_call", side_effect=service._Stop("restart rejected")):
             with self.assertRaises(service._Stop):
-                service._launch(["restart", "lwe-engine.service"], 4242)
+                service._launch(["restart", "lwe-engine.service"])
         self.assertEqual(marker.read()["classes"], ["BUNDLE"])
         with self.engine(status(pid=4242)) as rec:
             first = push.sync_all("command").kind
@@ -629,7 +629,7 @@ class BridgeSyncTest(unittest.TestCase):
 
         def restart_again():
             try:
-                service._launch(["restart", "lwe-engine.service"], 4242)
+                service._launch(["restart", "lwe-engine.service"])
                 second.append("ran")
             except lock.StoreBusy:
                 second.append("busy")
@@ -648,7 +648,7 @@ class BridgeSyncTest(unittest.TestCase):
                 mock.patch.object(service, "_call", launch), \
                 mock.patch.object(push, "wait_ready", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
-                service._launch(["restart", "lwe-engine.service"], 4242)
+                service._launch(["restart", "lwe-engine.service"])
         self.assertEqual((second, marker.read()["classes"]), (["busy"], ["BUNDLE"]))
 
     def test_ready_tick_during_burst(self) -> None:
