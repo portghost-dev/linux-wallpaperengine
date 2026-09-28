@@ -370,7 +370,7 @@ class Backend(QObject):
         self._schedule_held = False
         self._schedule_refused = False
         self._drain_generation: int | None = None
-        self._drain_pid: int | None = None
+        self._drain_engine: tuple[int, float | None] | None = None
         self._drain_failures = 0
         self._drain_after = 0.0
         self._version_logged: str | None = None
@@ -1009,33 +1009,40 @@ class Backend(QObject):
         """The poll's drain: while no readiness wait or bridge delivery is due, the window's bundle
         without waiting for sync when the marker has classes, or when the engine whose status the poll
         just read is not the served one (push._unserved). Failed drains of one generation and one
-        engine pid are retried after 5 s, 15 s and 45 s, and when the retry after the 45 s wait fails,
-        none follows until a writer raises the generation or another pid answers. A run that found
-        sync busy, an unresponsive status or another build's engine counts nothing; an away one
-        counts, as the poll has just read status."""
+        engine, its pid and its start (push._same_engine), are retried after 5 s, 15 s and 45 s, and
+        when the retry after the 45 s wait fails, none follows until a writer raises the generation or
+        another engine answers; the generation a drain's own run leaves is not a writer's. A run that
+        found sync busy, an unresponsive status or another build's engine counts nothing; an away one
+        counts, as the poll has just read status, and so does an applied one after which that engine
+        is still not the served one, as an engine whose status gives no uptime_s stays."""
         if self._ready_timer.isActive() or self.delivery_due():
             return
-        pid = status.get("pid") if isinstance(status, dict) else None
+        engine = push._engine(status) if isinstance(status, dict) else None
         try:
             state = marker.read()
         except OSError:
             return
-        if not state["classes"] and not (isinstance(status, dict) and push._unserved(status)):
+        if not state["classes"] and not push._unserved(engine):
             return
-        other = isinstance(pid, int) and not isinstance(pid, bool) and pid != self._drain_pid
+        other = engine is not None and not push._same_engine(engine, self._drain_engine)
         if state["generation"] != self._drain_generation or other:
             self._drain_generation, self._drain_failures, self._drain_after = state["generation"], 0, 0.0
             if other:
-                self._drain_pid = pid
-        if state["classes"] and (self._drain_failures >= 4 or monotonic() < self._drain_after):
+                self._drain_engine = engine
+        if self._drain_failures >= 4 or monotonic() < self._drain_after:
             return
         try:
             outcome = push.sync_all("window", wait_s=0)
         except OSError:
             return
         self._note(outcome, schedule=True)
+        try:
+            self._drain_generation = marker.generation()
+        except OSError:
+            pass
         if outcome.kind in ("refused", "uncertain") or outcome.reason == "away" \
-                or (outcome.reason == "budget" and not outcome.recorded):
+                or (outcome.reason == "budget" and not outcome.recorded) \
+                or (outcome.kind == "applied" and push._unserved(engine)):
             self._drain_failures += 1
             if self._drain_failures < 4:
                 self._drain_after = monotonic() + (5.0, 15.0, 45.0)[self._drain_failures - 1]

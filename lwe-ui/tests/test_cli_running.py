@@ -120,7 +120,7 @@ class NextPrevTest(RunningCase):
 
     def test_a_next_to_an_engine_served_under_the_brake_then_sends_its_rotation_lanes_set(self) -> None:
         engine = self.engine(current=DEEP, lanes=[{"id": "all", "playlist": "chill"}])
-        self.marker.record_served(engine.fields["pid"], braked=True)
+        self.marker.record_served(engine.fields["pid"], engine.started, braked=True)
         self.assertEqual(self.lwe("next")[0], 0)
         self.assertEqual(self.requests(engine)[1:],
                          [("lanes-set", {"lanes": [{"id": "all", "playlist": "chill", "enabled": True}]})])

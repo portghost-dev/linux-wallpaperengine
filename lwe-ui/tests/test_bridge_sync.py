@@ -127,7 +127,7 @@ class Recorder:
 
 
 def status(current: str = "111", speed=1.0, pid: int = 4242, **extra) -> dict:
-    return {"api": 1, "version": version.panel_stamp(), "pid": pid, "speed": speed,
+    return {"api": 1, "version": version.panel_stamp(), "pid": pid, "speed": speed, "uptime_s": 100,
             "current": {"id": current, "ui_id": current, "title": ""}, "schedule": {"enabled": False},
             "lanes": [{"id": "all", "playlist": "main"}], **extra}
 
@@ -156,7 +156,10 @@ class BridgeSyncTest(unittest.TestCase):
                                         lambda *a, _n=name, **k: self.env_writes.append(_n) or "written")
             patcher.start()
             self.addCleanup(patcher.stop)
-        marker.record_served(4242)
+        engine_clock = mock.patch.object(push, "_monotonic", lambda: 10_000.0)
+        engine_clock.start()
+        self.addCleanup(engine_clock.stop)
+        marker.record_served(4242, 9900.0)
         self.backend = models.Backend()
 
     @contextlib.contextmanager

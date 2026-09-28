@@ -25,7 +25,14 @@ change. While the engine reports restore_refused, automatic bundles send no show
 the playlist binding but no enabled field, serve the engine as braked, clear CURRENT and keep no window
 note; after an explicit show the rotation lanes-set goes and later bundles are normal, a playlist switch
 sends its own and clears braked, and two quick restarts of a healthy engine get full bundles and no note.
-The engine is an api_client recorder with a scripted status unless a test names the socket server.
+The start is taken once per status on the engine's clock, so after a suspend or a wall-clock step the
+same engine gets nothing more, a bundle that takes 6 s serves its engine once, and after a braked one
+an explicit show starts the rotation; a status without uptime_s is never named served. An owed re-show
+that never ran, or was refused, is kept for the next bundle, the delivery that re-shows a deferred
+CURRENT takes it, so nothing re-shows again, and a bundling delivery whose marker cannot be read still
+runs.
+The engine is an api_client recorder with a scripted status unless a test names the socket server; its
+clock is frozen at 10000 and its status reports uptime_s 100 unless a test says otherwise.
 
 Run: PYTHONPATH=src python3 tests/test_sync_bundle.py
 """
@@ -116,12 +123,14 @@ class Clock:
         self.now += seconds
 
 
-def status(speed=1.0, pid: int = 4242, current: str = "111", **extra) -> dict:
+def status(speed=1.0, pid: int = 4242, current: str = "111", uptime_s: int | None = 100, **extra) -> dict:
     out = {"api": 1, "version": version.panel_stamp(), "pid": pid,
            "current": {"id": current, "ui_id": current, "title": ""},
            "schedule": {"enabled": False}, "lanes": [{"id": "all", "playlist": "main"}], **extra}
     if speed is not None:
         out["speed"] = speed
+    if uptime_s is not None:
+        out["uptime_s"] = uptime_s
     return out
 
 
@@ -140,7 +149,10 @@ class SyncBundleTest(unittest.TestCase):
                                   "MEMBERS": members})
         settings.update({"ACTIVE_PLAYLIST": "main", "SCHEDULE": "07:00=main;20:00=night",
                          "SCHEDULE_ENABLED": False})
-        marker.record_served(4242)
+        engine_clock = mock.patch.object(push, "_monotonic", lambda: 10_000.0)
+        engine_clock.start()
+        self.addCleanup(engine_clock.stop)
+        marker.record_served(4242, 9900.0)
 
     @contextlib.contextmanager
     def engine(self, reply: dict):
@@ -508,22 +520,125 @@ class SyncBundleTest(unittest.TestCase):
         self.assertEqual((marker.served(), rec.verbs().count("show")), (5000, 1))
 
     def test_an_engine_of_the_same_pid_from_another_boot_or_with_another_start_is_not_served(self) -> None:
-        with mock.patch.object(push, "_now", lambda: 10_000.0):
-            with self.engine(status(pid=777, uptime_s=100)):
-                self.assertEqual(push.sync_all("command").kind, "applied")
-            for name, uptime, boot, unserved in (("the same engine", 102, None, False),
-                                                 ("another boot", 100, "another-boot", True),
-                                                 ("another start", 10, None, True)):
-                with self.subTest(case=name):
-                    with mock.patch.object(marker, "boot_id", return_value=boot) if boot else contextlib.nullcontext():
-                        self.assertEqual(push._unserved(status(pid=777, uptime_s=uptime)), unserved)
+        with self.engine(status(pid=777, uptime_s=100)):
+            self.assertEqual(push.sync_all("command").kind, "applied")
+        for name, uptime, boot, unserved in (("the same engine", 102, None, False),
+                                             ("another boot", 100, "another-boot", True),
+                                             ("another start", 10, None, True)):
+            with self.subTest(case=name):
+                with mock.patch.object(marker, "boot_id", return_value=boot) if boot else contextlib.nullcontext():
+                    self.assertEqual(push._unserved(push._engine(status(pid=777, uptime_s=uptime))), unserved)
         self.assertEqual((marker.served(), marker.served_record()["start"]), (777, 9900.0))
+
+    def test_after_a_suspend_or_a_wall_clock_step_the_same_engine_gets_nothing_more(self) -> None:
+        clocks = {"engine": 1000.0, "wall": 50_000.0}
+        sent = []
+        with mock.patch.object(push, "_monotonic", lambda: clocks["engine"]), \
+                mock.patch.object(push, "_now", lambda: clocks["wall"]):
+            for name, engine_now, wall, uptime in (("first change", 1000.0, 50_000.0, 100),
+                                                   ("10 s later", 1010.0, 50_010.0, 110),
+                                                   ("after a 600 s suspend", 1012.0, 50_612.0, 112),
+                                                   ("after a clock step back 3600 s", 1013.0, 47_013.0, 113)):
+                clocks.update(engine=engine_now, wall=wall)
+                with self.engine(status(pid=5000, uptime_s=uptime)) as rec:
+                    push.run_change(("settings",), lambda fps=uptime: settings.update({"ENGINE_FPS": fps}),
+                                    [("verb", "ENGINE_FPS")], run="command")
+                sent.append((name, "lanes_set" in rec.verbs(), rec.verbs().count("show")))
+        self.assertEqual(sent, [("first change", True, 1), ("10 s later", False, 0),
+                                ("after a 600 s suspend", False, 0), ("after a clock step back 3600 s", False, 0)])
+
+    def test_a_bundle_that_takes_6_s_serves_its_engine_once(self) -> None:
+        clock = {"engine": 1000.0}
+        with mock.patch.object(push, "_monotonic", lambda: clock["engine"]):
+            with self.engine(status(pid=5000)) as rec:
+                read = rec.status
+
+                def live(sock=None):
+                    rec.status_reply["uptime_s"] = int(clock["engine"] - 900.0)
+                    return read(sock)
+                rec.status = live
+                slow = [6.0]
+                rec.hooks["set_particles"] = lambda: clock.update(engine=clock["engine"] + (slow.pop() if slow else 0))
+                runs = []
+                for fps in (40, 41, 42):
+                    sent = len(rec.calls)
+                    outcome = push.run_change(("settings",), lambda fps=fps: settings.update({"ENGINE_FPS": fps}),
+                                              [("verb", "ENGINE_FPS")], run="command")
+                    runs.append((outcome.kind, "lanes_set" in [verb for verb, _a, _k in rec.calls[sent:]]))
+        self.assertEqual(runs, [("applied", True), ("applied", False), ("applied", False)])
+        self.assertEqual((marker.served(), marker.served_record()["start"]), (5000, 900.0))
+
+    def test_after_a_braked_bundle_that_takes_6_s_an_explicit_show_starts_the_rotation(self) -> None:
+        clock = {"engine": 1000.0}
+        with mock.patch.object(push, "_monotonic", lambda: clock["engine"]):
+            with self.engine(status(pid=5000, restore_refused=True)) as rec:
+                read = rec.status
+
+                def live(sock=None):
+                    rec.status_reply["uptime_s"] = int(clock["engine"] - 900.0)
+                    return read(sock)
+                rec.status = live
+                slow = [6.0]
+                rec.hooks["set_particles"] = lambda: clock.update(engine=clock["engine"] + (slow.pop() if slow else 0))
+                self.assertEqual(push.sync_all("command").kind, "applied")
+                sent = len(rec.calls)
+                with push.engine_only():
+                    self.assertEqual(push._reply_class(push.show_final("111")), "ok")
+                    push.rearm_rotation()
+        self.assertEqual(push.brake_notes(), [push.BRAKED])
+        self.assertEqual(self.lanes(rec.calls[sent:]), [{"id": "all", "playlist": "main", "enabled": True}])
+        self.assertEqual((marker.served_record()["start"], marker.served_record()["braked"]), (900.0, False))
+
+    def test_an_engine_whose_status_gives_no_uptime_is_never_named_served(self) -> None:
+        with self.engine(status(pid=5000, uptime_s=None)):
+            self.assertEqual(push.sync_all("command").kind, "applied")
+        self.assertEqual((marker.served(), marker.served_record()["start"]), (5000, None))
+        self.assertTrue(push._unserved(push._engine(status(pid=5000, uptime_s=None))))
+
+    def test_an_owed_reshow_that_never_ran_is_kept_for_the_next_bundle(self) -> None:
+        with self.engine(status(pid=5000)) as rec:
+            rec.answer("playlist_set", "uncertain")
+            first = push.sync_all("command").kind
+            kept = marker.read()["classes"]
+            second = push.sync_all("command").kind
+        self.assertEqual((first, kept, second), ("uncertain", ["BUNDLE", "CURRENT"], "applied"))
+        self.assertEqual((rec.verbs().count("show"), marker.served()), (1, 5000))
+
+    def test_a_refused_owed_reshow_is_kept_until_a_show_succeeds(self) -> None:
+        with self.engine(status(pid=5000)) as rec:
+            rec.answer("show", {"id": 1, "ok": False, "error": "no"})
+            first = push.sync_all("command").kind
+            kept = marker.read()["classes"]
+            second = push.sync_all("command").kind
+        self.assertEqual((first, kept, second), ("refused", ["BUNDLE", "CURRENT"], "applied"))
+        self.assertEqual((rec.verbs().count("show"), marker.served()), (2, 5000))
+
+    def test_the_delivery_that_reshows_a_deferred_current_takes_it_so_no_poll_reshows_again(self) -> None:
+        with self.engine(status(pid=5000)) as rec:
+            ticket = push.save_change(("overrides",), lambda: wp.update_set("333", {"SCALING": "fill"}),
+                                      [("wp_build", "SCALING")], wid="333")
+            self.assertEqual(push.sync_all("window", defer_current=True).kind, "applied")
+            self.assertEqual((rec.verbs().count("show"), marker.read()["classes"]), (0, ["CURRENT"]))
+            self.assertEqual(push.deliver(ticket).kind, "applied")
+            delivered = (rec.verbs().count("show"), marker.read()["classes"], marker.served())
+            push.sync_all("window", wait_s=0)
+        self.assertEqual(delivered, (1, [], 5000))
+        self.assertEqual(rec.verbs().count("show"), 1)
+
+    def test_a_bundling_delivery_whose_marker_cannot_be_read_still_runs(self) -> None:
+        marker.ensure(("BUNDLE",))
+        with self.engine(status()) as rec:
+            ticket = push.save_change(("settings",), lambda: settings.update({"ENGINE_FPS": 40}),
+                                      [("verb", "ENGINE_FPS")])
+            with mock.patch.object(marker, "read", side_effect=OSError("unreadable")):
+                outcome = push.deliver(ticket)
+        self.assertEqual((outcome.kind, "lanes_set" in rec.verbs(), rec.verbs()[-1]), ("applied", True, "set_fps"))
 
     def test_an_unreadable_marker_counts_the_engine_as_not_served(self) -> None:
         path = marker._file()
         path.unlink()
         path.mkdir()
-        self.assertTrue(push._unserved(status()))
+        self.assertTrue(push._unserved(push._engine(status())))
 
     def test_a_window_bundle_stopped_at_its_budget_records_no_served_engine(self) -> None:
         clock = Clock()

@@ -6,7 +6,8 @@ answers from that verb's script, one step per request: done(result), fail(messag
 an accepted line, or silent(), which answers nothing until the client hangs up; done and fail wait
 their delay before the final line. A verb with no step left answers done: status with the status
 built from the fields the test sets, any other verb with an empty result. A field set to None is left
-out of the status. stop() closes the socket and removes its file. Unless served=False, the engine is
+out of the status; uptime_s counts whole seconds on time.monotonic() from the fake's start unless the
+test sets it. stop() closes the socket and removes its file. Unless served=False, the engine is
 recorded in the sync marker as the served engine at its start, as an engine that has already taken
 the panel's settings would be.
 """
@@ -16,12 +17,13 @@ import json
 import os
 import socket
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 FIELDS = ("version", "pid", "speed", "current", "rotation", "lanes", "schedule", "outputs", "config",
-          "audio_smooth", "restore_refused")
+          "audio_smooth", "restore_refused", "uptime_s")
 
 
 @dataclass(frozen=True)
@@ -68,9 +70,10 @@ class FakeEngine:
             "config": {},
             "audio_smooth": 90.0,
         }
+        self.started = time.monotonic()
         self.set(**fields)
         if served:
-            marker.record_served(self.fields["pid"])
+            marker.record_served(self.fields["pid"], self.started)
         self._scripts: dict[str, list[Step]] = {}
         self._lock = threading.Lock()
         self._stopping = threading.Event()
@@ -100,7 +103,8 @@ class FakeEngine:
             self._scripts.setdefault(cmd, []).extend(steps)
 
     def status(self) -> dict[str, Any]:
-        return {"api": 1, **{name: value for name, value in self.fields.items() if value is not None}}
+        fields = {"uptime_s": int(time.monotonic() - self.started), **self.fields}
+        return {"api": 1, **{name: value for name, value in fields.items() if value is not None}}
 
     def stop(self) -> None:
         self._stopping.set()

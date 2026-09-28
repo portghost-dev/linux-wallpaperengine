@@ -137,7 +137,7 @@ class Clock:
 
 
 def status(current: str = "111", speed=1.0, schedule_on: bool = False, **extra) -> dict:
-    out = {"api": 1, "version": version.panel_stamp(), "pid": 4242,
+    out = {"api": 1, "version": version.panel_stamp(), "pid": 4242, "uptime_s": 100,
            "current": {"id": current, "ui_id": current, "title": ""},
            "schedule": {"enabled": schedule_on}, "lanes": [{"id": "all", "playlist": "main"}], **extra}
     if speed is not None:
@@ -170,6 +170,9 @@ class ChangeRunnerTest(unittest.TestCase):
                                     lambda *a, **k: self.env_writes.append(1) or "written")
         patcher.start()
         self.addCleanup(patcher.stop)
+        engine_clock = mock.patch.object(push, "_monotonic", lambda: 10_000.0)
+        engine_clock.start()
+        self.addCleanup(engine_clock.stop)
         self._fresh()
 
     def _fresh(self) -> None:
@@ -185,7 +188,7 @@ class ChangeRunnerTest(unittest.TestCase):
         playlists.save("night", {"NAME": "Night", "MODE": "sequential", "INTERVAL": 600, "UNIT": "min",
                                  "MEMBERS": "333"})
         settings.update({"ACTIVE_PLAYLIST": "main", "SCHEDULE": SCHEDULE, "SCHEDULE_ENABLED": False})
-        marker.record_served(4242)
+        marker.record_served(4242, 9900.0)
 
     @contextlib.contextmanager
     def engine(self, reply: dict | None, status_class: str = "ok"):

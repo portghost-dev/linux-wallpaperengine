@@ -160,10 +160,12 @@ class DeckPopupSessionTests(unittest.TestCase):
         api = self.popup_mod.api_client
         for name in ("status", "set_fit", "show", "set_tuning"):
             self.addCleanup(setattr, api, name, getattr(api, name))
-        api.status = lambda *a, **k: {"api": 1, "version": version.panel_stamp(), "pid": 1,
+        api.status = lambda *a, **k: {"api": 1, "version": version.panel_stamp(), "pid": 1, "uptime_s": 100,
                                       "current": {"id": wid, "ui_id": wid}}
-        from lwe_ui.engine import marker
-        marker.record_served(1)
+        from lwe_ui.engine import marker, push
+        self.addCleanup(setattr, push, "_monotonic", push._monotonic)
+        push._monotonic = lambda: 10_000.0
+        marker.record_served(1, 9900.0)
         api.set_fit = lambda **kw: (pushes.append(dict(kw)) or {"ok": True, "status": "done"})
         api.show = lambda *a, **k: {"ok": True, "status": "done"}
         api.set_tuning = lambda **kw: {"ok": True, "status": "done"}

@@ -117,7 +117,7 @@ class ShowTest(unittest.TestCase):
     def test_a_show_to_an_engine_served_under_the_brake_then_sends_its_rotation_lanes_set(self) -> None:
         from lwe_ui.engine import marker
         engine = self.engine()
-        marker.record_served(engine.fields["pid"], braked=True)
+        marker.record_served(engine.fields["pid"], engine.started, braked=True)
         before = self.snapshot()
         self.assertEqual(self.lwe("show", "2"), (0, LINE + "\n", ""))
         self.assertEqual([cmd for cmd, _args in self.requests(engine)], ["show", "set-tuning", "lanes-set"])

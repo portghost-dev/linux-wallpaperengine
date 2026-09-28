@@ -6,11 +6,12 @@ The file holds {"version": 1, "generation": N, "classes": [...], "sent": {"pid":
 "boot": B, "start": S, "current": G}}. BUNDLE means the engine needs the full sync from the store, and
 CURRENT that the wallpaper on screen also needs a re-show. sent lists the playlists a window run has
 already transferred in this generation to that engine pid. served names the engine that last took a
-whole bundle: its pid, the boot_id of the boot it ran in, its start time S (None when its status gave no
-uptime) and whether it took the bundle under the brake F, written at time T. owed names the engine the
-owed bundle was last owed to, with the generation G at which owe added CURRENT for it (None once taken
-back). Both are written without raising the generation, every other write keeps them, and a file without
-them reads as none, so an engine the served record does not name is owed the bundle.
+whole bundle: its pid, the boot_id of the boot it ran in, its start time S on the engine's clock (None when
+its status gave no uptime, which names no engine) and whether it took the bundle under the brake F, written
+at time T. owed names the engine the owed bundle was last owed to, with the generation G at which owe
+added CURRENT for it (None once taken back). Both are written without raising the generation, every other
+write keeps them, and a file without them reads as none, so an engine the served record does not name is
+owed the bundle.
 A record that holds only served has no generation, and reads as no marker for everything else.
 A writer raises the generation of the marker; ensure makes a fresh one when no marker exists and
 raises it when it adds a class the marker did not hold; a clear keeps it. So a generation value
@@ -129,16 +130,17 @@ def boot_id() -> str:
 
 def names(record: dict[str, Any] | None, pid: int, start: float | None) -> bool:
     """Whether a served or owed record names the engine whose status pid is `pid` and whose start is
-    `start` (None when its status gave no uptime): the same pid, the boot_id of this boot, and starts
-    within 5 s of each other, or both None. A record without "boot" or "start" names no engine."""
+    `start`: the same pid, the boot_id of this boot, and starts within 5 s of each other. A start that is
+    unknown (None, from a status without uptime_s) cannot be verified, so it matches no record, and a
+    record without "boot" or "start" names no engine."""
     if not isinstance(record, dict) or record.get("pid") != pid or "boot" not in record or "start" not in record:
         return False
     if record["boot"] != boot_id():
         return False
     have = record["start"]
-    if have is None or start is None:
-        return have is None and start is None
-    return type(have) in (int, float) and abs(have - start) <= _START_SLACK_S
+    if start is None or type(have) not in (int, float):
+        return False
+    return abs(have - start) <= _START_SLACK_S
 
 
 def served() -> int | None:

@@ -36,6 +36,7 @@ import json
 import os
 import shutil
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -112,7 +113,7 @@ class OrderIntervalTest(unittest.TestCase):
         self.write("playlists/main.conf", MAIN)
         self.write("playlists/night.conf", NIGHT)
         self.write("settings.conf", f"ACTIVE_PLAYLIST={active}\n")
-        self.marker.record_served(os.getpid())
+        self.marker.record_served(os.getpid(), time.monotonic())
 
     def snapshot(self) -> dict[str, bytes]:
         """Every file under the config and state folders but the lock sidecars."""
@@ -312,7 +313,7 @@ class PlaylistVerbTest(unittest.TestCase):
         self.write("playlists/main.conf", MAIN)
         self.write("playlists/night.conf", NIGHT)
         self.write("settings.conf", settings)
-        self.marker.record_served(os.getpid())
+        self.marker.record_served(os.getpid(), time.monotonic())
 
     def test_playlist_list_is_numbered_by_name_and_marks_the_playing_one(self) -> None:
         self.four()
@@ -435,7 +436,7 @@ class PlaylistHandoffTest(unittest.TestCase):
         (config / "settings.conf").write_text("ACTIVE_PLAYLIST=main\n", encoding="utf-8")
         from lwe_ui.engine import marker
         with mock.patch.dict(os.environ, {key: env[key] for key in ("HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME")}):
-            marker.record_served(os.getpid())
+            marker.record_served(os.getpid(), time.monotonic())
         with _fake_engine.FakeEngine(env["LWE_SOCKET"], served=False) as engine:
             result = _cli_env.run_lwe(["order", "static"], env, "")
         self.assertEqual(result, (0, "Order of Main set to static.\n", ""))

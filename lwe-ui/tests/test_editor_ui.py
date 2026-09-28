@@ -229,14 +229,15 @@ def main() -> None:
         # wallpaper layer through set-fit instead of queueing a re-show; otherwise nothing is sent
         from lwe_ui import editor as _editor_mod
         from lwe_ui import version as _version
-        from lwe_ui.engine import marker as _marker
+        from lwe_ui.engine import marker as _marker, push as _push
         _marker.clear(_marker.read()["generation"])   # the commits above left their work pending
-        _marker.record_served(1)
+        _push._monotonic = lambda: 10_000.0
+        _marker.record_served(1, 9900.0)
         pushes = []
         on_screen = ["synthwp_fit"]
         _editor_mod.api_client.available = lambda: True
         _editor_mod.api_client.status = lambda *a, **k: {
-            "api": 1, "version": _version.panel_stamp(), "pid": 1,
+            "api": 1, "version": _version.panel_stamp(), "pid": 1, "uptime_s": 100,
             "current": {"id": on_screen[0], "ui_id": on_screen[0]}}
         _editor_mod.api_client.set_fit = lambda **kw: (pushes.append(dict(kw)) or {"ok": True, "status": "done"})
         editor.syncCurrent("synthwp_fit")

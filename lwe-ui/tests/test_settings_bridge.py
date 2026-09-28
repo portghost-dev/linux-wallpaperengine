@@ -214,15 +214,16 @@ def _test_save_first_and_a_refused_verb_says_so(sb) -> None:
     from the store. A refused verb leaves the value saved and reports that the engine did not
     answer; an accepted one is success."""
     from lwe_ui import version
-    from lwe_ui.engine import marker
+    from lwe_ui.engine import marker, push
     settings.save({**settings.load(), "ENGINE_VOLUME": 20})
     marker.clear(marker.read()["generation"])   # the earlier commits here left their work pending
-    marker.record_served(1)
+    marker.record_served(1, 9900.0)
     failures: list = []
     sb.commitFailed.connect(lambda keys, reason: failures.append((list(keys), reason)))
-    saved = (api_client.status, api_client.playlist_set, api_client.set_volume)
+    saved = (api_client.status, api_client.playlist_set, api_client.set_volume, push._monotonic)
     try:
-        api_client.status = lambda *a, **k: {"api": 1, "version": version.panel_stamp(), "pid": 1,
+        push._monotonic = lambda: 10_000.0
+        api_client.status = lambda *a, **k: {"api": 1, "version": version.panel_stamp(), "pid": 1, "uptime_s": 100,
                                               "current": {"id": "111", "ui_id": "111"}}
         api_client.playlist_set = lambda *a, **k: {"ok": True, "status": "done"}
         api_client.set_volume = lambda v: {"ok": False, "error": "no"}
@@ -234,7 +235,7 @@ def _test_save_first_and_a_refused_verb_says_so(sb) -> None:
         assert sb.commit("ENGINE_VOLUME", 60) is True
         assert settings.load()["ENGINE_VOLUME"] == 60
     finally:
-        api_client.status, api_client.playlist_set, api_client.set_volume = saved
+        api_client.status, api_client.playlist_set, api_client.set_volume, push._monotonic = saved
     print("OK save first; a refused verb leaves the value saved and says the engine did not answer")
 
 

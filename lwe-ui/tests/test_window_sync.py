@@ -3,8 +3,8 @@
 A change made while the engine is away is delivered whole by the next poll's drain, and the marker
 clears. A pause emits the lane clock its lanes-set reply carries. Failed drains of one generation are
 retried after 5 s, 15 s and 45 s, none follows a failed retry after the 45 s wait until a writer
-raises the generation or another engine pid answers, which gets retries of its own, and polls that find
-the engine away count nothing. The schedule follow never
+raises the generation or another engine answers (another pid, or the same pid with another start), which
+gets retries of its own, and polls that find the engine away count nothing. The schedule follow never
 runs inside the sync hold.
 With sync held by another process a change returns pending, and the poll's drain returns at once.
 The service switch rebuilds engine-env, the unit and daemon-reload before systemctl, fails with the
@@ -18,7 +18,10 @@ the socket), the new engine is served by the next poll, and so is an engine the 
 pid that changes between polls, or one that arrives after the marker was cleared. Each gets one bundle
 and is then recorded as served. While the engine reports that it refused its restore, a new window's first
 sight sends no show and no lanes-set that enables rotation, and an explicit show or next, from the window
-or the tray, then sends the rotation lanes-set.
+or the tray, then sends the rotation lanes-set. After a suspend the polls send the same engine nothing,
+a bundle that takes 6 s serves its engine once, an engine whose status gives no uptime stays unserved but
+gets only the bounded retries, and a deferred first sight followed by a build edit of another wallpaper
+shows once.
 A manual switch while the engine is away with the schedule on writes nothing. A switch to a playlist
 being deleted, made by another writer while the delete reads, waits for the delete: the delete raises
 nothing and changes ACTIVE_PLAYLIST only in a change that carries the active row. A hand-broken store
@@ -26,8 +29,8 @@ line refuses the change before any request. The tray's next and pause send nothi
 held elsewhere. An import pass runs one sync_all. The start-up reconcile writes engine-env only. A
 settings reset sends the bundle with one re-show and rewrites engine-env, also while the engine
 refused its restore. The engine is an
-api_client recorder with a scripted status; the one child process gets an environment built from
-scratch.
+api_client recorder with a scripted status, its clock frozen at 10000 and uptime_s 100 unless a test says
+otherwise; the one child process gets an environment built from scratch.
 
 Run: PYTHONPATH=src python3 tests/test_window_sync.py
 """
@@ -81,13 +84,15 @@ with lock.held("sync"):
 class Recorder:
     """A recording api_client: every api_client verb is recorded as (verb, args, kwargs) and answered
     from a per-verb script, ok by default; a step that is a class name answers None with that class.
-    status answers the scripted status, or None with status_class."""
+    status answers the scripted status, or None with status_class. A hook runs before each answer of its
+    verb."""
 
     def __init__(self, status: dict | None, status_class: str = "ok") -> None:
         self.calls: list[tuple] = []
         self.status_reply = status
         self.status_class = status_class
         self.script: dict[str, list] = {}
+        self.hooks: dict[str, object] = {}
         self._last: str | None = None
 
     def answer(self, verb: str, *steps) -> None:
@@ -110,6 +115,8 @@ class Recorder:
 
         def call(*args, **kwargs):
             self.calls.append((verb, args, kwargs))
+            if verb in self.hooks:
+                self.hooks[verb]()
             steps = self.script.get(verb)
             step = steps.pop(0) if steps else OK
             if isinstance(step, str):
@@ -123,10 +130,24 @@ class Recorder:
         return [verb for verb, _a, _k in self.calls if verb not in ("status", "ping")]
 
 
-def status(current: str = "111", speed=1.0, pid: int = 4242, **extra) -> dict:
-    return {"api": 1, "version": version.panel_stamp(), "pid": pid, "speed": speed,
-            "current": {"id": current, "ui_id": current, "title": ""}, "schedule": {"enabled": False},
-            "lanes": [{"id": "all", "playlist": "main"}], **extra}
+def status(current: str = "111", speed=1.0, pid: int = 4242, uptime_s: int | None = 100, **extra) -> dict:
+    out = {"api": 1, "version": version.panel_stamp(), "pid": pid, "speed": speed,
+           "current": {"id": current, "ui_id": current, "title": ""}, "schedule": {"enabled": False},
+           "lanes": [{"id": "all", "playlist": "main"}], **extra}
+    if uptime_s is not None:
+        out["uptime_s"] = uptime_s
+    return out
+
+
+def live_uptime(rec, clock, start: float) -> None:
+    """The recorder's status reports uptime_s on `clock` for an engine that started at `start`."""
+    read = rec.status
+
+    def status_now(sock=None):
+        if rec.status_reply is not None:
+            rec.status_reply["uptime_s"] = int(clock() - start)
+        return read(sock)
+    rec.status = status_now
 
 
 class FakeUnit:
@@ -189,7 +210,10 @@ class WindowSyncTest(unittest.TestCase):
                                         lambda *a, _n=name, **k: self.env_writes.append(_n) or "written")
             patcher.start()
             self.addCleanup(patcher.stop)
-        marker.record_served(4242)
+        engine_clock = mock.patch.object(push, "_monotonic", lambda: 10_000.0)
+        engine_clock.start()
+        self.addCleanup(engine_clock.stop)
+        marker.record_served(4242, 9900.0)
         self.backend = models.Backend()
 
     @contextlib.contextmanager
@@ -591,7 +615,7 @@ class WindowSyncTest(unittest.TestCase):
                                 ("cap", FakeUnit(4242, on_restart="deactivating"), 0.3)):
             with self.subTest(case=name):
                 marker.clear(marker.ensure(("BUNDLE",)))
-                marker.record_served(4242)
+                marker.record_served(4242, 9900.0)
                 with self.engine(status(pid=4242)) as rec, self.systemd(fake, cap_s=cap):
                     self.assertTrue(self.backend.restartMaster())
                     self._finish_restart()
@@ -642,6 +666,90 @@ class WindowSyncTest(unittest.TestCase):
                     self.backend.status()
         self.assertEqual(rec.verbs().count("lanes_set"), 1, rec.verbs())
         self.assertEqual((marker.served(), marker.read()["classes"]), (5000, []))
+
+    def test_after_a_suspend_the_windows_polls_send_the_same_engine_nothing(self) -> None:
+        clocks = {"engine": 2000.0, "wall": 80_000.0}
+        seen = []
+        with mock.patch.object(push, "_monotonic", lambda: clocks["engine"]), \
+                mock.patch.object(push, "_now", lambda: clocks["wall"]):
+            for name, engine_now, wall, uptime in (("first sight", 2000.0, 80_000.0, 50),
+                                                   ("10 s later", 2010.0, 80_010.0, 60),
+                                                   ("after a 600 s suspend", 2012.0, 80_612.0, 62),
+                                                   ("2 s later", 2014.0, 80_614.0, 64)):
+                clocks.update(engine=engine_now, wall=wall)
+                with self.engine(status(pid=5000, uptime_s=uptime)) as rec:
+                    self.backend.status()
+                seen.append((name, rec.verbs().count("lanes_set"), rec.verbs().count("show")))
+        self.assertEqual(seen, [("first sight", 1, 1), ("10 s later", 0, 0), ("after a 600 s suspend", 0, 0),
+                                ("2 s later", 0, 0)])
+
+    def test_a_6_s_bundle_is_served_once_and_later_polls_send_nothing(self) -> None:
+        clock = Clock()
+        self.backend._engine_pid_seen = 4242
+        with mock.patch.object(push, "_monotonic", clock), mock.patch.object(models, "monotonic", clock):
+            with self.engine(status(pid=5000)) as rec:
+                live_uptime(rec, clock, start=900.0)
+                slow = [6.0]
+                rec.hooks["set_particles"] = lambda: setattr(clock, "now", clock.now + (slow.pop() if slow else 0.0))
+                for _ in range(4):
+                    self.backend.status()
+                    clock.now += 2.0
+        self.assertEqual((rec.verbs().count("lanes_set"), rec.verbs().count("show")), (1, 1))
+        self.assertEqual((marker.served(), marker.served_record()["start"]), (5000, 900.0))
+
+    def test_a_new_engine_that_reuses_the_pid_gets_its_own_retries(self) -> None:
+        marker.ensure(("BUNDLE", "CURRENT"))
+        self.backend._engine_pid_seen = 4242
+        clock = Clock()
+        with mock.patch.object(push, "_monotonic", clock), mock.patch.object(models, "monotonic", clock):
+            for step in range(4):
+                clock.now = 1000.0 + 100.0 * step
+                with self.engine(status(pid=4242)) as rec:
+                    live_uptime(rec, clock, start=900.0)
+                    rec.answer("set_particles", REFUSED)
+                    self.backend.status()
+                self.assertIn("set_particles", rec.verbs())
+            self.assertEqual(self.backend._drain_failures, 4)
+            with self.engine(status(pid=4242)) as rec:
+                live_uptime(rec, clock, start=999.0)
+                for _ in range(3):
+                    clock.now += 100.0
+                    self.backend.status()
+        self.assertEqual(rec.verbs().count("lanes_set"), 1, rec.verbs())
+        self.assertEqual((marker.served(), marker.served_record()["start"], marker.read()["classes"]),
+                         (4242, 999.0, []))
+
+    def test_an_engine_whose_status_gives_no_uptime_stays_unserved_with_bounded_retries(self) -> None:
+        clock = Clock()
+        self.backend._engine_pid_seen = 5000
+        polls = [(0, True), (2, False), (6, True), (20, False), (22, True), (70, True), (200, False), (400, False)]
+        got = []
+        with mock.patch.object(models, "monotonic", clock):
+            with self.engine(status(pid=5000, uptime_s=None)) as rec:
+                self.assertEqual(push.sync_all("command").kind, "applied")
+                served_start = marker.served_record()["start"]
+                for at, _bundles in polls:
+                    clock.now = 1000.0 + at
+                    sent = len(rec.calls)
+                    self.backend.status()
+                    got.append("lanes_set" in [verb for verb, _a, _k in rec.calls[sent:]])
+        self.assertEqual((served_start, got), (None, [bundles for _at, bundles in polls]))
+        self.assertTrue(push._unserved(push._engine(status(pid=5000, uptime_s=None))))
+
+    def test_a_deferred_first_sight_and_a_build_edit_of_another_wallpaper_show_once(self) -> None:
+        owner = object()
+        with self.engine(status(pid=5000)) as rec:
+            ticket = push.save_change(("overrides",), lambda: wp.update_set("333", {"SCALING": "fill"}),
+                                      [("wp_build", "SCALING")], wid="333")
+            self.backend.hold_delivery(owner, True)
+            self.backend.status()
+            shows = [rec.verbs().count("show")]
+            self.assertEqual(push.deliver(ticket).kind, "applied")
+            shows.append(rec.verbs().count("show"))
+            self.backend.hold_delivery(owner, False)
+            self.backend.status()
+            shows.append(rec.verbs().count("show"))
+        self.assertEqual((shows, marker.read()["classes"]), ([0, 1, 1], []))
 
     def test_a_new_window_sends_no_show_and_starts_no_rotation_while_the_engine_refused_its_restore(self) -> None:
         with self.engine(status(pid=300, restore_refused=True)) as rec:

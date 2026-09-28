@@ -64,7 +64,7 @@ class _ApiRecorder:
         if self.on_screen is None:
             return None
         from lwe_ui import version
-        return {"api": 1, "version": version.panel_stamp(), "pid": 1,
+        return {"api": 1, "version": version.panel_stamp(), "pid": 1, "uptime_s": 100,
                 "current": {"id": self.on_screen, "ui_id": self.on_screen}}
 
     def last_class(self):
@@ -190,13 +190,14 @@ class TestEditorLiveCommit(unittest.TestCase):
         """The recorder as the change runner's engine too, reporting `on_screen` as shown (None:
         the engine is away); its engine is the served one."""
         from lwe_ui.engine import marker, push
-        marker.record_served(1)
+        marker.record_served(1, 9900.0)
         rec = _ApiRecorder()
         rec.on_screen = on_screen
         self.editor_mod.api_client = rec
-        patcher = mock.patch.object(push, "api_client", rec)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        for patcher in (mock.patch.object(push, "api_client", rec),
+                        mock.patch.object(push, "_monotonic", lambda: 10_000.0)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
         return rec
 
     def test_T10_idle_wallpaper_sends_no_verb(self) -> None:
@@ -415,7 +416,7 @@ class TestEditorLiveCommit(unittest.TestCase):
         from lwe_ui import models
         from lwe_ui.engine import marker, push
         from lwe_ui.storage import settings
-        marker.record_served(1)
+        marker.record_served(1, 9900.0)
         timeline: list[str] = []
 
         class _Api(_ApiRecorder):
@@ -444,7 +445,8 @@ class TestEditorLiveCommit(unittest.TestCase):
         api = _Api()
         self.editor_mod.api_client = api
         self.popup_mod.api_client = api
-        for target, name, value in ((push, "api_client", api), (settings, "update", logged)):
+        for target, name, value in ((push, "api_client", api), (settings, "update", logged),
+                                    (push, "_monotonic", lambda: 10_000.0)):
             patcher = mock.patch.object(target, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)

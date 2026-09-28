@@ -66,10 +66,11 @@ class VolumeRangeTest(unittest.TestCase):
                                                  encoding="utf-8")
         self.runs: list = []
         for patcher in (mock.patch.object(daemon_unit, "enumerate_outputs", lambda: ["DP-1"]),
-                        mock.patch.object(daemon_unit.subprocess, "run", lambda argv, **kw: self.runs.append(argv))):
+                        mock.patch.object(daemon_unit.subprocess, "run", lambda argv, **kw: self.runs.append(argv)),
+                        mock.patch.object(push, "_monotonic", lambda: 10_000.0)):
             patcher.start()
             self.addCleanup(patcher.stop)
-        marker.record_served(4242)
+        marker.record_served(4242, 9900.0)
         self.backend = models.Backend()
 
     def tearDown(self) -> None:
