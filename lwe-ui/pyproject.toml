@@ -22,7 +22,7 @@ classifiers = [
 dependencies = ["PySide6>=6.6", "Pillow>=10"]
 
 [project.scripts]
-lwe-ui = "lwe_ui.app:main"
+lwe-ui = "lwe_ui.launch:main"
 lwe-discover = "lwe_ui.discover_cli:main"
 
 [tool.setuptools]
