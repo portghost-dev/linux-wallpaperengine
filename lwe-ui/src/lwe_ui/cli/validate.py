@@ -16,7 +16,6 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-RESERVED = ("WINDOW_OWNS",)
 APP_LISTS = (("app-condition.txt", 15), ("pause-blacklist.txt", 128))
 LIST_LINES = 128
 HUE_LIMIT = 6.4
@@ -131,7 +130,7 @@ def _check_settings(errors: list[str], warnings: list[str]) -> None:
             reason = settings.check_raw(key, value)
             if reason is not None:
                 errors.append(f"settings.conf:{number}: {written}={value} is {reason}")
-        elif written not in RESERVED:
+        elif written != settings.OWNED_KEY:
             warnings.append(f"settings.conf:{number}: {written} is not a setting this version knows; it is kept "
                             "and not applied")
     enabled_raw = values.get("SCHEDULE_ENABLED", (0, "false"))[1].strip().lower()

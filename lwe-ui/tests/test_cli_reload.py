@@ -41,9 +41,9 @@ class ReloadTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         from lwe_ui import cli, version
         from lwe_ui.engine import daemon_unit, marker
-        from lwe_ui.storage import paths
+        from lwe_ui.storage import paths, settings
         cls.cli, cls.stamp, cls.daemon_unit, cls.marker = cli, version.panel_stamp(), daemon_unit, marker
-        cls.paths = paths
+        cls.paths, cls.owned_key = paths, settings.OWNED_KEY
         cls.snapshot = paths.panel_state_dir() / "reload-snapshot"
         cls.conf = paths.settings_file()
         cls.env_path = paths.config_dir() / daemon_unit.ENV_FILE_NAME
@@ -136,7 +136,7 @@ class ReloadTest(unittest.TestCase):
 
     def test_an_unknown_key_warns_and_applies_and_the_window_line_does_not(self) -> None:
         self.engine()
-        self.conf.write_text("ACTIVE_PLAYLIST=main\nFOO=1\nWINDOW_OWNS=mute\n", encoding="utf-8")
+        self.conf.write_text(f"ACTIVE_PLAYLIST=main\nFOO=1\n{self.owned_key}=mute\n", encoding="utf-8")
         code, out, err = self.lwe("reload")
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(out.splitlines(), [FIRST, "warning: settings.conf:2: FOO is not a setting this version "
