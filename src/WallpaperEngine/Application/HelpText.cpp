@@ -52,7 +52,8 @@ const char* engineHelpText () {
                                         running. Default 15.
   --mute, -s, --silent                  Mutes all wallpaper sound.
   --no-automute, --noautomute           Keeps wallpaper sound playing while another app plays sound
-                                        (by default it mutes).
+                                        or is fullscreen (by default it mutes; fullscreen counts
+                                        unless --fullscreen keep is given without --listen).
   --no-audioreactive, --no-audio-processing
                                         Turns off audio processing (the sound levels wallpapers
                                         react to); set-audio changes it while running.

@@ -334,7 +334,10 @@ pauses, or stops with `--daemon`; `--fullscreen` wins over `--daemon` in either
 order. `--no-fullscreen-pause` does the same as `keep`, unless a later
 `--daemon` sets stop. `--fullscreen` and `--no-fullscreen-pause` can't be given
 together. With `--daemon`, a restored state also brings back its saved
-fullscreen choice.
+fullscreen choice. With automute on, as it is by default, an engine started with
+`--listen` (or `--api-socket`) and `--fullscreen keep` (or
+`--no-fullscreen-pause`) mutes the wallpaper's sound while an app is fullscreen,
+as it does with `--daemon`; `--no-automute` turns this off.
 
 ### Debugging switches
 
