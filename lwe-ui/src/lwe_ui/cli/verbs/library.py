@@ -207,7 +207,7 @@ def _add_one(row, cfg: dict) -> tuple[str, dict]:
         deps = held or []
         if held is not None:
             if all(importer._dep_present(d, cfg) for d in deps):
-                importer.resolve_missing_deps()
+                importer.resolve_missing_deps(base_links=base_links)
             if meta.get(row.id).get("depMissing"):
                 return _failed(facts, _REASONS["skipped-conf-failed"])
         result = compress.compress_one(row)

@@ -114,6 +114,24 @@ def _test_add_from_folder_copies_no_link(ws, paths) -> None:
                            for path in _LINKS], logs.output
 
 
+def _test_add_from_folder_logs_each_left_out_link_on_one_line(ws, paths) -> None:
+    src = Path(_TMP) / "hand" / "controls_hand"
+    src.mkdir(parents=True)
+    (src / "project.json").write_text(json.dumps({"type": "scene", "title": "Controls", "file": "scene.json"}),
+                                      encoding="utf-8")
+    (src / "scene.json").write_text("{}", encoding="utf-8")
+    target = Path(_TMP) / "outside" / "loose.tex"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"x")
+    for name in ("a\nnot added: SPOOF.tex", "b\u2028c.tex", "d\u009be.tex", "f\u202eg.tex"):
+        os.symlink(target, src / name)
+    with unittest.TestCase().assertLogs("lwe_ui.workshop", "INFO") as logs:
+        assert ws.addFromFolder(str(src)) == "controls_hand"
+    assert sorted(logs.output) == [f"INFO:lwe_ui.workshop:add from folder controls_hand: link left out: {name}"
+                                   for name in ("a?not added: SPOOF.tex", "b?c.tex", "d?e.tex", "f?g.tex")], \
+        logs.output
+
+
 def _link_project_json(d: Path) -> None:
     """`d` holding a project.json that is a link to a valid one outside it."""
     target = Path(_TMP) / "outside" / "project.json"
@@ -273,6 +291,7 @@ def main() -> None:
         _test_the_import_takes_a_linked_project_json_as_none(importer, lib, workshop)
         ws = WorkshopBridge(b, None)
         _test_add_from_folder_copies_no_link(ws, paths)
+        _test_add_from_folder_logs_each_left_out_link_on_one_line(ws, paths)
         _test_add_from_folder_refuses_a_linked_project_json(ws, paths)
     finally:
         for tree in ("outside", "hand"):

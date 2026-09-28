@@ -356,6 +356,15 @@ class CliEntryTest(unittest.TestCase):
             self.assertNotRegex(r.stdout[:-1], rb"[\x00-\x1f\x7f]")
             self.assertEqual(json.loads(r.stdout), {"said": "A\x1b]52;c;QUJD\x07B\rC?D\tE"})
 
+    def test_c1_controls_and_format_characters_print_as_question_marks(self) -> None:
+        title = "A\x85B\x9b31mC\u202eD\u200bE\ufeffF\u00e9\u65e5\U0001f3a8\u00a0G"
+        for mode in ((), ("-j",)):
+            with self.subTest(mode=mode):
+                r = self._verb_bytes("say", title, *mode)
+                self.assertEqual((r.returncode, r.stderr), (0, b""))
+                said = json.loads(r.stdout)["said"] if mode else r.stdout.decode("utf-8")
+                self.assertEqual(said, "A?B?31mC?D?E?F\u00e9\u65e5\U0001f3a8\u00a0G" + ("" if mode else "\n"))
+
     def test_a_closed_output_pipe_ends_the_command_quietly_with_141(self) -> None:
         for words in (["flood"], ["say", "short"]):
             with self.subTest(words=words):

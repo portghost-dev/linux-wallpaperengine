@@ -122,14 +122,16 @@ def _read_manifest(z: zipfile.ZipFile) -> dict[str, Any]:
         raise ValueError("That file is not an LWE backup.")
     try:
         m = json.loads(raw.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
+    except Exception:
+        # not UTF-8, not JSON, or nested past the parser's depth
         raise ValueError("That file is not an LWE backup.")
     if not isinstance(m, dict) or m.get("app") != "lwe-ui":
         raise ValueError("That file is not an LWE backup.")
     try:
         fmt = int(m.get("format", 0))
-    except (TypeError, ValueError):
-        fmt = 0
+    except Exception:
+        # not a number, or one int() cannot hold, such as an infinite float
+        raise ValueError("That file is not an LWE backup.")
     if fmt < 1:
         raise ValueError("That file is not an LWE backup.")
     return m
@@ -143,7 +145,8 @@ def preflight(path: str | Path) -> dict[str, Any]:
     r["plan"] = plan
     try:
         z = zipfile.ZipFile(str(path))
-    except (OSError, zipfile.BadZipFile):
+    except Exception:
+        # unreadable, or a central directory zipfile refuses: a newer extract version, an undecodable name
         r["errors"].append({"file": os.path.basename(str(path)), "reason": "That file is not an LWE backup."})
         r["refused"] = True
         return r
@@ -273,7 +276,8 @@ def _opens_as_backup(path: Path) -> bool:
                 return False
             with zipfile.ZipFile(f) as z:
                 _read_manifest(z)
-    except (OSError, zipfile.BadZipFile, ValueError):
+    except Exception:
+        # preflight's open and manifest read refuse the same files
         return False
     return True
 

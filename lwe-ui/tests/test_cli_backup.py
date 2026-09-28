@@ -37,20 +37,38 @@ PENDING = "The service is not running or is busy, so it is not applied yet."
 
 
 def _zip_with_manifest(kind: str) -> bytes:
-    """A zip holding one stored member with an LWE manifest's text: kind "none" names it other.txt, "method"
-    gives manifest.json an unknown compression method (99), "encrypted" sets manifest.json's encrypted flag."""
+    """A zip holding a stored member with an LWE manifest's text: kind "none" names it other.txt,
+    "method" gives manifest.json an unknown compression method (99), "encrypted" sets its encrypted flag,
+    "version" gives its central entry extract version 6.4, "name" adds a member whose UTF-8 flagged name holds the
+    byte 0xff, "nested" makes the manifest 100000 "[", "format" gives it the format 1e400, "crc" gives it a CRC
+    that does not match and "deflate" marks it deflated over bytes that are no deflate stream."""
     buf = io.BytesIO()
+    text = {"nested": "[" * 100000, "format": '{"app": "lwe-ui", "format": 1e400}'}.get(
+        kind, json.dumps({"app": "lwe-ui", "format": 1}))
     with zipfile.ZipFile(buf, "w") as z:
-        z.writestr(zipfile.ZipInfo("other.txt" if kind == "none" else "manifest.json"),
-                   json.dumps({"app": "lwe-ui", "format": 1}))
+        z.writestr(zipfile.ZipInfo("other.txt" if kind == "none" else "manifest.json"), text)
+        if kind == "name":
+            z.writestr(zipfile.ZipInfo("xZ.txt"), "x")
     data = bytearray(buf.getvalue())
-    central = data.rfind(b"PK\x01\x02")
+    local, central = data.rfind(b"PK\x03\x04"), data.rfind(b"PK\x01\x02")
     if kind == "method":
         struct.pack_into("<H", data, 8, 99)
         struct.pack_into("<H", data, central + 10, 99)
     elif kind == "encrypted":
         struct.pack_into("<H", data, 6, 1)
         struct.pack_into("<H", data, central + 8, 1)
+    elif kind == "version":
+        struct.pack_into("<H", data, central + 6, 64)
+    elif kind == "name":
+        data[local + 31] = data[central + 47] = 0xFF
+        struct.pack_into("<H", data, central + 8, 0x800)
+    elif kind == "crc":
+        struct.pack_into("<I", data, 14, 0xDEADBEEF)
+        struct.pack_into("<I", data, central + 16, 0xDEADBEEF)
+    elif kind == "deflate":
+        data[30 + len("manifest.json"):central] = b"\xff" * (central - 30 - len("manifest.json"))
+        struct.pack_into("<H", data, 8, 8)
+        struct.pack_into("<H", data, central + 10, 8)
     return bytes(data)
 
 
@@ -365,7 +383,13 @@ class BackupHandoffTest(unittest.TestCase):
         snapshot = self.backups() / "pre-restore-20200101-000000.lwebackup"
         rec = self.backups() / "recovery.json"
         zips = {"zip without a manifest": "none", "zip whose manifest has an unknown method": "method",
-                "zip whose manifest is flagged encrypted": "encrypted"}
+                "zip whose manifest is flagged encrypted": "encrypted",
+                "zip whose manifest needs extract version 6.4": "version",
+                "zip with a member name that is not UTF-8": "name",
+                "zip whose manifest is nested too deep to parse": "nested",
+                "zip whose manifest format is 1e400": "format",
+                "zip whose manifest fails its CRC": "crc",
+                "zip whose manifest is no deflate stream": "deflate"}
         for label in ("link to a text file", "link to a folder", "dangling link", "file of other content",
                       "link to a real backup", *zips):
             with self.subTest(label=label):
@@ -390,15 +414,16 @@ class BackupHandoffTest(unittest.TestCase):
                 self.assertEqual((code, out, err), (1, unreadable, ""))
                 self.assertEqual(self.written(), before)
 
-    def test_an_archive_whose_manifest_cannot_be_decompressed_is_refused_as_no_backup(self) -> None:
-        for kind in ("method", "encrypted"):
+    def test_an_archive_whose_manifest_cannot_be_read_is_refused_as_no_backup(self) -> None:
+        for kind in ("method", "encrypted", "version", "name", "nested", "format", "crc", "deflate"):
             bad = self.root / f"{kind}.lwebackup"
             bad.write_bytes(_zip_with_manifest(kind))
+            member = bad.name if kind in ("version", "name") else "manifest.json"
             for verb in ("preview", "import"):
                 with self.subTest(kind=kind, verb=verb):
                     before = self.written()
                     self.assertEqual(self.lwe("backup", verb, str(bad)), (
-                        1, f"Refused {bad}\nerrors: file=manifest.json, reason=That file is not an LWE backup.\n", ""))
+                        1, f"Refused {bad}\nerrors: file={member}, reason=That file is not an LWE backup.\n", ""))
                     self.assertEqual(self.written(), before)
 
     def test_refusals(self) -> None:
@@ -611,13 +636,30 @@ class RestoreLockTest(unittest.TestCase):
                 self.assertEqual((self.paths.config_dir() / "settings.conf").read_text(encoding="utf-8"),
                                  "ASSETS_DIR=\nENGINE_FPS=30\n", "nothing was restored")
 
-    def test_a_record_whose_snapshot_cannot_be_decompressed_refuses_at_the_command_and_headless_doors(self) -> None:
+    def test_an_archive_whose_manifest_cannot_be_read_is_refused_at_the_headless_door(self) -> None:
+        self.archives()
+        for kind in ("method", "encrypted", "version", "name", "nested", "format", "crc", "deflate"):
+            bad = self.root / f"{kind}.lwebackup"
+            bad.write_bytes(_zip_with_manifest(kind))
+            member = bad.name if kind in ("version", "name") else "manifest.json"
+            for verb in ("preview", "restore"):
+                with self.subTest(kind=kind, verb=verb):
+                    with contextlib.redirect_stdout(io.StringIO()) as out, \
+                            contextlib.redirect_stderr(io.StringIO()) as err:
+                        code = self.backup.main([verb, str(bad)])
+                    self.assertEqual((code, out.getvalue(), err.getvalue()), (
+                        1, f"Refused {bad}\nerrors: file={member}, reason=That file is not an LWE backup.\n", ""))
+                    self.assertEqual((self.paths.config_dir() / "settings.conf").read_text(encoding="utf-8"),
+                                     "ASSETS_DIR=\nENGINE_FPS=30\n", "nothing was restored")
+                    self.assertFalse(self.rec.exists())
+
+    def test_a_record_whose_snapshot_cannot_be_read_refuses_at_the_command_and_headless_doors(self) -> None:
         clean, _failing = self.archives()
         named = self.rec.parent / "pre-restore-20200101-000000.lwebackup"
         reason = (f"errors: file=recovery.json, reason=Nothing was imported: {self.rec} cannot be read, so the snapshot "
                   f"it keeps from before an earlier failed import cannot be found. Deleting {self.rec} clears this "
                   "block.\n")
-        for kind in ("method", "encrypted"):
+        for kind in ("method", "encrypted", "version", "name", "nested", "format", "crc", "deflate"):
             with self.subTest(kind=kind):
                 self.rec.parent.mkdir(parents=True, exist_ok=True)
                 named.write_bytes(_zip_with_manifest(kind))

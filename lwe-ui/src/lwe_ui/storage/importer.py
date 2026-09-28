@@ -335,8 +335,9 @@ _DEP_IMPORT_STACK: set = set()   # H1 belt: presence semantics already prevent
 def _ensure_dep_imported(dep: str, cfg: dict) -> dict | None:
     """A preset's base item imports FIRST (same pass, same snapshot) so the preset's
     conf can point at the base's BG. The dedup guard makes this idempotent; the stack
-    guard makes it cycle-proof. Returns the base's import_one receipt, None when this call
-    did not import it."""
+    guard makes it cycle-proof. Returns import_one's receipt whenever this call runs import_one
+    for the base, a skipped-* receipt included; None when the base is already known or is being
+    imported further up the stack."""
     if dep in _DEP_IMPORT_STACK:
         return None
     try:
@@ -503,10 +504,11 @@ def _import_preset(wid: str, src: Path, proj: dict, title: str,
             "action": "imported-review" if review else "imported-good", "skipped_links": copied[1]}
 
 
-def resolve_missing_deps(cfg: dict | None = None) -> int:
+def resolve_missing_deps(cfg: dict | None = None, base_links: dict[str, list[str]] | None = None) -> int:
     """The hands-free completion: every held item whose base has since arrived
     gets its base imported and its conf rewired; the marker clears, the chip and modal
-    follow. Returns the number resolved."""
+    follow. Returns the number resolved. base_links, when given, receives the links each
+    base this call imported left out of its copy, by the base's id."""
     cfg = _snapshot() if cfg is None else cfg
     resolved = 0
     try:
@@ -530,7 +532,9 @@ def resolve_missing_deps(cfg: dict | None = None) -> int:
         if not deps or not all(_dep_present(d, cfg) for d in deps):
             continue
         for d in deps:
-            _ensure_dep_imported(d, cfg)
+            got = _ensure_dep_imported(d, cfg)
+            if base_links is not None and got and got.get("skipped_links"):
+                base_links[d] = list(got["skipped_links"])
         src = lib / wid if (lib / wid).is_dir() else ws / wid
         from ..discovery import project as _project
         proj = _project.read(str(src)) if src.is_dir() else {"raw": {}}

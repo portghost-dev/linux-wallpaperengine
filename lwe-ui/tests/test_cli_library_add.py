@@ -175,6 +175,7 @@ def _stores() -> None:
     _scene(WORKSHOP / "1400000041", "Linked Controls", None)
     for name in ("scene.pkg", "a\tb.pkg", "c\x1bd.pkg", "e\x9bf.pkg", "g\u2028h.pkg", "i\u2029j.pkg"):
         (WORKSHOP / "1400000041" / name).symlink_to(_ROOT / "outside" / "foreign.pkg")
+    _scene(WORKSHOP / "1400000050", "Tidy\u0085x\u009b31m\u202eY", 50)
     for preset, base, title in (("1400000042", "1400000043", "Base Links"),
                                 ("1400000044", "1400000045", "Base Links Json")):
         _preset(preset, f"Preset of {title}", base)
@@ -281,6 +282,15 @@ def _commands() -> None:
     _run("linked-controls", ["add", "1400000041"])
     _run("base-links", ["add", "1400000042"])
     _run("base-links-json", ["-j", "add", "1400000044"])
+    for preset, base, title, words in (("1400000046", "1400000047", "Held Links", ["add"]),
+                                       ("1400000048", "1400000049", "Held Json", ["-j", "add"])):
+        _preset(preset, f"{title} Preset", base)
+        if importer.import_one(preset)["action"] != "imported-missing-dep":
+            raise AssertionError(f"{preset} was not held")
+        _scene(WORKSHOP / base, f"{title} Base", int(base[-2:]))
+        (WORKSHOP / base / "extra.tex").symlink_to(_ROOT / "outside" / "loose.tex")
+        _run(f"{title.lower().replace(' ', '-')}", [*words, preset])
+    _run("controls-title", ["add", "1400000050"])
 
 
 def _line(label: str, text: str) -> str:
@@ -406,6 +416,25 @@ class AddTest(unittest.TestCase):
         self.assertEqual((result["links_not_copied"], result["bases"]), (["own.tex"], [{
             "id": "1400000045", "title": "Base Links Json", "state": "waiting", "links_not_copied": ["extra.tex"]}]))
 
+    def test_a_base_imported_for_a_held_preset_names_the_links_its_copy_left_out(self) -> None:
+        r = _RUNS["held-links"]
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, _line(
+            "Held Links Preset (1400000046)", "in the pool; textures 0 MB before, 0 MB after; its base Held Links "
+            "Base (1400000047) was imported and waits for review; link not copied: extra.tex") + "\n", ""))
+        r = _RUNS["held-json"]
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        self.assertEqual(json.loads(r.stdout)["results"][0]["bases"], [{
+            "id": "1400000049", "title": "Held Json Base", "state": "waiting", "links_not_copied": ["extra.tex"]}])
+
+    def test_a_title_s_c1_controls_and_format_characters_print_as_question_marks(self) -> None:
+        listed = [line for line in _RUNS["workshop"].stdout.splitlines() if "1400000050" in line]
+        self.assertEqual(len(listed), 1, _RUNS["workshop"].stdout)
+        self.assertTrue(listed[0].endswith("  Tidy x?31m?Y (1400000050)"), listed)
+        r = _RUNS["controls-title"]
+        self.assertEqual((r.returncode, r.stderr), (0, ""))
+        self.assertEqual(len(r.stdout.splitlines()), 1, r.stdout)
+        self.assertFalse(set(r.stdout) & {"\x85", "\x9b", "\u202e"}, r.stdout)
+
     def test_approve_writes_the_title_the_importer_cleaned(self) -> None:
         self.assertEqual(_RUNS["clean-title"].returncode, 0, _RUNS["clean-title"].stderr)
         self.assertEqual(_FACTS["clean-title"], {("good", "SierraDunes")})
@@ -464,7 +493,7 @@ class AddTest(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(importer, "resolve_missing_deps", return_value=0) as wiring:
             code = library._add(Context(False, out, err, None, False), ["1400000018"])
-        wiring.assert_called_once_with()
+        wiring.assert_called_once_with(base_links={})
         self.assertEqual((code, out.getvalue(), err.getvalue()), (1, _line(
             "Romeo Held (1400000018)", "not added: its settings file could not be written") + "\n", ""))
         self.assertEqual((_tag("1400000018"), _events("1400000018")), ("review", []))

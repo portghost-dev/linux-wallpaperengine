@@ -493,8 +493,9 @@ class WorkshopBridge(QObject):
         except Exception:
             shutil.rmtree(stage, ignore_errors=True)
             return ""
+        from .texcomp import printable
         for path in skipped:
-            logging.getLogger(__name__).info("add from folder %s: link left out: %s", wid, path)
+            logging.getLogger(__name__).info("add from folder %s: link left out: %s", wid, printable(path))
         self.stateChanged.emit()
         return wid
 

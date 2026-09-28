@@ -147,7 +147,8 @@ def main() -> None:
     (newline / "b\nc.pkg").symlink_to(outside / "foreign.pkg")
     controls = Path(_TMP) / "wp" / "700"
     controls.mkdir(parents=True)
-    for name in ("a\tb.pkg", "c\x1bd.pkg", "e\x9bf.pkg", "g\u2028h.pkg", "i\u2029j.pkg"):
+    for name in ("a\tb.pkg", "c\x1bd.pkg", "e\x9bf.pkg", "g\u2028h.pkg", "i\u2029j.pkg", "k\u202el.pkg",
+                 "m\u00a0n.pkg"):
         (controls / name).symlink_to(outside / "foreign.pkg")
     with unittest.TestCase().assertLogs("lwe_ui.texcomp", "INFO") as logs:
         s3 = texcomp.scan(str(linked))
@@ -163,7 +164,8 @@ def main() -> None:
                            f"INFO:lwe_ui.texcomp:compress {other_name}: link not read: a.pkg",
                            f"INFO:lwe_ui.texcomp:compress {newline}: link not read: b?c.pkg",
                            *(f"INFO:lwe_ui.texcomp:compress {controls}: link not read: {name}"
-                             for name in ("a?b.pkg", "c?d.pkg", "e?f.pkg", "g?h.pkg", "i?j.pkg"))], logs.output
+                             for name in ("a?b.pkg", "c?d.pkg", "e?f.pkg", "g?h.pkg", "i?j.pkg", "k?l.pkg",
+                                          "m?n.pkg"))], logs.output
     assert all(len(line.splitlines()) == 1 for line in logs.output), logs.output
     assert texcomp.encode_scene(str(linked), "300")["total"] == 0
     assert not (Path(texcomp.CACHE) / (hashlib.sha256(foreign).hexdigest() + ".bc")).exists(), \

@@ -136,19 +136,30 @@ def status(current: str = "111", speed=1.0, pid: int = 4242, **extra) -> dict:
 
 
 def _zip_with_manifest(kind: str) -> bytes:
-    """A zip holding one stored manifest.json with an LWE manifest's text: kind "method" gives it an unknown
-    compression method (99), "encrypted" sets its encrypted flag."""
+    """A zip holding a stored manifest.json with an LWE manifest's text: kind
+    "method" gives manifest.json an unknown compression method (99), "encrypted" sets its encrypted flag,
+    "version" gives its central entry extract version 6.4, "name" adds a member whose UTF-8 flagged name holds the
+    byte 0xff, "nested" makes the manifest 100000 "[" and "format" gives it the format 1e400."""
     buf = io.BytesIO()
+    text = {"nested": "[" * 100000, "format": '{"app": "lwe-ui", "format": 1e400}'}.get(
+        kind, json.dumps({"app": "lwe-ui", "format": 1}))
     with zipfile.ZipFile(buf, "w") as z:
-        z.writestr(zipfile.ZipInfo("manifest.json"), json.dumps({"app": "lwe-ui", "format": 1}))
+        z.writestr(zipfile.ZipInfo("other.txt" if kind == "none" else "manifest.json"), text)
+        if kind == "name":
+            z.writestr(zipfile.ZipInfo("xZ.txt"), "x")
     data = bytearray(buf.getvalue())
-    central = data.rfind(b"PK\x01\x02")
+    local, central = data.rfind(b"PK\x03\x04"), data.rfind(b"PK\x01\x02")
     if kind == "method":
         struct.pack_into("<H", data, 8, 99)
         struct.pack_into("<H", data, central + 10, 99)
-    else:
+    elif kind == "encrypted":
         struct.pack_into("<H", data, 6, 1)
         struct.pack_into("<H", data, central + 8, 1)
+    elif kind == "version":
+        struct.pack_into("<H", data, central + 6, 64)
+    elif kind == "name":
+        data[local + 31] = data[central + 47] = 0xFF
+        struct.pack_into("<H", data, central + 8, 0x800)
     return bytes(data)
 
 
@@ -776,7 +787,7 @@ class BridgeSyncTest(unittest.TestCase):
                                   f"import, is missing. Deleting {rec} clears this block."])
         self.assertEqual((settings.load()["ENGINE_FPS"], rec.exists()), (30, True))
 
-    def test_the_panel_refuses_a_backup_or_a_record_whose_manifest_cannot_be_decompressed(self) -> None:
+    def test_the_panel_refuses_a_backup_or_a_record_whose_manifest_cannot_be_read(self) -> None:
         archive = self._archive()
         backups = paths.state_dir() / "backups"
         backups.mkdir(parents=True, exist_ok=True)
@@ -785,8 +796,9 @@ class BridgeSyncTest(unittest.TestCase):
         page = settings_bridge.SettingsBridge(self.backend)
         failed: list = []
         page.commitFailed.connect(lambda keys, reason: failed.append(reason))
+        kinds = ("method", "encrypted", "version", "name", "nested", "format")
         with self.engine(status()):
-            for kind in ("method", "encrypted"):
+            for kind in kinds:
                 bad = self.home / f"{kind}.lwebackup"
                 bad.write_bytes(_zip_with_manifest(kind))
                 self.assertFalse(page.importBackup(str(bad)))
@@ -796,7 +808,7 @@ class BridgeSyncTest(unittest.TestCase):
                 self.assertFalse(page.importBackup(str(archive)))
         unreadable = (f"Nothing was imported: {rec} cannot be read, so the snapshot it keeps from before an earlier "
                       f"failed import cannot be found. Deleting {rec} clears this block.")
-        self.assertEqual(failed, ["That file is not an LWE backup.", unreadable] * 2)
+        self.assertEqual(failed, ["That file is not an LWE backup.", unreadable] * len(kinds))
         self.assertEqual((settings.load()["ENGINE_FPS"], rec.exists()), (30, True))
 
     def test_the_panels_import_settles_inside_its_restore_lock(self) -> None:

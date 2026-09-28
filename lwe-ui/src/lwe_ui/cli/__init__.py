@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Iterable, TextIO
 
@@ -27,16 +28,31 @@ USAGE = 3
 PIPE_CLOSED = 141
 
 _JSON_FLAGS = ("-j", "--json")
-_CONTROLS = {code: "?" for code in (*range(0x20), 0x7F) if code != ord("\n")}
+
+
+class _Unsafe(dict):
+    """The translate table clean() uses: every control character but the newline (C0, U+007F and the C1
+    range U+0080 to U+009F) and every format character (category Cf, the bidi controls among them) maps
+    to "?", any other character to itself; each answer is kept once asked."""
+
+    def __missing__(self, code: int) -> str:
+        char = chr(code)
+        unsafe = char != "\n" and (code < 0x20 or 0x7F <= code <= 0x9F or unicodedata.category(char) == "Cf")
+        self[code] = "?" if unsafe else char
+        return self[code]
+
+
+_UNSAFE = _Unsafe()
 _NO_BYTE = re.compile(r"[\ud800-\udc7f\udd00-\udfff]")
 
 
 def clean(text: str) -> str:
     """The text as the engine writes it: its original bytes read again as UTF-8, each invalid sequence
     one U+FFFD (a lone surrogate that stands for no byte is one U+FFFD as well), then every control
-    character below U+0020 but the newline, and U+007F, as "?", as in the engine's status lines."""
+    character but the newline and every format character as "?" (_Unsafe), so no text can move the
+    terminal's cursor or reorder a line."""
     text = _NO_BYTE.sub("\ufffd", text).encode("utf-8", "surrogateescape").decode("utf-8", "replace")
-    return text.translate(_CONTROLS)
+    return text.translate(_UNSAFE)
 
 
 class _Cleaned:
