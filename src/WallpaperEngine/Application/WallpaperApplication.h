@@ -267,6 +267,7 @@ private:
      */
     void tickFullscreenGate ();
     [[nodiscard]] bool fullscreenStopEngaged () const;
+    [[nodiscard]] FullscreenBehavior fullscreenBehaviorInEffect () const;
     /**
      * "While one of these apps runs: pause / stop" - a PROCESS poll, not a compositor
      * event: a CLI process (llama.cpp) has no window, so /proc/PID/comm is the only
@@ -363,6 +364,7 @@ private:
     } m_appCondition {};
     ReleaseReason m_releaseReason = ReleaseReason::Live;
     int m_deadmanSeconds = 300;
+    bool m_deadmanCannotReleaseLogged = false;
     std::unique_ptr<WallpaperEngine::Render::Drivers::VideoDriver> m_videoDriver = nullptr;
     std::unique_ptr<WallpaperEngine::Render::Drivers::Detectors::FullScreenDetector> m_fullScreenDetector = nullptr;
     std::unique_ptr<WallpaperEngine::WebHelper::HelperClient> m_webHelper = nullptr;

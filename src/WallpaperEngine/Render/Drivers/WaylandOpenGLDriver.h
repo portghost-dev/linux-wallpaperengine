@@ -79,6 +79,7 @@ public:
     [[nodiscard]] void* getProcAddress (const char* name) const override;
 
     void onLayerClose (Output::WaylandOutputViewport*);
+    [[nodiscard]] bool canReleaseOutputSurfaces () const override { return true; }
     bool releaseOutputSurfaces () override;
     bool acquireOutputSurfaces () override;
     /**

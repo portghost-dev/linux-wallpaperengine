@@ -1,6 +1,7 @@
 #include <algorithm>
 
 #include "VideoFactories.h"
+#include "WallpaperEngine/Application/FullscreenPolicy.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include <cassert>
 
@@ -84,7 +85,7 @@ std::unique_ptr<Detectors::FullScreenDetector> VideoFactories::createFullscreenD
     const auto it = this->m_fullscreenFactories.find (xdgSessionType);
 
     if (it == this->m_fullscreenFactories.end ()
-	|| (!context.settings.render.pauseOnFullscreen && !context.settings.general.daemonMode)) {
+	|| !Application::FullscreenPolicy::wantsRealDetector (context.settings)) {
 	return std::make_unique<Detectors::FullScreenDetector> (context);
     }
 

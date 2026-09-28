@@ -6,6 +6,7 @@
 #include "Steam/FileSystem/FileSystem.h"
 #include "WallpaperEngine/Application/ApplicationState.h"
 #include "WallpaperEngine/Application/Config.h"
+#include "WallpaperEngine/Application/FullscreenPolicy.h"
 #include "WallpaperEngine/Assets/AssetLoadException.h"
 #include "WallpaperEngine/Audio/Drivers/Detectors/PulseAudioPlayingDetector.h"
 #include "WallpaperEngine/Audio/Drivers/NullAudioDriver.h"
@@ -1126,7 +1127,7 @@ void WallpaperApplication::render () {
     if (this->m_isPaused) {
 	usleep (FULLSCREEN_CHECK_WAIT_TIME);
 	if ((this->m_manualPauseRequested
-	     || (this->m_context.settings.render.fullscreenBehavior == FullscreenBehavior::Pause
+	     || (this->fullscreenBehaviorInEffect () == FullscreenBehavior::Pause
 		 && this->m_fullScreenDetector->anythingFullscreen ()))
 	    && this->m_context.state.general.keepRunning) {
 	    return;
@@ -1228,7 +1229,7 @@ void WallpaperApplication::render () {
 	}
 #endif /* DEMOMODE */
 	if ((this->m_manualPauseRequested
-	     || (this->m_context.settings.render.fullscreenBehavior == FullscreenBehavior::Pause
+	     || (this->fullscreenBehaviorInEffect () == FullscreenBehavior::Pause
 		 && this->m_fullScreenDetector->anythingFullscreen ()))
 	    && this->m_context.state.general.keepRunning) {
 	    this->m_isPaused = true;
@@ -3409,6 +3410,11 @@ bool WallpaperApplication::apiReleaseOutputs (const ReleaseReason reason, std::s
 	return false;
     }
 
+    if (!this->m_videoDriver->canReleaseOutputSurfaces ()) {
+	error = "driver does not support releasing outputs";
+	return false;
+    }
+
     // GL teardown FIRST, while a surface still exists to hold the context current:
     // scenes, decoders and sole-owner cached textures all die here (VRAM freed)
     if (!this->makeAnyViewportCurrent ()) {
@@ -3566,6 +3572,18 @@ void WallpaperApplication::tickDeadman () {
 	return;
     }
 
+    if (!this->m_videoDriver->canReleaseOutputSurfaces ()) {
+	if (!this->m_deadmanCannotReleaseLogged) {
+	    sLog.error (
+		"API: DEAD-MAN - no frames and no client heartbeat for ", this->m_deadmanSeconds,
+		"s, but this driver cannot free the screens; the watchdog does nothing"
+	    );
+	    this->m_deadmanCannotReleaseLogged = true;
+	}
+
+	return;
+    }
+
     sLog.error (
 	"API: DEAD-MAN - no frames and no client heartbeat for ", this->m_deadmanSeconds, "s; releasing outputs"
     );
@@ -3580,6 +3598,12 @@ void WallpaperApplication::tickDeadman () {
 }
 
 bool WallpaperApplication::fullscreenStopEngaged () const { return this->m_releaseReason == ReleaseReason::Fullscreen; }
+
+FullscreenBehavior WallpaperApplication::fullscreenBehaviorInEffect () const {
+    return FullscreenPolicy::inEffect (
+	this->m_context.settings.render.fullscreenBehavior, this->m_videoDriver->canReleaseOutputSurfaces ()
+    );
+}
 
 bool WallpaperApplication::appConditionStopEngaged () const {
     return this->m_releaseReason == ReleaseReason::AppCondition;
@@ -3619,17 +3643,22 @@ void WallpaperApplication::tickAppCondition () {
 
     cond.lastPoll = now;
 
-    const bool wantActive = cond.behavior != "off" && !cond.names.empty () && anyListedProcessRunning (cond.names);
+    const auto behavior = FullscreenPolicy::inEffect (
+	parseFullscreenBehavior (cond.behavior).value_or (FullscreenBehavior::Off),
+	this->m_videoDriver->canReleaseOutputSurfaces ()
+    );
+    const bool wantActive
+	= behavior != FullscreenBehavior::Off && !cond.names.empty () && anyListedProcessRunning (cond.names);
 
     // revert side first: a standing hold whose trigger vanished, or whose behavior was
     // reconfigured out from under it, must let go before any new engagement
-    if (cond.pauseEngaged && (!wantActive || cond.behavior != "pause")) {
+    if (cond.pauseEngaged && (!wantActive || behavior != FullscreenBehavior::Pause)) {
 	this->setTimescale (cond.prevTimescale);
 	cond.pauseEngaged = false;
 	sLog.out ("API: app-condition pause RELEASED (no listed process running)");
     }
 
-    if (this->appConditionStopEngaged () && (!wantActive || cond.behavior != "stop")) {
+    if (this->appConditionStopEngaged () && (!wantActive || behavior != FullscreenBehavior::Stop)) {
 	std::string error;
 
 	if (!this->apiAcquireOutputs (error)) {
@@ -3641,14 +3670,14 @@ void WallpaperApplication::tickAppCondition () {
 	return;
     }
 
-    if (cond.behavior == "pause" && !cond.pauseEngaged) {
+    if (behavior == FullscreenBehavior::Pause && !cond.pauseEngaged) {
 	// the master-pause fact (timescale 0) - the same single fact the panel's header
 	// pause drives; never a second pause mechanism
 	cond.prevTimescale = this->m_timescale;
 	this->setTimescale (0.0f);
 	cond.pauseEngaged = true;
 	sLog.out ("API: app-condition pause ENGAGED (listed process running)");
-    } else if (cond.behavior == "stop" && this->m_releaseReason == ReleaseReason::Live) {
+    } else if (behavior == FullscreenBehavior::Stop && this->m_releaseReason == ReleaseReason::Live) {
 	// only take LIVE outputs: a bench (Verb), dead-man, or fullscreen hold owns
 	// them already; retry lands on a later tick once that hold clears
 	std::string error;
@@ -3660,7 +3689,7 @@ void WallpaperApplication::tickAppCondition () {
 }
 
 void WallpaperApplication::tickFullscreenGate () {
-    const bool wantRelease = this->m_context.settings.render.fullscreenBehavior == FullscreenBehavior::Stop
+    const bool wantRelease = this->fullscreenBehaviorInEffect () == FullscreenBehavior::Stop
 	&& this->m_fullScreenDetector != nullptr && this->m_fullScreenDetector->anythingFullscreen ();
 
     if (wantRelease == this->fullscreenStopEngaged ()) {

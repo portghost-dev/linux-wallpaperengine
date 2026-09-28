@@ -54,6 +54,7 @@ public:
      * Hides the window created by the driver
      */
     virtual void hideWindow () = 0;
+    [[nodiscard]] virtual bool canReleaseOutputSurfaces () const { return false; }
     virtual bool releaseOutputSurfaces () { return false; }
     /** Recreate the surfaces released above; the caller rebuilds wallpapers after. */
     virtual bool acquireOutputSurfaces () { return false; }
