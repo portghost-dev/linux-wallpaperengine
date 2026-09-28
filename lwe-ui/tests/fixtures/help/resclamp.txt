@@ -1,0 +1,19 @@
+resclamp <0-4>
+
+Caps the size a scene is drawn at, as a multiple of your largest screen.
+Lower saves video memory. It never enlarges anything, and turning it off
+can remove blur this cap caused. Decimals work; 0 or below means no cap.
+
+Default 1. Takes effect at the next service restart, or at the next show
+for one wallpaper. effectclamp is the same cap for glow, blur and other
+effect layers, set on its own.
+
+One wallpaper:  wallpaper <wallpaper> resclamp 0
+
+Examples:
+  resclamp 0          no cap: draw at the artwork's full size
+  resclamp 1.5        up to one and a half screens
+  resclamp load       back to what your files say
+  get resclamp        print the current value
+
+Also found by: resolution, sharpness, blur, video memory.

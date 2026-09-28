@@ -1,0 +1,182 @@
+Unsupported debugging switches. They can change or disappear in any release.
+Set one at launch with --debug <switch>=<value>; repeat it for more.
+Each name is an alias; the engine's own variable still works.
+
+  animationtiming <current|legacy>          legacy brings back the older timing for looping
+                                            sprite-sheet animation in particles.
+  animationstats <on|off>                   Logs frame-advance statistics for animated textures.
+  audiostats <on|off>                       Logs the average sound levels handed to wallpaper
+                                            scripts, every 30 script ticks.
+  audit <on|off>                            Logs one-time audits: which file each texture name
+                                            resolves to, pixel statistics of large compressed
+                                            textures, material mask switches, and 3D model drawing
+                                            state.
+  texturedetailtest <on|off>                Runs a one-time test of how the graphics driver handles
+                                            texture detail levels and logs pass or fail.
+  shorttrailrenderer <normal|sprite>        Draws very short rope-trail particles (length under
+                                            0.35) with the simpler sprite-trail renderer.
+  cameraprobe <on|off>                      Logs camera position and view-matrix details, including
+                                            camera moves made by scripts.
+  webdebug <a port|off>                     Opens the web engine's remote debugging (devtools) port
+                                            for web wallpapers. (web helper)
+  weblog <verbose|info|warning|error>       How much the web engine writes to its log file (logs/cef
+                                            under the lwe state folder). (web helper)
+  testresolution <WIDTHxHEIGHT|default>     Pretends the largest screen is this size when working
+                                            out the ssfactor and clampcomposites caps, a test
+                                            override.
+  backgroundprobe <on|off>                  Logs the scene's background clear color when the scene
+                                            is built and for its first three frames.
+  cropoffset <off|normal|reverse>           Shifts image layers (except puppet-animated ones) by
+                                            their authored crop offset, a layout experiment.
+  cursorscripts <on|off>                    Logs which scripts listen for cursor events and the
+                                            clickable areas of image layers.
+  surfacesizes <on|off>                     Logs drawing-surface sizes against screen sizes for the
+                                            first four frames (Wayland).
+  sceneimage <a path|off>                   Saves the drawn scene as a PPM image at frame 3 and
+                                            again at the frame set by sceneimageframe.
+  sceneimageframe <a whole number, 4 or more>
+                                            Which frame sceneimage saves its second image at.
+  bufferallocations <on|off>                Logs every offscreen buffer the engine allocates, with a
+                                            running total.
+  buffercoverage <on|off>                   Logs each time an image layer's working buffer is
+                                            enlarged to match its size on screen.
+  buffersharing <on|off>                    off gives every layer its own working buffers instead of
+                                            sharing same-size ones, which uses more video memory.
+  bufferaliases <on|off>                    Logs each time an offscreen buffer is set up as another
+                                            name for an existing one.
+  brightnessprofile <on|off>                Logs a coarse brightness profile of the scene at frame
+                                            150 and of the picture sent to the screen every 450
+                                            frames.
+  shaderoption <NAME=number>                Forces one shader option (combo) to this value in every
+                                            shader, a diagnostic.
+  frontface <clockwise|counterclockwise>    counterclockwise flips which side of 3D model triangles
+                                            counts as the front.
+  hideparenttrails <on|off>                 Hides sprite-trail particle systems that have child
+                                            systems, leaving only the children.
+  imagedetails <on|off>                     Logs image layer placement, textures, render passes and
+                                            matrices.
+  imagegeometry <on|off>                    Logs image layer position, shape and vertex-buffer
+                                            details.
+  hidelight <an id|off>                     Leaves the light with this id out of scene lighting, a
+                                            diagnostic.
+  pixelchanges <on|off>                     Logs, for the first two frames, how much the sampled
+                                            pixel values under each drawn object change.
+  scenedetails <on|off>                     Logs a bundle of lighting, text, script-property,
+                                            animation-timeline and shader-setting details; most
+                                            appear once, while one animation trace repeats as the
+                                            scene runs.
+  maskaudit <on|off>                        Logs value statistics of one- and two-channel mask
+                                            textures as they load.
+  texturedetailaudit <on|off>               Logs, for each texture, whether the engine may load it
+                                            at reduced detail.
+  mouseevents <on|off>                      Logs pointer enter and button events (Wayland) and the
+                                            mouse movement sent to web wallpapers.
+  mouseposition <x,y|off>                   Pins the mouse position scene wallpapers see to this
+                                            spot, as fractions of the screen width and height; web
+                                            wallpapers still get the real pointer.
+  videobuffer <a size in MiB>               How much video mpv may read ahead for video wallpapers.
+  videoextraframes <0 to 256>               How many extra frames mpv's hardware decoder keeps
+                                            queued (only matters with hardware decoding).
+  videoframesync <fallback|native>          Gives mpv the graphics driver's real frame-sync
+                                            functions and turns on its direct rendering, instead of
+                                            the engine's stand-ins, which exist because mpv never
+                                            frees the real ones.
+  videothreads <a number>                   How many threads mpv uses to decode video wallpapers.
+  bloom <on|off>                            off turns off the scene bloom (glow) effect.
+  childanchoring <authored|fixed>           Treats every child particle system as fixed in place
+                                            when correcting particle sizes for layer scaling, a
+                                            diagnostic.
+  buffergrowth <on|off>                     off stops image layer working buffers from being
+                                            enlarged to their on-screen size, so they keep the
+                                            authored size.
+  childfade <on|off>                        off stops child particles from fading along with their
+                                            parent particle.
+  objectvolume <on|off>                     off plays every sound object at full volume, ignoring
+                                            the volume the wallpaper's author set.
+  parallelparticles <on|off>                off runs all particle simulation on the main thread
+                                            instead of spreading it over worker threads.
+  particlewarmup <on|off>                   off turns off the 60-second warm-up simulation that
+                                            particle systems with a start time get.
+  ropetextureflip <on|off>                  off turns off the engine's vertical texture flip fix for
+                                            rope particle shaders.
+  shaderscreensize <on|off>                 off stops giving shaders the scene's size and aspect
+                                            ratio, a diagnostic.
+  spritetextureflip <on|off>                off turns off the engine's vertical flip for sprite
+                                            particles, so up points the other way.
+  objectpixels <x0 y0 x1 y1 [skip], in quotes>
+                                            Reads the pixels in this rectangle after each object is
+                                            drawn and logs their average, for 199 draws after the
+                                            skip.
+  objectpixelprecision <byte|float>         Makes objectpixels read full-precision values instead of
+                                            8-bit ones.
+  overlayfont <a path|default>              Font file for the corner text overlay, tried before the
+                                            built-in list.
+  overlaysize <a size in pixels>            Heading text size of the overlay at a screen height of
+                                            2160 pixels; later lines draw at two thirds of it.
+  overlaytext <text>                        Starting text for the corner text overlay, unless a
+                                            set-overlay command has already set one.
+  particleallocations <on|off>              Logs how much memory each particle system's buffers
+                                            take.
+  particlestats <on|off>                    Logs statistics for each particle system every 5
+                                            seconds: frame rate, spawn and death rates, peak count
+                                            and average speed.
+  passprobe <an object id|final>            Logs pixel statistics after each render pass of the
+                                            object with this id (or of the final output passes) and
+                                            its texture bindings.
+  passimage <on|off>                        Also saves one probed pass as passprobe-post.ppm in the
+                                            lwe probes folder.
+  buffersharingstats <on|off>               Logs a report of how well layers share working buffers.
+  screentrace <on|off>                      Logs screen size, scene size, scaling mode and picture
+                                            window for the first frames sent to each screen.
+  ropetrailprobe <on|off>                   Logs rope-trail particle geometry: strip and point
+                                            counts, longest segment and head position.
+  scriptregistration <on|off>               Logs which wallpaper scripts are registered or skipped.
+  shaderdump <on|off>                       When a fragment shader fails to compile, logs its full
+                                            source with line numbers.
+  shadersource <text|off>                   Saves the final source of every shader whose file name
+                                            contains this text to the lwe probes folder.
+  shapes <on|off>                           off leaves shape objects out of scenes.
+  particlesizeprobe <on|off>                Reads back and logs the particle size-correction values
+                                            shaders receive.
+  skippedobjects <omit|hide>                hide still builds objects on the skip list (from
+                                            --render-debug skip-object or a show's skip_objects) and
+                                            only hides them when drawing; omit, the default, leaves
+                                            them out of the scene entirely.
+  modelshine <authored|off>                 off makes 3D models fully rough (no shine), a lighting
+                                            experiment.
+  albedocolor <authored|srgb>               Treats DXT5-compressed textures as sRGB and
+                                            gamma-corrects the final picture, a color experiment.
+  texturecolor <authored|srgb>              Treats all color textures as sRGB, gamma-corrects the
+                                            final picture and skips the compressed texture cache, a
+                                            color experiment.
+  texturecachestats <on|off>                Logs which textures survive a cache cleanup and when
+                                            wallpapers are created and destroyed.
+  testtexturelimit <a size in pixels|default>
+                                            Overrides the largest texture size the engine loads when
+                                            reducing texture detail, a test override.
+  timestats <on|off>                        Logs every 5 seconds how the wallpaper clock compares
+                                            with real time.
+  modeltint <authored|unmasked|blue>        unmasked turns off a tint-mask option on 3D model
+                                            materials and blue paints models a fixed blue, both
+                                            lighting experiments.
+  trailtiming <spread|exact>                exact places particle trail points at fixed time steps
+                                            from each particle's birth instead of spreading them
+                                            along the trail.
+  twinkleprobe <on|off>                     Logs the age and fade values of the first particle in
+                                            each particle system every 30 frames.
+  shaderinputs <on|off>                     Logs each shader setting the engine fills in
+                                            automatically and where its value came from.
+  shaderinputvalues <on|off>                Logs shader setting values and how layer color and
+                                            brightness are applied.
+  particlevelocity <on|off>                 Logs the starting velocity each random-velocity
+                                            initializer gives a new particle.
+  webcrashlimit <count,window,cooldown>     If the web helper dies this many times within the
+                                            window, the engine waits out the cooldown before
+                                            starting it again, and web wallpapers stay dark
+                                            meanwhile.
+  webidletime <a duration, for example 1000ms>
+                                            How long the web helper waits after its last web
+                                            wallpaper closes before it exits. (web helper)
+  webhelpersocket <a path|default>          Where the socket between the engine and its web helper
+                                            lives.
+  windowtitle <text>                        Window title when running with --window.

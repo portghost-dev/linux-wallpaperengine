@@ -1,0 +1,21 @@
+  schedule                            show day and night, and whether the schedule is on
+  schedule on | off                   
+  schedule day time <time>            when day starts
+  schedule day playlist <playlist>    what plays by day
+  schedule night time <time>          when night starts
+  schedule night playlist <playlist>  what plays at night
+
+Day runs from its start time until night starts; night runs until day starts.
+Times use this computer's clock: 7:30, 07:30, 730 and 0730 all mean 07:30.
+A playlist is its number from the playlist list, or its name.
+While the schedule is off you can fill it in one piece at a time. schedule on
+checks that day and night have different times and different playlists.
+A playlist you switch to by hand stays until the next start time.
+
+Example, starting from nothing:
+  playlist                            see your playlists, numbered
+  schedule day playlist 1             
+  schedule night playlist 2           
+  schedule on                         day starts at 08:00 and night at 20:00 until you change them
+
+Swapping day and night: schedule off, set both playlists, schedule on.

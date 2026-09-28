@@ -1,0 +1,19 @@
+Files you can edit by hand. Run reload after editing: it checks the files,
+prints what changed and applies it.
+
+In ~/.config/lwe
+  playlists/*.conf            one file per playlist: NAME, MODE, INTERVAL in seconds, UNIT, and
+                              MEMBERS, the wallpaper ids in play order. Copy a file to make a
+                              playlist, change NAME to rename it, delete the file to remove it. list
+                              prints each wallpaper's id.
+  app-condition.txt           apps that trigger the running-apps rule, one process name per line, up
+                              to 15 characters
+  pause-blacklist.txt         fullscreen apps that never cause a pause, one app id per line
+  settings.conf               the schedule as SCHEDULE="07:30=ocean;20:00=calm" and
+                              SCHEDULE_ENABLED=true, day first, using playlist file names
+  wp/<id>.conf                one wallpaper's own values
+
+In ~/.local/state/lwe
+  panel/records/<id>.jsonl    a wallpaper's history, one event per line; read only
+
+A hand edit is safe unless the panel saves the same file at that same moment.

@@ -1,0 +1,50 @@
+Usage: lwe <command> [value]
+
+Everyday
+  status                            what is on screen, the timer and the version
+  show <wallpaper>                  one wallpaper on every screen now
+  next, prev                        step forward or back
+  pause [on|off|toggle]             hold or resume the playlist timer
+  off, on                           take the wallpaper off the screens, or put it back
+  playlist [<playlist>]             list your playlists, or switch to one
+  schedule ...                      day and night playlists; help schedule shows how
+
+Settings  (a name alone shows how to use it)
+  volume <0-128|+N|-N>              wallpaper sound
+  mute <on|off|toggle>              silence every wallpaper
+  mouse <on|off|toggle>             off stops every wallpaper following the pointer
+  parallax <on|off|toggle>          off stops the depth shift everywhere
+  audioreactive <on|off|toggle>     off stops every wallpaper reacting to sound
+  speed <0-10>                      animation speed; 0 freezes it, speed load brings it back
+  order <shuffle|sequential|static> how the playlist moves on
+  interval <20m|30s|1h>             how long each wallpaper stays up
+  fps <1-480>                       frames per second
+  resclamp <0-4>                    cap on scene size, in screens; 0 is no cap
+  effectclamp <0-4>                 the same cap for glow and blur layers
+  <setting> load                    put one value back to what your files say
+  get <setting>...                  bare values for scripts and bars
+
+Library
+  list [scene|video|web]            your library, numbered
+  workshop                          downloads not in your library yet, numbered
+  scan                              look for new downloads now
+  add <wallpaper>...                into the pool; --playlist <playlist> also puts it in that
+                                    playlist
+  remove <wallpaper>... --playlist <playlist>
+                                    take it out of that playlist
+  trash <wallpaper>...              out of the pool; untrash lets it back in
+  compress <wallpaper>...           build the fast textures
+  bench <wallpaper>                 a test window, then its log summary
+  wallpaper <wallpaper> ...         one wallpaper's own settings, alias, properties, objects
+
+Setup
+  config [<setting> [value]]        every setting, its value and where it came from
+  reload                            check every file, print what changed, apply
+  backup export|import|preview <file>
+                                    save, restore or preview a backup
+  service [start|stop|restart]      the wallpaper service; service autostart on|off
+  debug <switch> <value>            unsupported debugging switches; help --debug lists them
+
+Pick a wallpaper by its number in a list, its Workshop id, @alias, its title in quotes,
+or current for the one on screen.
+help <command> explains one. help files lists the files you edit. help --all lists every setting.

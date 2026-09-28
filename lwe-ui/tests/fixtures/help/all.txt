@@ -1,0 +1,75 @@
+Every setting: its values, its default, and the engine name it points to.
+
+  order                       shuffle | sequential | static. Default shuffle. Points to playlist
+                              MODE.
+  interval                    20 | 30s | 20m | 1h  (a bare number is minutes). Default 15m. Points
+                              to playlist INTERVAL, in seconds.
+  playlist                    a playlist's number or name. Default none. Points to ACTIVE_PLAYLIST.
+  volume                      0 to 128, +N, -N. Default 15. Points to ENGINE_VOLUME, VOLUME.
+  mute                        on | off | toggle. Default off. Points to OVERRIDE_MUTE.
+  audioreactive               on | off | toggle. Default on. Points to OVERRIDE_AUDIO_OFF.
+  mouse                       on | off | toggle. Default on. Points to OVERRIDE_MOUSE_OFF.
+  parallax                    on | off | toggle. Default on. Points to OVERRIDE_PARALLAX_OFF.
+  config audioreactivedefault on | off. Default off. Points to AUDIO_REACTIVE_DEFAULT.
+  config mousedefault         on | off. Default off. Points to MOUSE_DEFAULT.
+  config parallaxdefault      on | off. Default on. Points to PARALLAX_DEFAULT.
+  automute                    on | off | toggle. Default on. Points to AUTOMUTE_DEFAULT, AUTOMUTE.
+  particles                   on | off | toggle. Default on. Points to PARTICLES_DEFAULT.
+  fps                         1 to 480, a whole number. Default 60. Points to ENGINE_FPS.
+  speed                       0 to 10  (1 is normal). Default 1. Points to ENGINE_TIMESCALE, SPEED,
+                              LWE_TIMESCALE.
+  scaling                     default | stretch | fit | fill. Default default. Points to
+                              ENGINE_SCALING, SCALING.
+  edge                        extend | blank | tile. Default extend. Points to ENGINE_CLAMP,
+                              CLAMPING: clamp | border | repeat.
+  fullscreen                  keep | pause | stop. Default your older pause settings, until you
+                              choose. Points to FULLSCREEN_BEHAVIOR: off | pause | stop; per
+                              wallpaper FULLSCREEN_PAUSE.
+  layer                       background | bottom | top | overlay. Default bottom. Points to
+                              ENGINE_LAYER.
+  resclamp                    0 to 4, decimals allowed  (1 is your screen size; 0 or below is no
+                              cap). Default 1. Points to a new saved setting (RENDER_RESOLUTION
+                              stays the fallback for old files), LWE_SSFACTOR.
+  effectclamp                 0 to 4, decimals allowed  (1 is your screen size; 0 or below is no
+                              cap). Default 1. Points to a new saved setting (RENDER_RESOLUTION
+                              stays the fallback for old files), LWE_CLAMPCOMPOSITES.
+  texturecache                on | off | toggle. Default on. Points to ENGINE_TEXCOMP, TEXCOMP,
+                              LWE_TEXCOMP.
+  texturedetail               auto | full. Default auto. Points to TEXTURE_DETAIL, LWE_TEXDETAIL.
+  videodecode                 software | auto. Default software. Points to ENGINE_HWDEC: no | auto,
+                              LWE_HWDEC.
+  reviewrequired              on | off | toggle. Default on. Points to REVIEW_REQUIRED.
+  storage                     copy | reference. Default copy. Points to STORAGE_POLICY.
+  detect                      manual | launch | timer | watch. Default watch. Points to DETECT_MODE:
+                              manual | launch | interval | watch.
+  detectevery                 15s to 24h  (a bare number is seconds). Default 60s. Points to
+                              DETECT_INTERVAL_SEC.
+  libraryfolder               a folder. Default none. Points to WALLPAPERS_DIR.
+  workshopfolder              a folder. Default found automatically. Points to WORKSHOP_DIR.
+  steamfolder                 a folder. Default found automatically. Points to STEAM_DIR.
+  assetsfolder                a folder. Default found automatically. Points to ASSETS_DIR.
+  lightdimming                0.01 to 1000  (higher is dimmer). Default 0.7. Points to
+                              ENGINE_CLASSIC_K, CLASSIC_K, LWE_CLASSICK.
+  lightfalloff                0.5 to 6. Default 2.6. Points to ENGINE_CLASSIC_EXP, CLASSIC_EXP,
+                              LWE_CLASSICEXP.
+  audiogain                   0.1 to 20. Default 3. Points to ENGINE_AUDIO_GAIN, AUDIO_GAIN,
+                              LWE_AUDIOGAIN.
+  audiosmoothing              0 to 500 ms  (a bare number is milliseconds; 0 is off). Default 90.
+                              Points to LWE_AUDIOSMOOTH.
+  watchdog                    0 to 24h  (a bare number is seconds; 0 is off). Default 300. Points to
+                              LWE_DEADMAN.
+  color                       one quoted value: "brightness contrast saturation hue", hue in
+                              degrees. Default "1 1 1 0". Points to LWE_CC.
+  socket                      a file path. Default $XDG_RUNTIME_DIR/lwe/engine.sock, else
+                              /tmp/lwe-<uid>/engine.sock. Points to LWE_SOCKET.
+  wallpaper <w> zoom          1 to 2. Points to FIT_ZOOM.
+  wallpaper <w> panx          -1 to 1. Points to FIT_PAN_X.
+  wallpaper <w> pany          -1 to 1. Points to FIT_PAN_Y.
+  wallpaper <w> brightness    0 to 4  (1 is normal). Points to CC.
+  wallpaper <w> contrast      0 to 4  (1 is normal). Points to CC.
+  wallpaper <w> saturation    0 to 4  (1 is normal). Points to CC.
+  wallpaper <w> hue           -180 to 180 degrees. Points to CC, stored in radians.
+  wallpaper <w> fullscreen    on | off | inherit. Points to FULLSCREEN_PAUSE.
+  wallpaper <w> property      property <name> <value>. Points to PROP_<name>.
+  wallpaper <w> hide / unhide hide <object id> | unhide <object id>. Points to SKIP.
+  wallpaper <w> alias         alias <name>. Points to ALIAS.
