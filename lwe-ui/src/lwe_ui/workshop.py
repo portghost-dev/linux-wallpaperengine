@@ -21,6 +21,7 @@ from PySide6.QtGui import QDesktopServices
 
 from .dev import _wallpapers_dir
 from .discovery import project as project_disc
+from .library import actions
 from .storage import meta, paths, records, records_view, tags, tombstones, wp
 
 WE_APPID = "431960"
@@ -537,8 +538,7 @@ class WorkshopBridge(QObject):
         if not w or not os.path.isdir(os.path.join(wsdir, w)):
             return False
         try:
-            records.append(w, records.make_event("bypassed", where="workshop", initiator="human"))
-            tags.remove(w)
+            actions.untrash(w)
             return True
         except Exception:
             return False

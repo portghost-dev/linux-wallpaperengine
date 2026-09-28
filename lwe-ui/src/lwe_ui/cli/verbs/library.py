@@ -1,5 +1,6 @@
 """lwe list, workshop and scan print the library catalog and only read; lwe compress builds the
-engine's texture cache. None of them locks a store or sends anything to the engine."""
+engine's texture cache; lwe add brings wallpapers into the pool and lwe untrash lets trashed ones be
+imported again. None of them sends anything to the engine."""
 from __future__ import annotations
 
 import json
@@ -128,6 +129,180 @@ def _compress(ctx: Context, args: list[str]) -> int:
     return DONE
 
 
+_REASONS = {"skipped-copy-failed": "the copy failed",
+            "skipped-conf-failed": "its settings file could not be written",
+            "skipped-tag-failed": "the library list could not be written",
+            "skipped-incomplete": "the download is incomplete"}
+
+
+def _download_deps(wid: str) -> tuple[list[str], bool]:
+    """A download's declared bases and whether it has a payload of its own."""
+    from ...discovery import project
+    from ...storage import importer, paths
+
+    folder = paths.pending_root_for(wid, importer.workshop_dir()) / wid
+    proj = project.read(folder)
+    return importer._read_deps(proj), importer._has_own_payload(folder, proj)
+
+
+def _held_bases(wid: str) -> list[str] | None:
+    """The bases a held import waits for, or None when it is not held."""
+    from ...storage import meta, paths
+
+    entry = meta.get(wid)
+    if not entry.get("depMissing"):
+        return None
+    return [d for d in str(entry.get("depWid", "")).split() if paths.is_safe_wid(d)]
+
+
+def _base_not_here(pick, cfg: dict) -> str:
+    """The first base a preset pick needs that is not here, or ""."""
+    from ...storage import importer
+
+    bases: list[str] = []
+    if pick.source == "waiting":
+        bases = _held_bases(pick.ui_id) or []
+    elif pick.source == "download":
+        deps, own = _download_deps(pick.ui_id)
+        bases = [] if own else deps
+    return next((b for b in bases if not importer._dep_present(b, cfg)), "")
+
+
+def _failed(facts: dict, reason: str) -> tuple[str, dict]:
+    return f"not added: {reason}", {**facts, "result": "failed", "reason": reason}
+
+
+def _add_one(row, cfg: dict) -> tuple[str, dict]:
+    """Bring one wallpaper into the pool; returns its line's text and facts."""
+    from ...library import actions, catalog, compress
+    from ...storage import importer, meta, tags, wizard
+
+    facts = {"id": row.id, "title": row.title}
+    if row.state in ("pool", "missing"):
+        return "already in the pool", {**facts, "result": "already"}
+    before = tags.known_ids()
+    title = row.title
+    if row.state == "download":
+        deps, own = _download_deps(row.id)
+        folder = catalog.render_dir(deps[0]) if deps and not own else None
+        result = compress.compress_one(row, folder=folder)
+        done = importer.import_one(row.id)
+        if done["action"] not in ("imported-review", "imported-good"):
+            return _failed(facts, _REASONS.get(done["action"], done["action"]))
+        title = done["title"] or row.title
+        head, kind = "imported into the pool", "imported"
+    else:
+        held = _held_bases(row.id)
+        deps = held or []
+        if held is not None:
+            if all(importer._dep_present(d, cfg) for d in deps):
+                importer.resolve_missing_deps()
+            if meta.get(row.id).get("depMissing"):
+                return _failed(facts, _REASONS["skipped-conf-failed"])
+        result = compress.compress_one(row)
+        head, kind = "in the pool", "approved"
+    actions.approve(row.id, title, wizard.approved_untested(where="workshop"))
+    text = f"{head}; {compress.result_text(row, result)}"
+    tagged = {r.get("id"): r for r in tags.load()}
+    bases = []
+    for d in deps:
+        if d in before or d not in tagged:
+            continue
+        waiting = tagged[d].get("state") == "review"
+        base_title = tagged[d].get("title") or d
+        text += (f"; its base {base_title} ({d}) was imported and "
+                 + ("waits for review" if waiting else "is in the pool"))
+        bases.append({"id": d, "title": base_title, "state": "waiting" if waiting else "pool"})
+    return text, {**facts, "result": kind,
+                  "compress": {"result": result.kind, "bytes_before": result.before,
+                               "bytes_after": result.after, "failed": result.failed,
+                               "disk_bytes": result.disk},
+                  "bases": bases}
+
+
+def _add(ctx: Context, args: list[str]) -> int:
+    if not args or any(a.startswith("-") for a in args):
+        return _refuse(ctx, "add takes wallpapers")
+    from ...library import catalog, compress
+    from ...storage import importer
+    from .. import select
+
+    try:
+        picks = select.wallpapers(args)
+    except select.PickError as exc:
+        return select.report(ctx, exc)
+    cfg = importer._snapshot()
+    for p in picks:
+        label = f"{p.title} ({p.ui_id})"
+        if p.source == "trashed":
+            message = f"{label} is in the trash; untrash it first"
+        elif p.source == "screen":
+            message = f"{label} is not in the pool or the Workshop list"
+        else:
+            base = _base_not_here(p, cfg)
+            if not base:
+                continue
+            message = f"{label} needs its base {base}, which is not here"
+        ctx.error(message, "lwe: " + message)
+        return REFUSED
+    results = []
+    for p in picks:
+        rows = {r.id: r for r in catalog.wallpaper_rows()[0]}
+        row = rows.get(p.ui_id) or catalog.Row(0, p.ui_id, p.title, p.alias, "", p.source, False)
+        text, facts = _add_one(row, cfg)
+        results.append(facts)
+        if not ctx.json:
+            print(compress.row_line(row, text), file=ctx.out, flush=True)
+    if ctx.json:
+        print(json.dumps({"results": results, "receipt": None}, ensure_ascii=False,
+                         separators=(",", ":")), file=ctx.out)
+    return REFUSED if any(f["result"] == "failed" for f in results) else DONE
+
+
+def _untrash(ctx: Context, args: list[str]) -> int:
+    options = [a for a in args if a.startswith("-")]
+    words = [a for a in args if not a.startswith("-")]
+    if options not in ([], ["--all"]) or (words and options):
+        return _refuse(ctx, "untrash takes wallpapers or --all")
+    from ...library import actions, catalog, compress
+    from .. import select
+
+    if not args:
+        rows = catalog.trash_rows()
+        if ctx.json:
+            print(json.dumps([{"n": r.n, "id": r.id, "title": r.title, "files": r.files} for r in rows],
+                             ensure_ascii=False, separators=(",", ":")), file=ctx.out)
+            return DONE
+        width = len(str(max((r.n for r in rows), default=0)))
+        for r in rows:
+            gone = "" if r.files else "  (files gone)"
+            print(f"{r.n:>{width}}  {r.title} ({r.id}){gone}", file=ctx.out)
+        return DONE
+    if options:
+        named = catalog.trash_rows()
+    else:
+        try:
+            picks = select.wallpapers(words, domain="trash")
+        except select.PickError as exc:
+            return select.report(ctx, exc)
+        by_id = {r.id: r for r in catalog.trash_rows()}
+        named = [by_id.get(p.ui_id) or catalog.Row(0, p.ui_id, p.title, p.alias, "", "trashed", True)
+                 for p in picks]
+    results = []
+    for row in named:
+        actions.untrash(row.id)
+        results.append({"id": row.id, "title": row.title, "files": row.files})
+        if not ctx.json:
+            text = "can be imported again"
+            if not row.files:
+                text += " (its files are gone; a new download comes back in)"
+            print(compress.row_line(row, text), file=ctx.out, flush=True)
+    if ctx.json:
+        print(json.dumps({"results": results, "receipt": None}, ensure_ascii=False,
+                         separators=(",", ":")), file=ctx.out)
+    return DONE
+
+
 VERBS = (
     Verb("list", _list, "Your library, numbered by title, with each wallpaper's id and alias.", "library"),
     Verb("workshop", _workshop, "Workshop downloads that are not in your pool yet, numbered, including ones "
@@ -135,4 +310,8 @@ VERBS = (
     Verb("scan", _scan, "Looks for new Workshop downloads now.", "library"),
     Verb("compress", _compress, "Builds the compressed textures that make wallpapers load faster and use "
          "less video memory.", "library"),
+    Verb("add", _add, "Brings wallpapers into the pool: checks them, compresses them and registers them.",
+         "library"),
+    Verb("untrash", _untrash, "Lifts that block so a wallpaper can be imported again; it does not bring "
+         "deleted files back.", "library"),
 )

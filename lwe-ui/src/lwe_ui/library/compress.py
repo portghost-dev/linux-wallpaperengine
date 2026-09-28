@@ -17,10 +17,10 @@ class Result(NamedTuple):
     disk: int
 
 
-def compress_one(row: catalog.Row) -> Result:
-    """Encode the row's uncached textures, owned by the folder they live in (a preset's base).
-    kind is "compressed", "already", "nothing" or "missing"."""
-    d = catalog.render_dir(row.id)
+def compress_one(row: catalog.Row, *, folder: str | None = None) -> Result:
+    """Encode the uncached textures in folder, by default the one the row renders from (a preset's
+    base), owned by that folder. kind is "compressed", "already", "nothing" or "missing"."""
+    d = catalog.render_dir(row.id) if folder is None else folder
     if not d:
         return Result("missing", 0, 0, 0, 0)
     if row.type in ("video", "web"):
@@ -40,8 +40,13 @@ def size(b: int) -> str:
     return f"{round(b / 10**6)} MB" if b < 10**9 else f"{b / 10**9:.2f} GB"
 
 
-def result_line(row: catalog.Row, result: Result) -> str:
+def row_line(row: catalog.Row, text: str) -> str:
+    """The row's title and id, padded to 28 columns, a space, then text."""
     label = f"{row.title} ({row.id})"
+    return f"{label:<28} {text}"
+
+
+def result_text(row: catalog.Row, result: Result) -> str:
     if result.kind == "compressed":
         text = f"textures {size(result.before)} before, {size(result.after)} after"
         if result.failed == 1:
@@ -54,7 +59,11 @@ def result_line(row: catalog.Row, result: Result) -> str:
         text = f"{row.type or 'scene'}, nothing to compress"
     else:
         text = "files missing, nothing to compress"
-    return f"{label:<28} {text}"
+    return text
+
+
+def result_line(row: catalog.Row, result: Result) -> str:
+    return row_line(row, result_text(row, result))
 
 
 def written(result: Result) -> bool:

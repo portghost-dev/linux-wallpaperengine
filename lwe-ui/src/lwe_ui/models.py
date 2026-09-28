@@ -42,6 +42,8 @@ from .engine import push
 from .engine.resolve import (_conf_true, _identity_dir, _wallpapers_dir, effective_speed, resolve_fit,
                              resolve_fullscreen_behavior, resolve_show_args, resolved_tuning,
                              split_playlist_parts)
+from .library import actions
+from .library.catalog import _is_present, _scan_dir_ids, library_ids
 from .library_order import LibraryOrderModel
 from .storage import lock, meta, paths, playlists, rules, settings, tags, wp
 
@@ -66,70 +68,6 @@ def _sandboxed() -> bool:
     scan, pgrep, systemd, nvidia-smi - then report nothing found, so a test can never read
     the machine's live daemon. Absent in production, where every probe runs."""
     return os.environ.get("LWE_SANDBOX") == "1"
-
-
-def _scan_dir_ids(wallpapers_dir: str) -> list[str]:
-    """Immediate subdirectory names of WALLPAPERS_DIR (each is a wallpaper id). Tolerant."""
-    out: list[str] = []
-    try:
-        with os.scandir(wallpapers_dir) as it:
-            for entry in it:
-                try:
-                    # dot-dirs are never wallpapers (.import-<wid> is the importer's
-                    # staging area; showing it mid-copy made a half-tree approvable)
-                    if entry.is_dir() and not entry.name.startswith("."):
-                        out.append(entry.name)
-                except OSError:
-                    continue
-    except (OSError, ValueError):
-        return []
-    return out
-
-
-def _is_present(wid: str, wallpapers_dir: str, dir_ids: set[str]) -> bool:
-    """True if the wallpaper's render source exists on disk.
-
-    Most wallpapers render from WALLPAPERS_DIR/<id>/. A bg!=id PRESET (dependency+preset) has no
-    dir of its own - its render source is the base's dir, recorded as BG in its committed
-    wp/<id>.conf. So presence = a same-named dir OR a committed conf whose BG dir resolves.
-    (Pre-migration, before any wp/<id>.conf exists, a preset reads as not-present until migrated.)
-    """
-    if wid in dir_ids:
-        return True
-    try:
-        cfg = wp.load(wid)
-    except Exception:
-        return False
-    bg = str(cfg.get("BG", "") or "")
-    if not bg:
-        return False
-    cand = bg if os.path.isabs(bg) else os.path.join(wallpapers_dir, bg)
-    return os.path.isdir(cand)
-
-
-def library_ids() -> list[str]:
-    """Grid membership: disk presence defines membership. On-disk wallpapers get a card;
-    `good`-but-absent ids are surfaced as broken; `bad` ids are excluded even while their
-    dir is still on disk (a copy-mode trash deletes the tree asynchronously, and the card
-    must leave the grid at trash time, not when the rm finishes). Sorted, deduped."""
-    dir_ids = set(_scan_dir_ids(_wallpapers_dir()))
-    try:
-        good = tags.good_ids()
-    except Exception:
-        good = set()
-    try:
-        review = tags.review_ids()
-    except Exception:
-        review = set()
-    try:
-        bad = {r["id"] for r in tags.load() if r.get("id") and r.get("state") == "bad"}
-    except Exception:
-        bad = set()
-    # review ids join the grid even without a library dir (a reference-policy import
-    # renders from the workshop tree via its wp-conf BG, same as bg!=id presets)
-    ids = (dir_ids - bad) | good | review
-    ids.discard("")
-    return sorted(ids)
 
 
 class _Row:
@@ -1332,15 +1270,11 @@ class Backend(QObject):
             return
         title = self._model.title_of(wid)
         try:
-            tags.set_state(wid, title, "good")
+            actions.approve(wid, title)
         except Exception:
             return
         self.refresh()
         self.settingsChanged.emit()
-        try:
-            self._sync_engine()
-        except Exception:
-            pass
 
     @Slot(str)
     def trashWallpaper(self, wid: str) -> None:
