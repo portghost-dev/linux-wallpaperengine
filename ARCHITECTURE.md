@@ -345,9 +345,11 @@ is to be the daemon API's reference client and the system's owner:
   would read from the file on that row's keys (the layer, which status does not report, from its process
   environment; a value given as a launch flag never counts); one tap restarts the service in place for
   every row that is pending.
-  The same three switches can be chosen per wallpaper in the scene editor's `Quality and
-  memory` rule; a chosen value rides the show and the engine resolves it at scene load, an
-  absent one inherits the engine's launch value (the flag when given, else the environment).
+  Per wallpaper, the scene editor's `Quality and memory` rule sets the two clamp numbers
+  (`Resolution clamp` and `Effect clamp`, picked or typed, 0 or below saved as 0) and the texture
+  compression and detail switches; a chosen value rides the show and the engine resolves it at
+  scene load, an absent one inherits the engine's launch value (the flag when given, else the
+  environment).
 - It **writes overrides sparsely**: a per-wallpaper conf carries only what the user set or
   the wallpaper declares; a present key pins, an absent key inherits the global, so a
   default shipped later reaches every wallpaper that never chose otherwise.

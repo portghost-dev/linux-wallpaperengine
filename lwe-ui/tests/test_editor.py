@@ -204,28 +204,70 @@ class TestEditorAgainstRealScene(unittest.TestCase):
             self.assertFalse(hasattr(e, gone), f"editor.{gone} must not exist any more")
 
     def test_quality_rows_store_sparse_overrides(self) -> None:
-        """The three quality keys behave like Scaling: a value pins, Global deletes."""
+        """A clamp row stores its typed number and Global deletes it; texture compression and detail
+        behave like Scaling: a value pins, Global deletes."""
         e = self.editor
         e.open(self.wid)
-        self.assertTrue(e.setRenderResolutionValue("sharpfx"))
+        self.assertTrue(e.setClampValue("SSFACTOR", "1.5"))
         self.assertTrue(e.setBoolOverride("TEXCOMP", "false"))
         self.assertTrue(e.setTextureDetailValue("full"))
-        self.assertEqual(self._live("RENDER_RESOLUTION"), "sharpfx")
+        self.assertEqual(self._live("SSFACTOR"), "1.5")
         self.assertEqual(self._live("TEXCOMP"), "false")
         self.assertEqual(self._live("TEXTURE_DETAIL"), "full")
-        self.assertEqual(e.renderResolutionValue(), "sharpfx")
+        self.assertEqual(e.clampValue("SSFACTOR"), "1.5")
         self.assertEqual(e.texcompValue(), "false")
         self.assertEqual(e.textureDetailValue(), "full")
-        self.assertFalse(e.setRenderResolutionValue("half"), "an unknown state is refused")
+        self.assertTrue(e.setClampValue("SSFACTOR", "-1"))
+        self.assertEqual(self._live("SSFACTOR"), "0.0", "at or below 0 is no cap")
         self.assertFalse(e.setTextureDetailValue("medium"))
-        self.assertTrue(e.setRenderResolutionValue(""))
+        self.assertTrue(e.setClampValue("SSFACTOR", ""))
         self.assertTrue(e.setBoolOverride("TEXCOMP", ""))
         self.assertTrue(e.setTextureDetailValue(""))
-        for key in ("RENDER_RESOLUTION", "TEXCOMP", "TEXTURE_DETAIL"):
+        for key in ("SSFACTOR", "TEXCOMP", "TEXTURE_DETAIL"):
             self.assertEqual(self._live(key), "<MISSING>", f"{key}: Global deletes the key")
-        self.assertEqual(e.globalDefaultFor("RENDER_RESOLUTION"), "Full clamping")
+        self.assertEqual(e.clampValue("SSFACTOR"), "")
+        self.assertEqual(e.globalDefaultFor("SSFACTOR"), "1")
         self.assertEqual(e.globalDefaultFor("TEXCOMP"), "on")
         self.assertEqual(e.globalDefaultFor("TEXTURE_DETAIL"), "Automatic")
+
+    def test_clamp_rows_read_the_word_and_global_keeps_the_marker(self) -> None:
+        """A word-only file shows its numbers; Global then writes the KEY= marker, which inherits."""
+        from lwe_ui.storage import wp
+        wp.update_set(self.wid, {"RENDER_RESOLUTION": "sharpfx"})
+        e = self.editor
+        e.open(self.wid)
+        self.assertEqual((e.clampValue("SSFACTOR"), e.clampValue("CLAMPCOMPOSITES")), ("1", "0"))
+        self.assertTrue(e.setClampValue("SSFACTOR", ""))
+        self.assertEqual(self._live("SSFACTOR"), "", "the marker line SSFACTOR= stays")
+        self.assertIn("SSFACTOR=", self._conf_text().splitlines())
+        self.assertEqual(e.clampValue("SSFACTOR"), "")
+        self.assertEqual(e.clampValue("CLAMPCOMPOSITES"), "0", "the other key still reads the word")
+
+    def test_clamp_rows_refuse_what_the_engine_cannot_take(self) -> None:
+        """Above 4, not a finite number, or another key: commitFailed and nothing written."""
+        e = self.editor
+        e.open(self.wid)
+        failures: list = []
+        e.commitFailed.connect(lambda keys: failures.append(list(keys)))
+        before = self._conf_text() if self._wp_exists() else None
+        for key, text in (("SSFACTOR", "5"), ("SSFACTOR", "nan"), ("CLAMPCOMPOSITES", "inf"),
+                          ("CLAMPCOMPOSITES", "wide"), ("VOLUME", "1")):
+            with self.subTest(key=key, text=text):
+                self.assertFalse(e.setClampValue(key, text))
+        self.assertEqual(failures, [["SSFACTOR"], ["SSFACTOR"], ["CLAMPCOMPOSITES"], ["CLAMPCOMPOSITES"],
+                                    ["VOLUME"]])
+        self.assertEqual(self._conf_text() if self._wp_exists() else None, before, "nothing is written")
+
+    def test_the_global_entry_shows_the_saved_clamp_numbers(self) -> None:
+        """globalDefaultFor gives the settings numbers, a sharpfx global's effect clamp as 0."""
+        from lwe_ui.storage import settings
+        e = self.editor
+        e.open(self.wid)
+        settings.update({"RENDER_RESOLUTION": "sharpfx", "SSFACTOR": None, "CLAMPCOMPOSITES": None})
+        self.assertEqual((e.globalDefaultFor("SSFACTOR"), e.globalDefaultFor("CLAMPCOMPOSITES")), ("1", "0"),
+                         "an old settings file with only the word reads its numbers")
+        settings.update({"SSFACTOR": 0.5})
+        self.assertEqual(e.globalDefaultFor("SSFACTOR"), "0.5")
 
     def test_revert_restores_session_start_values(self) -> None:
         """Revert restores every marked key to its session-start value; marks clear."""

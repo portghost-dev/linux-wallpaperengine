@@ -27,6 +27,7 @@ Run: PYTHONPATH=src python3 tests/test_bridge_sync.py
 import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import contextlib
 import copy
+import functools
 import dataclasses
 import os
 import shutil
@@ -324,7 +325,7 @@ class BridgeSyncTest(unittest.TestCase):
         popup = deck_popup.DeckPopupBridge(self.backend)
         popup.syncCurrent("111")
         for name, first, second, bridge in (
-                ("editor", lambda: ed.setScalingValue("fill"), lambda: ed.setRenderResolutionValue("sharpfx"), ed),
+                ("editor", lambda: ed.setScalingValue("fill"), lambda: ed.setClampValue("SSFACTOR", "0.5"), ed),
                 ("deck", lambda: popup.setScaling("stretch"), lambda: popup.setScaling("fit"), popup)):
             with self.subTest(door=name):
                 with self.engine(status(speed=0.0)) as rec:
@@ -346,7 +347,8 @@ class BridgeSyncTest(unittest.TestCase):
         ed.open("111")
         popup = deck_popup.DeckPopupBridge(self.backend)
         popup.syncCurrent("111")
-        return (("editor", ed, lambda changes: ed._persist_draft("", changes), ed.setRenderResolutionValue, "sharpfx"),
+        return (("editor", ed, lambda changes: ed._persist_draft("", changes),
+                 functools.partial(ed.setClampValue, "SSFACTOR"), "0.5"),
                 ("deck", popup, popup._write_wp, popup.setScaling, "stretch"))
 
     def test_a_burst_carries_every_edit_so_an_earlier_speed_goes_out_after_the_reshow(self) -> None:
@@ -408,7 +410,7 @@ class BridgeSyncTest(unittest.TestCase):
                 time.sleep(0.005)
 
         for name, first, second in (
-                ("editor", lambda: ed.setScalingValue("fill"), lambda: ed.setRenderResolutionValue("sharpfx")),
+                ("editor", lambda: ed.setScalingValue("fill"), lambda: ed.setClampValue("SSFACTOR", "0.5")),
                 ("deck", lambda: popup.setScaling("stretch"), lambda: popup.setScaling("fit"))):
             with self.subTest(door=name):
                 with self.engine(status()) as rec:

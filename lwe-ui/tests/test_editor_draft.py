@@ -658,20 +658,22 @@ class TestEditorSurfaceContract(unittest.TestCase):
         self.assertNotIn("Rectangle { width: parent.width; height: 1; color: Theme.border }", tail)
 
     def test_L3_quality_rule_sits_above_metadata(self) -> None:
-        """The order is the rule: Quality and memory, its three rows, then Metadata; each
-        row is a PDrop on its conf key with a Global entry and the Settings page's names."""
+        """The order is the rule: Quality and memory, its four rows, then Metadata; each row is a
+        PDrop on its conf key with a Global entry, and the old clamp row's three words are gone."""
         text = self._editor_text()
         q = text.index('PRule { label: "Quality and memory" }')
         m = text.index('PRule { label: "Metadata" }')
         self.assertLess(q, m)
         block = text[q:m]
-        for label, key in (("Clamp resolution", "RENDER_RESOLUTION"),
+        for label, key in (("Resolution clamp", "SSFACTOR"), ("Effect clamp", "CLAMPCOMPOSITES"),
                            ("Texture compression", "TEXCOMP"), ("Texture detail", "TEXTURE_DETAIL")):
             self.assertIn(f'label: "{label}"', block)
             self.assertIn(f'ckey: "{key}"', block)
             self.assertIn(f'editor.globalDefaultFor("{key}")', block)
-        for entry in ("Full clamping", "Full res effects", "All full res", "Automatic", "Full"):
+        for entry in ("Automatic", "Full"):
             self.assertIn(f'"{entry}"', block)
+        for gone in ("Full clamping", "Full res effects", "All full res"):
+            self.assertNotIn(gone, block)
 
     def test_29a_object_exclusion_header_layout(self) -> None:
         """Row 1 = title + caption LEFT, filter + bulk toggle RIGHT. Row 2 = pill + search."""

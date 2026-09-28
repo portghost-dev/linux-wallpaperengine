@@ -1753,24 +1753,45 @@ Rectangle {
                     Item { width: parent.width; height: Theme.spacingMd }
                     PRule { label: "Quality and memory" }
                     PRow {
-                        label: "Clamp resolution"
+                        label: "Resolution clamp"
                         PDrop {
-                            ckey: "RENDER_RESOLUTION"
-                            readonly property var names: ({ "screen": "Full clamping",
-                                                            "sharpfx": "Full res effects",
-                                                            "wallpaper": "All full res" })
+                            compact: true
+                            editable: true
+                            ckey: "SSFACTOR"
                             entries: [
-                                { label: "Global (" + (view.rev, editor.globalDefaultFor("RENDER_RESOLUTION")) + ")",
+                                { label: "Global (" + (view.rev, editor.globalDefaultFor("SSFACTOR")) + ")",
                                   value: "" },
-                                { label: "Full clamping", value: "screen" },
-                                { label: "Full res effects", value: "sharpfx" },
-                                { label: "All full res", value: "wallpaper" }
+                                { label: "0", value: "0" },
+                                { label: "1", value: "1" },
+                                { label: "2", value: "2" }
                             ]
                             display: {
-                                var v = (view.rev, editor.renderResolutionValue());
-                                return v === "" ? "Global" : (names[v] || "Global");
+                                var v = (view.rev, editor.clampValue("SSFACTOR"));
+                                return v === "" ? "Global" : v;
                             }
-                            onPicked: function(v) { editor.setRenderResolutionValue(v) }
+                            onPicked: function(v) { editor.setClampValue("SSFACTOR", v) }
+                            onEntered: function(t) { editor.setClampValue("SSFACTOR", t) }
+                        }
+                    }
+                    PRow {
+                        label: "Effect clamp"
+                        PDrop {
+                            compact: true
+                            editable: true
+                            ckey: "CLAMPCOMPOSITES"
+                            entries: [
+                                { label: "Global (" + (view.rev, editor.globalDefaultFor("CLAMPCOMPOSITES")) + ")",
+                                  value: "" },
+                                { label: "0", value: "0" },
+                                { label: "1", value: "1" },
+                                { label: "2", value: "2" }
+                            ]
+                            display: {
+                                var v = (view.rev, editor.clampValue("CLAMPCOMPOSITES"));
+                                return v === "" ? "Global" : v;
+                            }
+                            onPicked: function(v) { editor.setClampValue("CLAMPCOMPOSITES", v) }
+                            onEntered: function(t) { editor.setClampValue("CLAMPCOMPOSITES", t) }
                         }
                     }
                     PRow {

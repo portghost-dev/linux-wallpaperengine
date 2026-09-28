@@ -51,6 +51,7 @@ editing id.
 """
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import replace
 from typing import Any
@@ -74,6 +75,7 @@ from .discovery import objects as objects_disc
 from .discovery import project as project_disc
 from .discovery import properties as properties_disc
 from .engine import push
+from .engine.daemon_unit import _fmt_dial
 from .models import resolve_fit
 from .storage import atomic, lock, meta, paths, settings, tier_a, wp
 from .wp_session import SESSION
@@ -984,18 +986,30 @@ class EditorBridge(QObject):
             return False
         return self._set_key("SCALING", s or None)
 
-    @Slot(result=str)
-    def renderResolutionValue(self) -> str:
-        return self._present_str("RENDER_RESOLUTION")
+    @Slot(str, result=str)
+    def clampValue(self, key: str) -> str:
+        """The clamp number this wallpaper's file gives `key`, its own or its word's; "" when it inherits."""
+        value = wp.clamp_values(self._present, self._wid).get(str(key), (None, ""))[0]
+        return "" if value is None else _fmt_dial(value)
 
-    @Slot(str, result=bool)
-    def setRenderResolutionValue(self, value: str) -> bool:
-        """"" is the explicit unset (menu entry Global) and DELETES the key; else store it."""
-        s = str(value or "").strip()
-        if s and s not in C.RENDER_RESOLUTIONS:
-            self.commitFailed.emit(["RENDER_RESOLUTION"])
+    @Slot(str, str, result=bool)
+    def setClampValue(self, key: str, text: str) -> bool:
+        """"" follows the global again (the KEY= marker where the file's word would decide); a finite
+        number at or below 0 stores 0, one within 0 to 4 stores itself; anything else fails."""
+        key, s = str(key), str(text or "").strip()
+        if key not in C.CLAMP_KEYS:
+            self.commitFailed.emit([key])
             return False
-        return self._set_key("RENDER_RESOLUTION", s or None)
+        if s == "":
+            return self._set_key(key, wp.clamp_unset_changes(self._present, key)[key])
+        try:
+            value = float(s)
+        except ValueError:
+            value = math.nan
+        if not math.isfinite(value) or value > 4.0:
+            self.commitFailed.emit([key])
+            return False
+        return self._set_key(key, 0.0 if value <= 0.0 else value)
 
     @Slot(result=str)
     def textureDetailValue(self) -> str:
@@ -1196,9 +1210,8 @@ class EditorBridge(QObject):
             return "on" if self._setting("MOUSE_DEFAULT", False) else "off"
         if key == "AUTOMUTE":
             return "on" if self._setting("AUTOMUTE_DEFAULT", True) else "off"
-        if key == "RENDER_RESOLUTION":
-            names = dict(zip(C.RENDER_RESOLUTIONS, ("Full clamping", "Full res effects", "All full res")))
-            return names.get(str(self._setting("RENDER_RESOLUTION", "screen")), "Full clamping")
+        if key in C.CLAMP_KEYS:
+            return _fmt_dial(float(self._setting(key, 1.0)))
         if key == "TEXCOMP":
             v = self._setting("ENGINE_TEXCOMP", True)
             return "on" if str(v).strip().lower() in ("1", "true", "yes", "on") else "off"
