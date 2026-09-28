@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from . import paths
 
 _ORDER = ("foreign", "settings", "theme", "discovery", "playlists", "overrides", "tags", "meta",
-          "rules", "records", "env", "sync")
+          "rules", "records", "env", "sync", "marker")
 LOCK_WAIT_S = 2.0
 _POLL_S = 0.001
 

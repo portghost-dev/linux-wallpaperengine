@@ -36,7 +36,7 @@ def get(id: str) -> dict:
 
 # update is load-modify-save; the import worker (dep markers) and the GUI thread
 # (verdicts, favorites) both call it - same hazard tags.py locked, same lock (B10 M2)
-_WRITE_LOCK = __import__("threading").Lock()
+_WRITE_LOCK = __import__("threading").RLock()
 
 
 @contextmanager
@@ -53,10 +53,13 @@ def _locked() -> Iterator[None]:
         _WRITE_LOCK.release()
 
 
+held = _locked
+
+
 def update(id: str, patch: dict[str, Any]) -> None:
     """Merge `patch` into the entry for `id` and atomically save the whole map.
     Thread-safe."""
-    with _locked():
+    with held():
         _update_locked(id, patch)
 
 
@@ -64,7 +67,7 @@ def modify(id: str, fn: Callable[[dict[str, Any]], dict[str, Any] | None]) -> di
     """Under the meta locks: fn receives a copy of the entry for `id`, read fresh, and returns
     the keys to merge into it; the map is saved only when there are any. Returns the entry as
     it stands after the call. Thread-safe."""
-    with _locked():
+    with held():
         data = load()
         entry = data.get(id)
         entry = dict(entry) if isinstance(entry, dict) else {}
@@ -153,7 +156,7 @@ def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
     if not patches:
         return True
     try:
-        with lock.held("meta"):
+        with held():
             m = load()
             for wid, patch in patches.items():
                 m[wid] = {**m.get(wid, {}), **patch}
