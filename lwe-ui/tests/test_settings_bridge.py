@@ -263,7 +263,8 @@ def _test_service_restart_keys_regenerate_the_env_file(sb) -> None:
 
 def _test_a_clamp_number_saves_through_write_env_or_is_refused(sb) -> None:
     """A clamp number saves and rebuilds engine-env through write_env alone; a number at or
-    below 0 saves 0; above 4, nan and inf are refused with nothing written."""
+    below 0 saves 0 and exactly 4 saves 4; above 4, nan, inf and a spelling the command door
+    refuses (0_1, a padded 1.5, an Arabic-Indic digit) are refused with nothing written."""
     env_path = paths.config_dir() / "engine-env"
     calls = []
     real_env, real_files = daemon_unit.write_env, daemon_unit.write_files
@@ -275,14 +276,34 @@ def _test_a_clamp_number_saves_through_write_env_or_is_refused(sb) -> None:
         assert "LWE_SSFACTOR=1.5" in env_path.read_text(encoding="utf-8").splitlines()
         assert sb.commit("SSFACTOR", -1) is True
         assert settings.load()["SSFACTOR"] == 0.0
+        assert sb.commit("CLAMPCOMPOSITES", "4") is True
+        assert settings.load()["CLAMPCOMPOSITES"] == 4.0
         before = (paths.settings_file().read_bytes(), env_path.read_bytes())
-        for bad in (5, "nan", "inf"):
-            assert sb.commit("SSFACTOR", bad) is False, bad
+        for key in C.CLAMP_KEYS:
+            for bad in (5, "nan", "inf", "0_1", " 1.5 ", "١"):
+                assert sb.commit(key, bad) is False, (key, bad)
         assert (paths.settings_file().read_bytes(), env_path.read_bytes()) == before
     finally:
         daemon_unit.write_env, daemon_unit.write_files = real_env, real_files
     assert "write_env" in calls and "write_files" not in calls, calls
-    print("OK a clamp number saves through write_env alone; 0 or below saves 0; 5, nan and inf are refused")
+    print("OK a clamp number saves through write_env alone; 0 or below saves 0 and 4 saves 4; 5, nan, inf, "
+          "0_1, a padded 1.5 and an Arabic-Indic digit are refused")
+
+
+def _test_a_refused_clamp_number_says_why(sb) -> None:
+    """A clamp number above 4 is refused as outside the allowed range; nan, inf, a spelling the command
+    door refuses and a word are refused as not a number."""
+    fails = []
+    sb.commitFailed.connect(lambda keys, reason: fails.append((list(keys), reason)))
+    for key, bad, reason in (("SSFACTOR", "5", "That value is outside the allowed range."),
+                             ("CLAMPCOMPOSITES", 4.5, "That value is outside the allowed range."),
+                             ("SSFACTOR", "nan", "That is not a number."),
+                             ("CLAMPCOMPOSITES", "inf", "That is not a number."),
+                             ("SSFACTOR", "0_1", "That is not a number."),
+                             ("CLAMPCOMPOSITES", "wide", "That is not a number.")):
+        assert sb.commit(key, bad) is False, (key, bad)
+        assert fails[-1] == ([key], reason), (key, bad, fails[-1])
+    print("OK a refused clamp number says why: above 4 is out of range, anything else is not a number")
 
 
 def _test_every_float_door_refuses_a_number_that_is_not_finite(sb) -> None:
@@ -551,6 +572,7 @@ def main() -> None:
     _test_save_first_and_a_refused_verb_says_so(sb)
     _test_service_restart_keys_regenerate_the_env_file(sb)
     _test_a_clamp_number_saves_through_write_env_or_is_refused(sb)
+    _test_a_refused_clamp_number_says_why(sb)
     _test_every_float_door_refuses_a_number_that_is_not_finite(sb)
     _test_an_int_door_refuses_a_number_that_is_not_finite(sb)
     _test_restart_pending_and_restart_read_the_machine_never_the_sandbox(sb, b)

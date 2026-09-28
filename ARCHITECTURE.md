@@ -350,7 +350,9 @@ is to be the daemon API's reference client and the system's owner:
   (`Resolution clamp` and `Effect clamp`, picked or typed, 0 or below saved as 0) and the texture
   compression and detail switches; a chosen value rides the show and the engine resolves it at
   scene load, an absent one inherits the engine's launch value (the flag when given, else the
-  environment).
+  environment), and in a wallpaper file that carries a `RENDER_RESOLUTION` word a clamp with no
+  line of its own sends the number that word stands for (Global there writes a `KEY=` marker,
+  which inherits).
 - It **writes overrides sparsely**: a per-wallpaper conf carries only what the user set or
   the wallpaper declares; a present key pins, an absent key inherits the global, so a
   default shipped later reaches every wallpaper that never chose otherwise.

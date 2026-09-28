@@ -35,6 +35,7 @@ ComboBox {
         }
         TextInput {
             id: entry
+            property string openedWith: ""
             anchors.fill: parent
             anchors.leftMargin: cb.compact ? 8 : 10
             anchors.rightMargin: cb.compact ? 8 : 10
@@ -43,14 +44,16 @@ ComboBox {
             font.pixelSize: cb.font.pixelSize
             verticalAlignment: Text.AlignVCenter
             selectByMouse: true
-            onVisibleChanged: if (visible) { text = cb.entryText; selectAll(); forceActiveFocus(); }
-            // commit on Enter or blur; Escape reverts to store truth and commits nothing
-            Keys.onReturnPressed: { cb.editing = false; cb.entered(entry.text); }
-            Keys.onEnterPressed: { cb.editing = false; cb.entered(entry.text); }
+            onVisibleChanged: if (visible) { text = cb.entryText; openedWith = text; selectAll(); forceActiveFocus(); }
+            // commit a changed text on Enter or blur; Escape reverts to store truth and commits nothing
+            Keys.onReturnPressed: { cb.editing = false; if (entry.text !== entry.openedWith) cb.entered(entry.text); }
+            Keys.onEnterPressed: { cb.editing = false; if (entry.text !== entry.openedWith) cb.entered(entry.text); }
+            Keys.onShortcutOverride: function(event) { event.accepted = event.key === Qt.Key_Escape }
             Keys.onEscapePressed: cb.editing = false
             onActiveFocusChanged: if (!activeFocus && cb.editing) {
                 cb.editing = false;
-                cb.entered(entry.text);
+                if (entry.text !== entry.openedWith)
+                    cb.entered(entry.text);
             }
         }
     }

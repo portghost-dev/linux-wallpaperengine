@@ -51,7 +51,6 @@ editing id.
 """
 from __future__ import annotations
 
-import math
 import os
 from dataclasses import replace
 from typing import Any
@@ -71,6 +70,7 @@ from PySide6.QtCore import (
 
 from . import api_client
 from . import constants as C
+from .cli.values import UsageError, parse_factor
 from .discovery import objects as objects_disc
 from .discovery import project as project_disc
 from .discovery import properties as properties_disc
@@ -994,22 +994,19 @@ class EditorBridge(QObject):
 
     @Slot(str, str, result=bool)
     def setClampValue(self, key: str, text: str) -> bool:
-        """"" follows the global again (the KEY= marker where the file's word would decide); a finite
-        number at or below 0 stores 0, one within 0 to 4 stores itself; anything else fails."""
-        key, s = str(key), str(text or "").strip()
+        """"" follows the global again; any other text stores the number parse_factor reads, or fails."""
+        key, s = str(key), str(text or "")
         if key not in C.CLAMP_KEYS:
             self.commitFailed.emit([key])
             return False
-        if s == "":
+        if s.strip() == "":
             return self._set_key(key, wp.clamp_unset_changes(self._present, key)[key])
         try:
-            value = float(s)
-        except ValueError:
-            value = math.nan
-        if not math.isfinite(value) or value > 4.0:
+            value = parse_factor(s)
+        except UsageError:
             self.commitFailed.emit([key])
             return False
-        return self._set_key(key, 0.0 if value <= 0.0 else value)
+        return self._set_key(key, value)
 
     @Slot(result=str)
     def textureDetailValue(self) -> str:

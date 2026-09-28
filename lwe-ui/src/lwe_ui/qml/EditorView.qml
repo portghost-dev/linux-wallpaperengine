@@ -378,6 +378,7 @@ Rectangle {
         }
         TextInput {
             id: chipEdit
+            property string openedWith: ""
             visible: chip.editing
             anchors.fill: parent
             anchors.leftMargin: 8
@@ -387,18 +388,21 @@ Rectangle {
             color: Theme.textPrimary
             font.pixelSize: Theme.fontMeta
             selectByMouse: true
+            Keys.onShortcutOverride: function(event) { event.accepted = event.key === Qt.Key_Escape }
             Keys.onEscapePressed: { chip.editing = false; chipEdit.focus = false }
             onEditingFinished: {
                 if (!chip.editing)
                     return;
                 chip.editing = false;
-                chip.entered(chipEdit.text);
+                if (chipEdit.text !== chipEdit.openedWith)
+                    chip.entered(chipEdit.text);
             }
         }
         HoverHandler { cursorShape: Qt.IBeamCursor }
         TapHandler {
             onTapped: {
                 // click the box and type; a blank entry returns the row to what it inherits
+                chipEdit.openedWith = chipEdit.text;
                 chip.editing = true;
                 chipEdit.forceActiveFocus();
                 chipEdit.selectAll();
@@ -425,6 +429,7 @@ Rectangle {
                     onTriggered: {
                         if (String(modelData.value) === "@entry") {
                             chipEdit.text = chip.text;
+                            chipEdit.openedWith = chip.text;
                             chip.editing = true;
                             chipEdit.forceActiveFocus();
                             chipEdit.selectAll();
@@ -472,6 +477,7 @@ Rectangle {
         }
         TextInput {
             id: dropEdit
+            property string openedWith: ""
             visible: drop.editing
             anchors.left: parent.left
             anchors.leftMargin: drop.compact ? 8 : 10
@@ -481,12 +487,14 @@ Rectangle {
             color: Theme.textPrimary
             font.pixelSize: drop.compact ? Theme.fontMeta : Theme.fontControl
             selectByMouse: true
+            Keys.onShortcutOverride: function(event) { event.accepted = event.key === Qt.Key_Escape }
             Keys.onEscapePressed: { drop.editing = false; dropEdit.focus = false }
             onEditingFinished: {
                 if (!drop.editing)
                     return;
                 drop.editing = false;
-                drop.entered(dropEdit.text);
+                if (dropEdit.text !== dropEdit.openedWith)
+                    drop.entered(dropEdit.text);
             }
         }
         Item {
@@ -522,6 +530,7 @@ Rectangle {
                 onTapped: {
                     if (drop.editable) {
                         dropEdit.text = drop.display;
+                        dropEdit.openedWith = drop.display;
                         drop.editing = true;
                         dropEdit.forceActiveFocus();
                         dropEdit.selectAll();
@@ -1094,6 +1103,9 @@ Rectangle {
                                                     font.family: Theme.monoFamily
                                                     selectByMouse: true
                                                     text: parent.parent.storedHex
+                                                    Keys.onShortcutOverride: function(event) {
+                                                        event.accepted = event.key === Qt.Key_Escape
+                                                    }
                                                     Keys.onEscapePressed: {
                                                         hexInput.text = Qt.binding(function() {
                                                             return hexWell.parent.storedHex; });
@@ -1146,6 +1158,9 @@ Rectangle {
                                                 selectByMouse: true
                                                 text: String(propRow.modelData.value === undefined
                                                              ? "" : propRow.modelData.value)
+                                                Keys.onShortcutOverride: function(event) {
+                                                    event.accepted = event.key === Qt.Key_Escape
+                                                }
                                                 Keys.onEscapePressed: {
                                                     propText.text = String(propRow.modelData.value === undefined
                                                                            ? "" : propRow.modelData.value);
@@ -1898,6 +1913,9 @@ Rectangle {
                                     color: Theme.textPrimary
                                     font.pixelSize: Theme.fontMeta
                                     selectByMouse: true
+                                    Keys.onShortcutOverride: function(event) {
+                                        event.accepted = event.key === Qt.Key_Escape
+                                    }
                                     Keys.onEscapePressed: {
                                         addInput.text = "";
                                         tagFlow.adding = false;

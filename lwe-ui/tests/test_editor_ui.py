@@ -78,6 +78,12 @@ def main() -> None:
             json.dump({"type": "scene", "file": "scene.json", "title": name, "general": {"properties": {
                 "myslider": {"type": "slider", "value": val, "min": 0, "max": 1, "step": 0.01, "text": "Slide"},
             }}}, open(os.path.join(wd, "project.json"), "w"))
+        wd = os.path.join(str(paths.default_wallpapers_dir()), "synthwp_props")
+        os.makedirs(wd, exist_ok=True)
+        json.dump({"type": "scene", "file": "scene.json", "title": "synthwp_props", "general": {"properties": {
+            "mytint": {"type": "color", "value": "1 0 0", "text": "Tint"},
+            "mylabel": {"type": "textinput", "value": "hi", "text": "Label"},
+        }}}, open(os.path.join(wd, "project.json"), "w"))
         settings.ensure_exists()
 
         app = QGuiApplication.instance() or QGuiApplication(["t"])
@@ -315,6 +321,154 @@ def main() -> None:
         assert texts == {"editorVolumeChip": "120", "editorWpVolumeChip": "7"}, \
             f"the wallpaper's Volume chip must read its own VOLUME, not ENGINE_VOLUME: {texts}"
         print("OK volume chips - VOLUME 7 beside ENGINE_VOLUME 120 reads 7 on the wallpaper row")
+
+        # the editable boxes: an entry opened by a tap and left with the text it opened with, by
+        # Enter or by moving to another box, sends nothing; a changed entry saves; each clamp row's
+        # menu pick and display are its own key's
+        from PySide6.QtCore import QPointF, Qt
+
+        def walk(item):
+            yield item
+            for child in item.childItems():
+                yield from walk(child)
+
+        def box(key):
+            return next(i for i in walk(win.contentItem())
+                        if i.property("ckey") == key and i.property("editable") is not None)
+
+        def entry(item):
+            return next(i for i in walk(item) if i.metaObject().className().startswith("QQuickTextInput"))
+
+        def tap(item):
+            flick = item.parentItem()
+            while not flick.metaObject().className().startswith("QQuickFlickable"):
+                flick = flick.parentItem()
+            top = item.mapToItem(flick.property("contentItem"), QPointF(0, 0)).y()
+            flick.setProperty("contentY", max(0.0, top - 40.0))
+            QTest.qWait(60)
+            at = item.mapToScene(QPointF(15, item.height() / 2)).toPoint()
+            QTest.mouseClick(win, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, at)
+            QTest.qWait(60)
+
+        editor.open("synthwp_lo")
+        win.requestActivate()
+        QTest.qWait(200)
+        failures, edits = [], []
+        editor.commitFailed.connect(lambda keys: failures.append(list(keys)))
+        editor.edited.connect(lambda: edits.append(1))
+        ss, cc, fps = box("SSFACTOR"), box("CLAMPCOMPOSITES"), box("ENGINE_FPS")
+        conf = paths.wp_file("synthwp_lo")
+        tap(ss)
+        opened = (ss.property("editing"), entry(ss).property("text"), entry(ss).hasActiveFocus())
+        tap(cc)
+        QTest.keyClick(win, Qt.Key.Key_Return)
+        tap(ss)
+        QTest.keyClick(win, Qt.Key.Key_Return)
+        tap(fps)
+        QTest.keyClick(win, Qt.Key.Key_Return)
+        QTest.qWait(80)
+        left = [b.property("editing") for b in (ss, cc, fps)]
+        assert opened == (True, "Global", True), opened
+        assert (left, failures, edits, conf.exists(), editor._reshow.isActive()) == \
+            ([False] * 3, [], [], False, False), (left, failures, edits, conf.exists())
+        assert editor.setClampValue("SSFACTOR", "1.5")
+        QTest.qWait(750)
+        failures.clear()
+        edits.clear()
+        before = conf.read_text(encoding="utf-8")
+        tap(ss)
+        opened = entry(ss).property("text")
+        QTest.keyClick(win, Qt.Key.Key_Return)
+        QTest.qWait(80)
+        assert opened == editor.clampValue("SSFACTOR"), (opened, editor.clampValue("SSFACTOR"))
+        assert (failures, edits, editor._reshow.isActive(), conf.read_text(encoding="utf-8")) == \
+            ([], [], False, before), "an own number entered unchanged saves nothing and re-shows nothing"
+        tap(ss)
+        entry(ss).setProperty("text", "2")
+        QTest.keyClick(win, Qt.Key.Key_Return)
+        QTest.qWait(80)
+        assert (_wp.load_set("synthwp_lo").get("SSFACTOR"), edits, editor._reshow.isActive()) == (2.0, [1], True)
+        print("OK clamp and FPS boxes - a tap left or entered unchanged sends nothing; a changed entry saves")
+        QMetaObject.invokeMethod(cc, "picked", Qt.ConnectionType.DirectConnection, Q_ARG("QString", "1"))
+        QMetaObject.invokeMethod(ss, "picked", Qt.ConnectionType.DirectConnection, Q_ARG("QString", "0"))
+        QTest.qWait(80)
+        stored = _wp.load_set("synthwp_lo")
+        assert (stored.get("SSFACTOR"), stored.get("CLAMPCOMPOSITES")) == (0.0, 1.0), stored
+        assert editor.setClampValue("CLAMPCOMPOSITES", "0.5")
+        QTest.qWait(80)
+        shown = (ss.property("display"), cc.property("display"))
+        assert shown == (editor.clampValue("SSFACTOR"), editor.clampValue("CLAMPCOMPOSITES")) \
+            and shown[0] != shown[1], shown
+        print("OK clamp rows - each menu pick saves and each box displays its own key")
+
+        # the value chips: a tap, then a move away with nothing typed, sends nothing; a typed change
+        # saves. Escape in an open entry cancels it and the view stays on the editor; with no entry
+        # open, Escape still leaves the editor
+        from PySide6.QtQuick import QQuickItem
+        view_item = win.findChild(QQuickItem, "editorView")
+
+        def chip(key):
+            return next(i for i in walk(win.contentItem())
+                        if i.property("ckey") == key and i.property("entries") is not None
+                        and i.property("editable") is None)
+
+        zoom, speed = chip("FIT_ZOOM"), chip("ENGINE_TIMESCALE")
+        assert editor.setFit("zoom", "1.25")
+        QTest.qWait(80)
+        failures.clear()
+        for item in (zoom, speed):
+            tap(item)
+            opened = (item.property("editing"), entry(item).hasActiveFocus())
+            view_item.forceActiveFocus()
+            QTest.qWait(80)
+            assert (opened, item.property("editing")) == ((True, True), False), (item.property("ckey"), opened)
+        assert (_wp.load_set("synthwp_lo").get("FIT_ZOOM"), failures) == (1.25, []), \
+            (_wp.load_set("synthwp_lo").get("FIT_ZOOM"), failures)
+        tap(zoom)
+        entry(zoom).setProperty("text", "1.5")
+        QTest.keyClick(win, Qt.Key.Key_Return)
+        QTest.qWait(80)
+        assert _wp.load_set("synthwp_lo").get("FIT_ZOOM") == 1.5
+        assert editor.setFit("zoom", "1.75")
+        tap(zoom)
+        view_item.forceActiveFocus()
+        QTest.qWait(80)
+        assert _wp.load_set("synthwp_lo").get("FIT_ZOOM") == 1.75, "the entry's last typed text is not sent again"
+        print("OK value chips - a tap left with nothing typed sends nothing; a typed change saves")
+        plus = next(i for i in walk(view_item) if i.property("text") == "+")
+        tags_before = editor.tags()
+        for item, key in ((ss, "SSFACTOR"), (zoom, "FIT_ZOOM"), (plus.parentItem(), "tags")):
+            kept = _wp.load_set("synthwp_lo").get(key) if key != "tags" else tags_before
+            tap(item)
+            typed = entry(item)
+            typed.setProperty("text", "1.9")
+            opened = typed.hasActiveFocus()
+            QTest.keyClick(win, Qt.Key.Key_Escape)
+            QTest.qWait(80)
+            now = _wp.load_set("synthwp_lo").get(key) if key != "tags" else editor.tags()
+            assert (opened, typed.hasActiveFocus(), now, win.property("currentView")) == \
+                (True, False, kept, "editor"), (key, opened, now, win.property("currentView"))
+        editor.open("synthwp_props")
+        QTest.qWait(300)
+        inputs = [i for i in walk(view_item) if i.metaObject().className().startswith("QQuickTextInput")]
+        hex_entry = next(i for i in inputs if str(i.property("text")).startswith("#"))
+        text_entry = next(i for i in inputs if i.property("text") == "hi")
+        for typed, text in ((hex_entry, "#00ff00"), (text_entry, "changed")):
+            tap(typed)
+            opened = typed.hasActiveFocus()
+            typed.setProperty("text", text)
+            QTest.keyClick(win, Qt.Key.Key_Escape)
+            QTest.qWait(80)
+            assert win.property("currentView") == "editor", (text, "Escape left the editor")
+            assert (opened, typed.hasActiveFocus()) == (True, False), (text, opened)
+        assert "PROP_mytint" not in _wp.load_set("synthwp_props"), "Escape in the hex entry commits nothing"
+        view_item.forceActiveFocus()
+        QTest.keyClick(win, Qt.Key.Key_Escape)
+        QTest.qWait(80)
+        assert win.property("currentView") == "library", "with no entry open, Escape leaves the editor"
+        win.setProperty("currentView", "editor")
+        QTest.qWait(80)
+        print("OK Escape - an open entry cancels and the editor stays; with no entry open it leaves the editor")
     finally:
         for k, v in orig.items():
             if v is None:

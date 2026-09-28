@@ -372,6 +372,8 @@ import QtQuick
 import QtQuick.Window
 import "."
 Window { width: 1400; height: 620; visible: true
+         property int escapes: 0
+         Shortcut { sequence: "Escape"; onActivated: escapes++ }
          SettingsView { anchors.fill: parent } }
 ''', QUrl.fromLocalFile(str(_QML_DIR / "host.qml")))
         win = comp.create()
@@ -734,8 +736,63 @@ Window { width: 1400; height: 620; visible: true
                                          Q_ARG("QString", "5"))
                 QTest.qWait(50)
                 assert (settings.load()[key], combo.property("failed")) == (1.5, True)
+                other = "CLAMPCOMPOSITES" if key == "SSFACTOR" else "SSFACTOR"
+                kept = settings.load()[other]
+                QMetaObject.invokeMethod(combo, "activated", Qt.ConnectionType.DirectConnection,
+                                         Q_ARG("int", 2))
+                QTest.qWait(120)
+                assert (settings.load()[key], settings.load()[other]) == (2.0, kept), \
+                    f"{key}: the menu's 2 commits its own key only"
+            # an entry opened and left with the text it opened with, by Enter or by moving to
+            # another entry, commits nothing; a changed entry saves
+            ss_combo, cc_combo = (next(i for i in walk(engine_page) if i.property("objectName") == name)
+                                  for name in ("settingsSsfactorCombo", "settingsClampCompositesCombo"))
+            ss_entry = next(i for i in walk(ss_combo) if i.metaObject().className().startswith("QQuickTextInput"))
+            changed, failed = [], []
+            sb.changed.connect(lambda: changed.append(1))
+            sb.commitFailed.connect(lambda keys, reason: failed.append(list(keys)))
+            assert sb.commit("SSFACTOR", 1.5) is True
+            win.requestActivate()
+            QTest.qWait(150)
+            changed.clear()
+            before = paths.settings_file().read_bytes()
+            for finish in ("Enter", "another entry"):
+                ss_combo.setProperty("editing", True)
+                QTest.qWait(60)
+                opened = (ss_entry.property("text"), ss_entry.hasActiveFocus())
+                if finish == "another entry":
+                    cc_combo.setProperty("editing", True)
+                    QTest.qWait(60)
+                QTest.keyClick(win, Qt.Key.Key_Return)
+                QTest.qWait(80)
+                left = (ss_combo.property("editing"), cc_combo.property("editing"))
+                assert (opened, left, changed, failed) == (("1.5", True), (False, False), [], []), \
+                    f"{finish}: {(opened, left, changed, failed)}"
+            assert paths.settings_file().read_bytes() == before, "an unchanged entry writes nothing"
+            ss_combo.setProperty("editing", True)
+            QTest.qWait(60)
+            ss_entry.setProperty("text", "2")
+            QTest.keyClick(win, Qt.Key.Key_Return)
+            QTest.qWait(120)
+            assert (settings.load()["SSFACTOR"], bool(changed), failed) == (2.0, True, []), \
+                (settings.load()["SSFACTOR"], changed, failed)
+            # Escape in an open entry cancels it before the window's Escape shortcut can act; with
+            # no entry open the shortcut still acts
+            ss_combo.setProperty("editing", True)
+            QTest.qWait(60)
+            ss_entry.setProperty("text", "3")
+            QTest.keyClick(win, Qt.Key.Key_Escape)
+            QTest.qWait(80)
+            assert (ss_combo.property("editing"), settings.load()["SSFACTOR"], win.property("escapes")) == \
+                (False, 2.0, 0), (ss_combo.property("editing"), settings.load()["SSFACTOR"], win.property("escapes"))
+            view.forceActiveFocus()
+            QTest.keyClick(win, Qt.Key.Key_Escape)
+            QTest.qWait(80)
+            assert win.property("escapes") == 1, "with no entry open the window's Escape shortcut acts"
         assert ran == [], f"the clamp rows ran a subprocess: {ran}"
-        print("OK clamp rows: 0, 1 and 1.5 read back from the store; a typed 1.5 saves, 5 is refused")
+        print("OK clamp rows: 0, 1 and 1.5 read back from the store; a typed 1.5 saves, 5 is refused; "
+              "the menu's 2 commits its own key; an unchanged entry commits nothing and a changed one saves; "
+              "Escape in an open entry cancels it before the window's shortcut")
     finally:
         for k, v in orig.items():
             if v is None:

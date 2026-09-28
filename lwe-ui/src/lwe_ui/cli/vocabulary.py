@@ -492,7 +492,7 @@ SETTINGS: tuple[dict[str, str], ...] = (
         "engine": "",
         "scope": "global and per wallpaper",
         "when": "next wallpaper",
-        "what": "Goes quiet while another app plays sound.",
+        "what": "Goes quiet while another app plays sound or is fullscreen.",
         "ptr": "AUTOMUTE_DEFAULT, AUTOMUTE",
     },
     {

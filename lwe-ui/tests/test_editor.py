@@ -244,19 +244,28 @@ class TestEditorAgainstRealScene(unittest.TestCase):
         self.assertEqual(e.clampValue("CLAMPCOMPOSITES"), "0", "the other key still reads the word")
 
     def test_clamp_rows_refuse_what_the_engine_cannot_take(self) -> None:
-        """Above 4, not a finite number, or another key: commitFailed and nothing written."""
+        """Above 4, not a finite number, a spelling the command door refuses (0_1, a padded 1.5, an
+        Arabic-Indic digit), or another key: commitFailed and nothing written."""
         e = self.editor
         e.open(self.wid)
         failures: list = []
         e.commitFailed.connect(lambda keys: failures.append(list(keys)))
         before = self._conf_text() if self._wp_exists() else None
-        for key, text in (("SSFACTOR", "5"), ("SSFACTOR", "nan"), ("CLAMPCOMPOSITES", "inf"),
-                          ("CLAMPCOMPOSITES", "wide"), ("VOLUME", "1")):
+        spellings = [(key, text) for key in ("SSFACTOR", "CLAMPCOMPOSITES") for text in ("0_1", " 1.5 ", "١")]
+        for key, text in [("SSFACTOR", "5"), ("SSFACTOR", "nan"), ("CLAMPCOMPOSITES", "inf"),
+                          ("CLAMPCOMPOSITES", "wide"), ("VOLUME", "1")] + spellings:
             with self.subTest(key=key, text=text):
                 self.assertFalse(e.setClampValue(key, text))
         self.assertEqual(failures, [["SSFACTOR"], ["SSFACTOR"], ["CLAMPCOMPOSITES"], ["CLAMPCOMPOSITES"],
-                                    ["VOLUME"]])
+                                    ["VOLUME"]] + [[key] for key, _text in spellings])
         self.assertEqual(self._conf_text() if self._wp_exists() else None, before, "nothing is written")
+
+    def test_a_clamp_of_exactly_4_saves_4(self) -> None:
+        """4 is the largest clamp the engine takes, so typing it stores it."""
+        e = self.editor
+        e.open(self.wid)
+        self.assertTrue(e.setClampValue("SSFACTOR", "4"))
+        self.assertEqual(self._live("SSFACTOR"), "4.0")
 
     def test_the_global_entry_shows_the_saved_clamp_numbers(self) -> None:
         """globalDefaultFor gives the settings numbers, a sharpfx global's effect clamp as 0."""

@@ -39,6 +39,7 @@ from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
 
 from . import api_client
 from . import constants as C
+from .cli.values import UsageError, parse_factor
 from .engine import daemon_unit, push
 from .storage import backup, paths, rules, settings, tags
 
@@ -93,7 +94,8 @@ class SettingsBridge(QObject):
         return self._load().get(str(key), spec["default"])
 
     def _validate(self, key: str, value: Any) -> tuple[bool, Any, str]:
-        """(ok, coerced, reason). Range/choice truth comes from SETTINGS_SCHEMA only."""
+        """(ok, coerced, reason). Range/choice truth comes from SETTINGS_SCHEMA; a clamp number is read
+        as the command door reads it (cli/values.py::parse_factor)."""
         spec = C.SETTINGS_SCHEMA.get(key)
         if spec is None:
             return False, None, "That setting does not exist."
@@ -113,11 +115,17 @@ class SettingsBridge(QObject):
                     return False, None, "That value is outside the allowed range."
                 return True, n, ""
             if t == "float":
+                if key in C.CLAMP_KEYS:
+                    try:
+                        return True, parse_factor(str(value)), ""
+                    except UsageError:
+                        f = float(str(value))
+                        if math.isfinite(f) and f > spec["max"]:
+                            return False, None, "That value is outside the allowed range."
+                        return False, None, "That is not a number."
                 f = float(str(value).strip())
                 if not math.isfinite(f):
                     return False, None, "That is not a number."
-                if key in C.CLAMP_KEYS and f <= 0.0:
-                    f = 0.0
                 lo, hi = spec.get("min"), spec.get("max")
                 if lo is not None and f < lo:
                     return False, None, "That value is outside the allowed range."
