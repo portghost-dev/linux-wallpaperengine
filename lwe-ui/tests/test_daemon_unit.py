@@ -354,6 +354,9 @@ class DaemonUnitTest(unittest.TestCase):
         self.assertIn("MemoryHigh=2G", unit)
         self.assertIn("MemoryMax=3G", unit)
         self.assertIn("WantedBy=graphical-session.target", unit)
+        service = unit.split("[Service]\n", 1)[1].split("\n[", 1)[0]
+        self.assertIn("RuntimeDirectory=lwe-engine\n", service)
+        self.assertIn("WorkingDirectory=%t/lwe-engine\n", service)
 
     def test_restart_pending_compares_only_the_settings_own_keys(self) -> None:
         """The clamp reaches the engine only at service start, so each clamp row's restart verb

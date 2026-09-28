@@ -46,6 +46,8 @@ After=graphical-session.target
 [Service]
 Type=simple
 EnvironmentFile=%h/.config/lwe/{env_name}
+RuntimeDirectory=lwe-engine
+WorkingDirectory=%t/lwe-engine
 ExecStart="{engine_bin}" --daemon $LWE_ENGINE_ARGS
 Restart=always
 RestartSec=5

@@ -312,3 +312,26 @@ AssetLocatorUniquePtr WallpaperEngine::Assets::setupAssetLocator (
 
     return std::make_unique<AssetLocator> (std::move (container));
 }
+
+AssetLocatorUniquePtr
+WallpaperEngine::Assets::setupWebAssetLocator (const std::string& bg, const std::filesystem::path& assetsPath) {
+    auto container = std::make_unique<Container> ();
+
+    const std::filesystem::path path = bg;
+
+    container->mount (path, "/");
+
+    if (std::error_code packageError; std::filesystem::exists (path / "scene.pkg", packageError)) {
+	try {
+	    container->mount (path / "scene.pkg", "/");
+	} catch (std::runtime_error&) { }
+    }
+
+    try {
+	container->mount (assetsPath, "/");
+    } catch (std::runtime_error&) {
+	sLog.exception ("Cannot find a valid assets folder, resolved to ", assetsPath);
+    }
+
+    return std::make_unique<AssetLocator> (std::move (container));
+}

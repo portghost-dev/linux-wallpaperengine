@@ -34,4 +34,5 @@ using AssetLocatorUniquePtr = std::unique_ptr<AssetLocator>;
 
 AssetLocatorUniquePtr
 setupAssetLocator (const std::string& bg, const std::filesystem::path& assetsPath, Media::MediaSource& mediaSource);
+AssetLocatorUniquePtr setupWebAssetLocator (const std::string& bg, const std::filesystem::path& assetsPath);
 }

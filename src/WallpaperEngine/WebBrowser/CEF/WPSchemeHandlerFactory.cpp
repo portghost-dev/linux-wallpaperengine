@@ -20,15 +20,13 @@ CefRefPtr<CefResourceHandler> WPSchemeHandlerFactory::Create (
 ) {
     CEF_REQUIRE_IO_THREAD ();
 
-    // lazy parse, once, on CEF's IO thread. setupAssetLocator only builds fresh
+    // lazy parse, once, on CEF's IO thread. setupWebAssetLocator only builds fresh
     // containers and ProjectParser is pure, so this is safe off the engine thread.
     std::lock_guard lock (this->m_loadMutex);
 
     if (this->m_project == nullptr) {
 	try {
-	    auto locator = WallpaperEngine::Assets::setupAssetLocator (
-		this->m_path.string (), this->m_assetsPath, this->m_mediaSource
-	    );
+	    auto locator = WallpaperEngine::Assets::setupWebAssetLocator (this->m_path.string (), this->m_assetsPath);
 	    const auto json = WallpaperEngine::Data::JSON::parseLenient (locator->readString ("project.json"));
 	    this->m_project = WallpaperEngine::Data::Parsers::ProjectParser::parse (json, std::move (locator));
 	} catch (const std::exception& e) {
