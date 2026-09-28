@@ -94,7 +94,7 @@ def load() -> dict[str, Any]:
     p = paths.settings_file()
     if p.exists():
         try:
-            text = p.read_text(encoding="utf-8")
+            text = p.read_bytes().decode("utf-8")
         except OSError:
             text = ""
     raw = migrate_raw(tier_a.parse(text))
@@ -241,6 +241,10 @@ def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
             foreign.emitted(r, 1)
         else:
             r["dropped"].append({"kind": "preserved-key", "id": key, "reason": "not a key this format can hold"})
+    for key in [k for k, v in flat.items() if "\r" in v]:
+        del flat[key]
+        r["dropped"].append({"kind": "setting", "file": MEMBER, "key": key,
+                             "reason": "the value holds a line break the archive cannot carry"})
     z.writestr(MEMBER, tier_a.serialize(flat, header="lwe settings backup"))
 
 

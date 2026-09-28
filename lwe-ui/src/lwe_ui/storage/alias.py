@@ -19,7 +19,7 @@ def claims() -> dict[str, list[str]]:
         if not paths.is_safe_wid(wid):
             continue
         try:
-            name = tier_a.parse(conf.read_text(encoding="utf-8")).get("ALIAS", "").strip()
+            name = tier_a.parse(conf.read_bytes().decode("utf-8")).get("ALIAS", "").strip()
         except (OSError, ValueError):
             continue
         if name:

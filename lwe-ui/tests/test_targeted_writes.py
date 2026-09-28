@@ -21,6 +21,7 @@ import sys
 import tempfile
 import types
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -382,6 +383,49 @@ class TargetedWriteTest(unittest.TestCase):
         self.assertEqual(settings.modify(lambda _current: {}), {})
         self.assertEqual(settings.modify(lambda _current: None), {})
         self.assertFalse(p.exists(), "a modify that changes nothing writes no settings file")
+
+    def test_an_edit_keeps_the_values_the_panel_showed_around_a_lone_cr(self) -> None:
+        settings.ensure_exists()
+        p = paths.settings_file()
+        p.write_bytes((raw(p).replace("ENGINE_FPS=60\n", "") + "ENGINE_FPS=30\rENGINE_VOLUME=50\n").encode("utf-8"))
+        shown = settings.load()["ENGINE_VOLUME"]
+        settings.update({"ENGINE_FPS": 45})
+        self.assertEqual((shown, settings.load()["ENGINE_VOLUME"]), (15, 15))
+        paths.playlist_file("cr").write_bytes(b'NAME=Cr\rMEMBERS="1 2"\nMODE=shuffle\n')
+        shown = playlists.members("cr")
+        playlists.update("cr", {"NAME": "Renamed"})
+        self.assertEqual((shown, playlists.members("cr")), ([], []))
+
+    def test_the_export_leaves_out_a_value_with_a_line_break_and_names_it(self) -> None:
+        from lwe_ui.storage import backup
+        settings.ensure_exists()
+        paths.wp_file("7").write_bytes(b"BG=7\nSKIP=1\rX=2\n")
+        archive = self.home / "export.lwebackup"
+        r = backup.export_to(archive)
+        self.assertEqual(r["errors"], [])
+        self.assertEqual(r["dropped"], [{"kind": "override-key", "file": "wp/7.conf", "key": "SKIP",
+                                         "reason": "the value holds a line break the archive cannot carry"}])
+        with zipfile.ZipFile(archive) as z:
+            self.assertEqual(tier_a.parse(z.read("wp/7.conf").decode("utf-8")), {"BG": "7"})
+        self.assertTrue(backup.snapshot({"errors": [], "notes": []}), "the pre-restore snapshot is written")
+
+    def test_a_value_the_panel_wrote_with_a_double_quote_is_never_refused(self) -> None:
+        wf = paths.wp_file("300")
+        for value in ('say "hi"', 'a "b" \\ "c"', 'end "q"\\'):
+            with self.subTest(value=value):
+                wf.write_text("BG=300\n", encoding="utf-8")
+                wp.update_set("300", {"PROP_title": value})
+                wp.update_set("300", {"PROP_title": "second"})
+                self.assertEqual(raw(wf), "BG=300\nPROP_title=second\n")
+
+    def test_an_unset_is_refused_when_any_assignment_of_its_key_runs_on(self) -> None:
+        body = 'BG=300\nPROP_k="one\ntwo"\nPROP_k=2\n'
+        wf = paths.wp_file("300")
+        wf.write_text(body, encoding="utf-8")
+        with self.assertRaises(ValueError):
+            wp.update_set("300", {"PROP_k": None})
+        self.assertEqual(raw(wf), body)
+        self._bash_accepts(wf)
 
 
 if __name__ == "__main__":

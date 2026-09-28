@@ -377,6 +377,11 @@ def _backup_text(wid: str, text: str, cfg: dict[str, Any], r: dict[str, Any] | N
                 foreign.emitted(r, 1)
         elif r is not None:
             r["dropped"].append({"kind": "preserved-key", "id": f"{wid}:{key}", "reason": "not a key this format can hold"})
+    for key in [k for k, v in kept.items() if "\r" in v]:
+        del kept[key]
+        if r is not None:
+            r["dropped"].append({"kind": "override-key", "file": f"{PREFIX}{wid}.conf", "key": key,
+                                 "reason": "the value holds a line break the archive cannot carry"})
     return tier_a.serialize(kept, header=f"lwe wallpaper override {wid} (Tier A)")
 
 
@@ -390,7 +395,7 @@ def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
         if not paths.is_safe_wid(wid):
             continue
         try:
-            z.writestr(f"{PREFIX}{wid}.conf", _backup_text(wid, conf.read_text(encoding="utf-8"), cfg, r, kept_aside))
+            z.writestr(f"{PREFIX}{wid}.conf", _backup_text(wid, conf.read_bytes().decode("utf-8"), cfg, r, kept_aside))
         except (OSError, ValueError) as exc:
             r["errors"].append({"file": conf.name, "reason": str(exc)})
             continue

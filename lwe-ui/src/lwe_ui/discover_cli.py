@@ -24,7 +24,7 @@ def _wallpapers_dir() -> Path:
     sf = paths.settings_file()
     if sf.is_file():
         try:
-            parsed = tier_a.parse(sf.read_text(encoding="utf-8"))
+            parsed = tier_a.parse(sf.read_bytes().decode("utf-8"))
             val = parsed.get("WALLPAPERS_DIR", "")
             if val:
                 return Path(val)

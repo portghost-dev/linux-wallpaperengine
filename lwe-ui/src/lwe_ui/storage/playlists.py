@@ -93,7 +93,7 @@ def load(slug: str) -> dict[str, Any]:
     p = paths.playlist_file(slug)
     if p.exists():
         try:
-            text = p.read_text(encoding="utf-8")
+            text = p.read_bytes().decode("utf-8")
         except OSError:
             text = ""
     raw, _ = migrate.apply_tables("playlists", tier_a.parse(text))
