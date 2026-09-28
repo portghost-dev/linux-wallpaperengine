@@ -2,6 +2,8 @@
 #include <catch2/matchers/catch_matchers_exception.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <fstream>
+#include <iterator>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -219,4 +221,9 @@ TEST_CASE ("helpText starts with the unsupported notice and has an entry for eve
 	CAPTURE (row.name);
 	CHECK_THAT (text, ContainsSubstring ("\n  " + row.name + " <"));
     }
+
+    std::ifstream file (LWE_SOURCE_DIR "/lwe-ui/tests/fixtures/help/engine-debug.txt", std::ios::binary);
+    REQUIRE (file.is_open ());
+    const std::string fixture { std::istreambuf_iterator<char> (file), std::istreambuf_iterator<char> () };
+    CHECK (text == fixture);
 }

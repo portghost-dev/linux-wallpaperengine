@@ -17,6 +17,8 @@ _PAGES = {
     "video memory": help_text.RESCLAMP,
 }
 
+DEBUG_TIMEOUT_S = 10
+
 
 def _debug(ctx: Context) -> int:
     from ...engine import daemon_unit
@@ -26,7 +28,7 @@ def _debug(ctx: Context) -> int:
         ctx.error("lwe help --debug needs the engine, which was not found")
         return REFUSED
     try:
-        result = subprocess.run([engine, "--help-debug"], capture_output=True, timeout=10,
+        result = subprocess.run([engine, "--help-debug"], capture_output=True, timeout=DEBUG_TIMEOUT_S,
                                 encoding="utf-8", errors="replace")
     except (OSError, subprocess.TimeoutExpired):
         result = None

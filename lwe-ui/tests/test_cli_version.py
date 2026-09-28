@@ -15,6 +15,7 @@ import io
 import os
 import shutil
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -81,6 +82,17 @@ class CliVersionTest(unittest.TestCase):
         self.assertEqual(os.readlink(version.STAMP_FILE), "../../../VERSION")
         self.assertEqual(version.STAMP_FILE.resolve(), REPO_VERSION.resolve())
 
+    def test_the_build_takes_its_version_from_the_stamp_file_which_is_one_line(self) -> None:
+        with (TESTS.parent / "pyproject.toml").open("rb") as handle:
+            pyproject = tomllib.load(handle)
+        build = pyproject.get("tool", {}).get("setuptools", {})
+        self.assertIn("version", pyproject["project"].get("dynamic", []))
+        self.assertEqual(build.get("dynamic", {}).get("version"), {"file": "src/lwe_ui/VERSION"})
+        self.assertIn("VERSION", build.get("package-data", {}).get("lwe_ui", []))
+        first, _, rest = REPO_VERSION.read_bytes().partition(b"\n")
+        self.assertRegex(first, rb"\A[0-9]+\.[0-9]+\.[0-9]+\r?\Z")
+        self.assertRegex(rest, rb"\A(\r?\n)*\r?\Z")
+
     def test_each_stamp_file_edge_case_gives_its_listed_result(self) -> None:
         version = self._version()
         stamp_file = ROOT / "edge" / "VERSION"
@@ -118,6 +130,19 @@ class CliVersionTest(unittest.TestCase):
                 self.assertEqual(code, 1)
                 self.assertEqual(out, b"")
                 self.assertEqual(err, expected)
+
+    def test_near_miss_senders_are_refused_against_a_stamp_of_1_2_0(self) -> None:
+        version = self._version()
+        stamp_file = ROOT / "near" / "VERSION"
+        stamp_file.parent.mkdir()
+        stamp_file.write_bytes(b"1.2.0\n")
+        with mock.patch.object(version, "STAMP_FILE", stamp_file):
+            self.assertEqual(self._main(["probe"], "1.2.0"), (0, b"ran\n", b""))
+            for sender in ("1.2", "1.2.1", "1.3.0", "1.2.0-rc1", " 1.2.0", "1.2.0 "):
+                with self.subTest(sender=sender):
+                    line = (f"The engine is {sender} but the panel is 1.2.0; "
+                            "install both from one build (bash install.sh).")
+                    self.assertEqual(self._main(["probe"], sender), (1, b"", line.encode("utf-8") + b"\n"))
 
     def test_help_is_exempt_and_no_sender_skips_the_check(self) -> None:
         version = self._version()

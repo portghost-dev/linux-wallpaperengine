@@ -19,6 +19,38 @@ if [ ! -f CMakeLists.txt ] || [ ! -d lwe-ui ]; then
     exit 1
 fi
 
+(
+    LC_ALL=C
+    first="" rest="" shown="" nul="" in_first=1
+    if [ -f VERSION ]; then
+        while IFS= read -r -d '' -n 1 byte; do
+            if [ -z "$byte" ]; then
+                nul=1
+                if [ -n "$in_first" ]; then shown+="\\x00"; fi
+            elif [ -z "$in_first" ]; then
+                rest+="$byte"
+            elif [ "$byte" = $'\n' ]; then
+                in_first=""
+            else
+                first+="$byte"
+                case "$byte" in
+                    "\\" | "'") shown+="\\$byte" ;;
+                    $'\t') shown+="\\t" ;;
+                    $'\r') shown+="\\r" ;;
+                    [[:print:]]) shown+="$byte" ;;
+                    *) printf -v code '\\x%02x' "'$byte"; shown+="$code" ;;
+                esac
+            fi
+        done < VERSION
+    fi
+    first_pattern=$'^[0-9]+\\.[0-9]+\\.[0-9]+\r?$'
+    rest_pattern=$'^(\r?\n)*\r?$'
+    if [ -n "$nul" ] || [[ ! $first =~ $first_pattern ]] || [[ ! $rest =~ $rest_pattern ]]; then
+        echo "install.sh: VERSION must hold one line such as 1.2.0 (found: '$shown')" >&2
+        exit 1
+    fi
+) || exit 1
+
 # The texture compressor is built through ispc, which targets x86-64. The rest
 # of the engine is not known to work anywhere else because it has never been
 # tested there, so refuse early instead of failing deep in the build.

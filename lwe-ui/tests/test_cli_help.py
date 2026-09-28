@@ -15,6 +15,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "help"
 ROOT = Path(tempfile.mkdtemp(prefix="lwe-cli-help-"))
@@ -87,6 +88,31 @@ class CliHelpTest(unittest.TestCase):
     def test_debug_with_an_engine_that_fails_is_refused(self) -> None:
         self._engine("exit 1\n")
         code, out, err = self._help("--debug")
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertEqual(err, "lwe help --debug: the engine did not print its switch list\n")
+
+    def test_debug_with_the_rows_but_not_the_header_is_refused(self) -> None:
+        rows = ROOT / "rows.txt"
+        rows.write_text((FIXTURES / "engine-debug.txt").read_text(encoding="utf-8").split("\n\n", 1)[1], encoding="utf-8")
+        self._engine(f"exec /bin/cat '{rows}'\n")
+        code, out, err = self._help("--debug")
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertEqual(err, "lwe help --debug: the engine did not print its switch list\n")
+
+    def test_debug_with_the_list_and_a_non_zero_exit_is_refused(self) -> None:
+        self._engine(f"/bin/cat '{FIXTURES / 'engine-debug.txt'}'\nexit 3\n")
+        code, out, err = self._help("--debug")
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+        self.assertEqual(err, "lwe help --debug: the engine did not print its switch list\n")
+
+    def test_debug_with_an_engine_that_outlives_the_timeout_is_refused(self) -> None:
+        from lwe_ui.cli.verbs import help as help_verb
+        self._engine(f"/bin/cat '{FIXTURES / 'engine-debug.txt'}'\nexec /bin/sleep 5\n")
+        with mock.patch.object(help_verb, "DEBUG_TIMEOUT_S", 0.5):
+            code, out, err = self._help("--debug")
         self.assertEqual(code, 1)
         self.assertEqual(out, "")
         self.assertEqual(err, "lwe help --debug: the engine did not print its switch list\n")
