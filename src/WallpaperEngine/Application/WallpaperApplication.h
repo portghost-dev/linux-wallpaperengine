@@ -249,6 +249,7 @@ private:
      *  touch a previous boot's record */
     bool m_bootHistoryArmed = false;
     BootGuard m_bootGuard;
+    void releaseHold (const std::string& cmd, const nlohmann::json& args, bool ok);
     bool apiRotationAdvance (std::string& error);
     [[nodiscard]] size_t apiRotationPick ();
 

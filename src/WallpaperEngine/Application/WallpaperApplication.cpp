@@ -536,8 +536,6 @@ void WallpaperApplication::advancePlaylist (
 
 	this->m_context.settings.general.screenBackgrounds[screen] = nextPath;
 	loaded = true;
-	// applyShowCore clears this as well: every other show passes through it
-	this->m_bootGuard.wallpaperShown ();
     } catch (const std::exception& e) {
 	sLog.error ("Failed to advance playlist on ", screen, ": ", e.what ());
     }
@@ -571,7 +569,7 @@ void WallpaperApplication::updatePlaylists () {
 	    continue;
 	}
 
-	if (now < playlist.nextSwitch) {
+	if (!this->m_bootGuard.playlistTimerMayAdvance (playlist.nextSwitch, now)) {
 	    continue;
 	}
 
@@ -1492,6 +1490,11 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
     }
 
     if (command.cmd == "next" || command.cmd == "prev") {
+	if (this->m_bootGuard.holdsShow (command.cmd, command.args)) {
+	    this->m_commandServer->respond (client, Api::CommandDispatcher::done (command.id, { { "held", true } }));
+	    return;
+	}
+
 	// transport verbs: ack-then-done like show - a heavy scene loads for seconds
 	const auto backEntry = Api::backTarget (this->lane (), this->playlistOf (this->lane ()));
 
@@ -1514,6 +1517,7 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 
 	// a boundary crossed since the last advance: the step lands on the new playlist
 	if (this->applyPendingSchedule ()) {
+	    this->releaseHold (command.cmd, command.args, true);
 	    this->m_commandServer->respond (
 		client, Api::CommandDispatcher::done (command.id, { { "id", this->lane ().current.id } })
 	    );
@@ -1556,6 +1560,8 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
 		ok = true;
 	    }
 	}
+
+	this->releaseHold (command.cmd, command.args, ok);
 
 	if (ok) {
 	    this->m_commandServer->respond (
@@ -2200,6 +2206,11 @@ void WallpaperApplication::rebuildForCurrentBackgrounds () {
 void WallpaperApplication::apiShow (
     int client, int64_t requestId, const std::string& backgroundId, const nlohmann::json& args
 ) {
+    if (this->m_bootGuard.holdsShow ("show", args)) {
+	this->m_commandServer->respond (client, Api::CommandDispatcher::done (requestId, { { "held", true } }));
+	return;
+    }
+
     const auto path = resolveLibraryBackground (backgroundId);
 
     if (!path.has_value ()) {
@@ -2255,6 +2266,7 @@ void WallpaperApplication::apiShow (
 	Api::restartCountdown (this->lane (), this->playlistOf (this->lane ()), std::chrono::steady_clock::now ());
     }
 
+    this->releaseHold ("show", args, true);
     this->m_commandServer->respond (client, Api::CommandDispatcher::done (requestId, { { "path", path->string () } }));
 }
 
@@ -2472,8 +2484,6 @@ bool WallpaperApplication::applyShowCore (
     }
 
     this->captureLook (this->lane (), args);
-    // advancePlaylist clears this as well: the legacy playlist timer does not pass through here
-    this->m_bootGuard.wallpaperShown ();
     return true;
 }
 
@@ -2650,28 +2660,16 @@ void WallpaperApplication::apiLanesSet (int client, int64_t requestId, const nlo
 	    }
 	}
 
-	auto slug = item.contains ("playlist") ? item["playlist"].get<std::string> () : lane.playlistSlug;
+	const auto slug = item.contains ("playlist") ? item["playlist"].get<std::string> () : lane.playlistSlug;
 	const bool enabled = item.contains ("enabled") ? item["enabled"].get<bool> () : lane.enabled;
 	const bool manual = item.value ("manual", false);
+	const auto before = lane.playlistSlug;
 
-	// with the schedule on, the slug is the clock's to choose: a policy push keeps the
-	// engine's binding, a manual switch holds until the next boundary
-	if (this->m_schedule.enabled && slug != lane.playlistSlug) {
-	    if (manual) {
-		this->m_schedule.held = true;
-		this->m_schedule.pending.clear ();
-	    } else {
-		sLog.out ("API: lanes-set playlist ", slug, " ignored: the schedule owns the lane");
-		slug = lane.playlistSlug;
-	    }
+	if (!Api::laneSet (lane, this->m_playlists, this->m_schedule, slug, enabled, manual, now)) {
+	    sLog.out ("API: lanes-set playlist ", slug, " ignored: the schedule owns the lane");
 	}
 
-	const bool rebind = slug != lane.playlistSlug;
-
-	// a fit-only push leaves the walk and its clock alone
-	if (rebind || enabled != lane.enabled) {
-	    this->bindLane (lane, slug, enabled, now);
-	}
+	const bool rebind = lane.playlistSlug != before;
 
 	if (item.contains ("fit") && item["fit"].is_object ()) {
 	    const auto& fit = item["fit"];
@@ -2687,6 +2685,7 @@ void WallpaperApplication::apiLanesSet (int client, int64_t requestId, const nlo
     }
 
     this->applyFitWindow ();
+    this->releaseHold ("lanes-set", args, true);
 
     nlohmann::json lanes = nlohmann::json::array ();
 
@@ -2700,19 +2699,7 @@ void WallpaperApplication::apiLanesSet (int client, int64_t requestId, const nlo
 void WallpaperApplication::bindLane (
     Api::Lane& lane, const std::string& slug, bool enabled, std::chrono::steady_clock::time_point now
 ) {
-    auto& playlist = this->playlist (slug);
-    const Api::Playlist incoming = playlist;
-
-    if (slug != lane.playlistSlug) {
-	// another playlist is another walk: nothing of the old cycle carries over
-	lane.playlistSlug = slug;
-	lane.frozenRemainingMs = -1;
-	lane.walk.clear ();
-	lane.nextCycle.clear ();
-	lane.cursor = -1;
-    }
-
-    Api::applySet (lane, playlist, incoming, enabled, now);
+    Api::bindLane (lane, slug, this->playlist (slug), enabled, now);
 }
 
 int WallpaperApplication::localMinute () {
@@ -2734,8 +2721,10 @@ void WallpaperApplication::tickSchedule () {
     }
 
     // a static playlist has no countdown to wait for: the switch lands at the boundary
-    if (!this->m_schedule.pending.empty () && this->m_schedule.pending != this->m_scheduleMissing
-	&& this->playlistOf (this->lane ()).order == "static" && this->m_releaseReason == ReleaseReason::Live) {
+    if (this->m_bootGuard.scheduleMayApply (
+	    this->m_releaseReason == ReleaseReason::Live, this->m_schedule, this->m_scheduleMissing,
+	    this->playlistOf (this->lane ())
+	)) {
 	this->applyPendingSchedule ();
     }
 }
@@ -3427,6 +3416,21 @@ void WallpaperApplication::markBootSurvived (bool cleanStop) {
     }
 }
 
+void WallpaperApplication::releaseHold (const std::string& cmd, const nlohmann::json& args, const bool ok) {
+    const auto now = std::chrono::steady_clock::now ();
+
+    if (!this->m_bootGuard.release (
+	    cmd, args, ok, this->lane (), this->playlistOf (this->lane ()), this->m_schedule, now
+	)) {
+	return;
+    }
+
+    for (auto& [_, playlist] : this->m_activePlaylists) {
+	const uint32_t delayMinutes = std::max<uint32_t> (1, playlist.definition.settings.delayMinutes);
+	playlist.nextSwitch = now + std::chrono::minutes (delayMinutes);
+    }
+}
+
 size_t WallpaperApplication::apiRotationPick () {
     return Api::pickNext (this->lane (), this->playlistOf (this->lane ()), this->m_playlistRng);
 }
@@ -3802,8 +3806,9 @@ void WallpaperApplication::tickApiRotation () {
     // released outputs = nothing to paint on; advancing would rebuild scenes (VRAM
     // resident again) into surfaces that do not exist. The clock keeps counting - an
     // overdue advance fires on the first tick after acquire.
-    if (this->m_releaseReason != ReleaseReason::Live
-	|| !Api::dueForAdvance (lane, playlist, std::chrono::steady_clock::now ())) {
+    if (!this->m_bootGuard.rotationMayAdvance (
+	    this->m_releaseReason == ReleaseReason::Live, lane, playlist, std::chrono::steady_clock::now ()
+	)) {
 	return;
     }
 

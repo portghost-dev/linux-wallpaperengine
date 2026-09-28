@@ -125,6 +125,8 @@ void seatOnCurrent (Lane& lane, const Playlist& playlist);
  *  countdown rules. The caller owns the binding: neither slug nor lane.playlistSlug is touched. */
 void applySet (Lane& lane, Playlist& playlist, const Playlist& incoming, bool enabled, Clock::time_point now);
 
+void bindLane (Lane& lane, const std::string& slug, Playlist& playlist, bool enabled, Clock::time_point now);
+
 /** True when the rotation timer should advance this lane now. Never for static. */
 bool dueForAdvance (const Lane& lane, const Playlist& playlist, Clock::time_point now);
 
@@ -133,7 +135,8 @@ int nextInSeconds (const Lane& lane, const Playlist& playlist, Clock::time_point
 /** The countdown in milliseconds, -1 when the lane has none; the deck anchors to this. */
 int64_t nextInMs (const Lane& lane, const Playlist& playlist, Clock::time_point now);
 
-/** A new wallpaper is a new play: the clock restarts, and a paused lane's frozen remainder becomes the full interval. */
+/** A new wallpaper is a new play: the clock restarts, and a paused lane's frozen remainder becomes the full interval.
+ */
 void restartCountdown (Lane& lane, const Playlist& playlist, Clock::time_point now);
 
 /** One boundary of the schedule: from `minute` of the local day, the lane plays `slug`. */
@@ -147,9 +150,9 @@ struct ScheduleEntry {
 struct Schedule {
     bool enabled = false;
     std::vector<ScheduleEntry> entries;
-    bool held = false;          /**< a manual switch is in force until the next boundary */
-    std::string pending;        /**< a boundary was crossed; applies when the countdown expires */
-    int lastMinute = -1;        /**< the local minute the tick last saw, for boundary detection */
+    bool held = false; /**< a manual switch is in force until the next boundary */
+    std::string pending; /**< a boundary was crossed; applies when the countdown expires */
+    int lastMinute = -1; /**< the local minute the tick last saw, for boundary detection */
 };
 
 /** The entry in force at `minute`: the latest boundary at or before it, wrapping to the last. -1 when none. */
@@ -170,11 +173,18 @@ void scheduleResume (Schedule& schedule, int downtimeMinutes);
 /** The same enabled flag and the same entries in the same order: a re-push, not a change. */
 bool sameSchedule (const Schedule& a, const Schedule& b);
 
+bool laneSet (
+    Lane& lane, std::map<std::string, Playlist>& playlists, Schedule& schedule, const std::string& slug, bool enabled,
+    bool manual, Clock::time_point now
+);
+
 nlohmann::json toJson (const Schedule& schedule);
 Schedule scheduleFromJson (const nlohmann::json& j);
 
 /** Seat the clock after a restart: a running lane resumes its saved remainder less the downtime. */
-void resumeCountdown (Lane& lane, const Playlist& playlist, int64_t remainingMs, int64_t downtimeMs, Clock::time_point now);
+void resumeCountdown (
+    Lane& lane, const Playlist& playlist, int64_t remainingMs, int64_t downtimeMs, Clock::time_point now
+);
 
 /** Display id the walk shows next, or empty when a fresh shuffle cycle is still to be drawn. */
 std::string nextUp (const Lane& lane, const Playlist& playlist);

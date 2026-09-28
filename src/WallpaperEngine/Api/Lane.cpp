@@ -20,9 +20,7 @@ int64_t elapsedMs (const Lane& lane, Clock::time_point now) {
     return std::chrono::duration_cast<std::chrono::milliseconds> (now - lane.lastShow).count ();
 }
 
-int elapsedSeconds (const Lane& lane, Clock::time_point now) {
-    return static_cast<int> (elapsedMs (lane, now) / 1000);
-}
+int elapsedSeconds (const Lane& lane, Clock::time_point now) { return static_cast<int> (elapsedMs (lane, now) / 1000); }
 
 nlohmann::json floatsToJson (const std::array<float, 4>& v) { return { v[0], v[1], v[2], v[3] }; }
 
@@ -358,6 +356,23 @@ void WallpaperEngine::Api::applySet (
     }
 }
 
+void WallpaperEngine::Api::bindLane (
+    Lane& lane, const std::string& slug, Playlist& playlist, const bool enabled, const Clock::time_point now
+) {
+    const Playlist incoming = playlist;
+
+    if (slug != lane.playlistSlug) {
+	// another playlist is another walk: nothing of the old cycle carries over
+	lane.playlistSlug = slug;
+	lane.frozenRemainingMs = -1;
+	lane.walk.clear ();
+	lane.nextCycle.clear ();
+	lane.cursor = -1;
+    }
+
+    applySet (lane, playlist, incoming, enabled, now);
+}
+
 bool WallpaperEngine::Api::dueForAdvance (const Lane& lane, const Playlist& playlist, Clock::time_point now) {
     if (!lane.enabled || playlist.entries.empty () || playlist.order == "static") {
 	return false;
@@ -564,9 +579,7 @@ std::string WallpaperEngine::Api::aheadUp (const Lane& lane, const Playlist& pla
     return nextUp (lane, playlist);
 }
 
-bool WallpaperEngine::Api::backEnabled (const Lane& lane, const Playlist&) {
-    return lane.walk.size () > 1;
-}
+bool WallpaperEngine::Api::backEnabled (const Lane& lane, const Playlist&) { return lane.walk.size () > 1; }
 
 nlohmann::json WallpaperEngine::Api::toJson (const Entry& entry) {
     return { { "id", entry.id }, { "ui_id", entry.uiId }, { "args", entry.args } };
@@ -611,39 +624,39 @@ nlohmann::json WallpaperEngine::Api::toJson (const Lane& lane) {
 	forward.push_back (toJson (entry));
     }
 
-    return { { "id", lane.id },
-	     { "group", lane.groupKey },
-	     { "playlist", lane.playlistSlug },
-	     { "enabled", lane.enabled },
-	     { "walk", lane.walk },
-	     { "next_cycle", lane.nextCycle },
-	     { "cursor", lane.cursor },
-	     { "frozen_remaining_s", lane.frozenRemainingMs < 0 ? int64_t (-1) : lane.frozenRemainingMs / 1000 },
-	     { "frozen_remaining_ms", lane.frozenRemainingMs },
-	     { "current", toJson (lane.current) },
-	     { "history", history },
-	     { "forward", forward },
-	     { "fit", { { "zoom", lane.fit.zoom }, { "pan_x", lane.fit.panX }, { "pan_y", lane.fit.panY } } },
-	     { "look",
-	       { { "properties", lane.look.properties },
-		 { "cc", floatsToJson (lane.look.cc) },
-		 { "timescale", lane.look.timescale },
-		 { "skip_objects", lane.look.skipObjects },
-		 { "skip_effects", lane.look.skipEffects },
-		 { "volume", lane.look.volume },
-		 { "audio_processing", lane.look.audioProcessing },
-		 { "mouse", lane.look.mouse },
-		 { "automute", lane.look.automute },
-		 { "scaling", lane.look.scaling },
-		 { "clamp", lane.look.clamp },
-		 { "ssfactor", lane.look.ssfactor },
-		 { "clampcomposites", lane.look.clampComposites },
-		 { "texcomp", lane.look.texcomp },
-		 { "texdetail", lane.look.texdetail },
-		 { "fit",
-		   { { "zoom", lane.look.fit.zoom },
-		     { "pan_x", lane.look.fit.panX },
-		     { "pan_y", lane.look.fit.panY } } } } } };
+    return {
+	{ "id", lane.id },
+	{ "group", lane.groupKey },
+	{ "playlist", lane.playlistSlug },
+	{ "enabled", lane.enabled },
+	{ "walk", lane.walk },
+	{ "next_cycle", lane.nextCycle },
+	{ "cursor", lane.cursor },
+	{ "frozen_remaining_s", lane.frozenRemainingMs < 0 ? int64_t (-1) : lane.frozenRemainingMs / 1000 },
+	{ "frozen_remaining_ms", lane.frozenRemainingMs },
+	{ "current", toJson (lane.current) },
+	{ "history", history },
+	{ "forward", forward },
+	{ "fit", { { "zoom", lane.fit.zoom }, { "pan_x", lane.fit.panX }, { "pan_y", lane.fit.panY } } },
+	{ "look",
+	  { { "properties", lane.look.properties },
+	    { "cc", floatsToJson (lane.look.cc) },
+	    { "timescale", lane.look.timescale },
+	    { "skip_objects", lane.look.skipObjects },
+	    { "skip_effects", lane.look.skipEffects },
+	    { "volume", lane.look.volume },
+	    { "audio_processing", lane.look.audioProcessing },
+	    { "mouse", lane.look.mouse },
+	    { "automute", lane.look.automute },
+	    { "scaling", lane.look.scaling },
+	    { "clamp", lane.look.clamp },
+	    { "ssfactor", lane.look.ssfactor },
+	    { "clampcomposites", lane.look.clampComposites },
+	    { "texcomp", lane.look.texcomp },
+	    { "texdetail", lane.look.texdetail },
+	    { "fit",
+	      { { "zoom", lane.look.fit.zoom }, { "pan_x", lane.look.fit.panX }, { "pan_y", lane.look.fit.panY } } } } }
+    };
 }
 
 namespace {
@@ -857,7 +870,9 @@ void WallpaperEngine::Api::fromLegacyState (const nlohmann::json& state, Lane& l
 	}
 
 	lane.enabled = rotation.value ("enabled", false) && !playlist.entries.empty ();
-	lane.frozenRemainingMs = rotation.value ("frozen_remaining_s", -1) < 0 ? int64_t (-1) : int64_t (rotation.value ("frozen_remaining_s", -1)) * 1000;
+	lane.frozenRemainingMs = rotation.value ("frozen_remaining_s", -1) < 0
+	    ? int64_t (-1)
+	    : int64_t (rotation.value ("frozen_remaining_s", -1)) * 1000;
     }
 
     if (state.contains ("current") && state["current"].is_object ()) {
@@ -961,7 +976,8 @@ bool WallpaperEngine::Api::scheduleTick (Schedule& schedule, const std::string& 
     bool crossed = false;
 
     // a backward step shorter than half a day is a clock correction, not a wrap: nothing crossed
-    const bool stepBack = schedule.lastMinute >= 0 && minute < schedule.lastMinute && schedule.lastMinute - minute < 12 * 60;
+    const bool stepBack
+	= schedule.lastMinute >= 0 && minute < schedule.lastMinute && schedule.lastMinute - minute < 12 * 60;
 
     if (schedule.lastMinute >= 0 && schedule.lastMinute != minute && !stepBack) {
 	for (const auto& entry : schedule.entries) {
@@ -1016,6 +1032,47 @@ bool WallpaperEngine::Api::sameSchedule (const Schedule& a, const Schedule& b) {
     }
 
     return true;
+}
+
+bool WallpaperEngine::Api::laneSet (
+    Lane& lane, std::map<std::string, Playlist>& playlists, Schedule& schedule, const std::string& slug,
+    const bool enabled, const bool manual, const Clock::time_point now
+) {
+    const auto isUnbound = [&playlists, &lane] () {
+	const auto bound = playlists.find (lane.playlistSlug);
+	return bound == playlists.end () || bound->second.entries.empty ();
+    };
+    auto target = slug;
+    bool honored = true;
+
+    // with the schedule on, the slug is the clock's to choose: a policy push keeps a bound
+    // lane's binding, a manual switch holds until the next boundary
+    if (schedule.enabled && slug != lane.playlistSlug) {
+	if (manual) {
+	    schedule.held = true;
+	    schedule.pending.clear ();
+	} else if (!isUnbound ()) {
+	    target = lane.playlistSlug;
+	    honored = false;
+	}
+    }
+
+    // a fit-only push leaves the walk and its clock alone
+    if (target != lane.playlistSlug || enabled != lane.enabled) {
+	const auto [it, inserted] = playlists.try_emplace (target);
+
+	if (inserted) {
+	    it->second.slug = target;
+	}
+
+	bindLane (lane, target, it->second, enabled, now);
+    }
+
+    if (isUnbound ()) {
+	lane.enabled = enabled;
+    }
+
+    return honored;
 }
 
 nlohmann::json WallpaperEngine::Api::toJson (const Schedule& schedule) {

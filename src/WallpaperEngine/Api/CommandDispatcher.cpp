@@ -328,6 +328,10 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 	if (!error.empty ()) {
 	    return { .command = std::nullopt, .errorResponse = failure (id, error) };
 	}
+
+	if (args.contains ("automatic") && !args["automatic"].is_boolean ()) {
+	    return { .command = std::nullopt, .errorResponse = failure (id, "args.automatic must be a boolean") };
+	}
     }
 
     if (cmd == "rotate-set") {
@@ -570,7 +574,8 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 	// the clock-driven playlist choice: enabled plus up to 8 boundaries, each a 24-hour time
 	// and a playlist the engine has been sent
 	if (!args.contains ("enabled") || !args["enabled"].is_boolean ()) {
-	    return { .command = std::nullopt, .errorResponse = failure (id, "schedule-set requires args.enabled, a boolean") };
+	    return { .command = std::nullopt,
+		     .errorResponse = failure (id, "schedule-set requires args.enabled, a boolean") };
 	}
 
 	if (!args.contains ("entries") || !args["entries"].is_array () || args["entries"].size () > 8) {
@@ -584,16 +589,19 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 	}
 
 	for (const auto& entry : args["entries"]) {
-	    if (!entry.is_object () || !entry.contains ("at") || !entry["at"].is_string () || !entry.contains ("playlist")
-		|| !entry["playlist"].is_string () || !validBackgroundId (entry["playlist"].get<std::string> ())) {
+	    if (!entry.is_object () || !entry.contains ("at") || !entry["at"].is_string ()
+		|| !entry.contains ("playlist") || !entry["playlist"].is_string ()
+		|| !validBackgroundId (entry["playlist"].get<std::string> ())) {
 		return { .command = std::nullopt,
-			 .errorResponse = failure (id, "every entry needs at (HH:MM) and playlist [A-Za-z0-9_-]{1,64}") };
+			 .errorResponse
+			 = failure (id, "every entry needs at (HH:MM) and playlist [A-Za-z0-9_-]{1,64}") };
 	    }
 
 	    const auto at = entry["at"].get<std::string> ();
 
-	    if (at.size () != 5 || at[2] != ':' || !std::isdigit (at[0]) || !std::isdigit (at[1]) || !std::isdigit (at[3])
-		|| !std::isdigit (at[4]) || std::stoi (at.substr (0, 2)) > 23 || std::stoi (at.substr (3, 2)) > 59) {
+	    if (at.size () != 5 || at[2] != ':' || !std::isdigit (at[0]) || !std::isdigit (at[1])
+		|| !std::isdigit (at[3]) || !std::isdigit (at[4]) || std::stoi (at.substr (0, 2)) > 23
+		|| std::stoi (at.substr (3, 2)) > 59) {
 		return { .command = std::nullopt, .errorResponse = failure (id, "entry.at must be a 24-hour HH:MM") };
 	    }
 	}
@@ -622,7 +630,8 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 	}
 
 	if (args.contains ("id") && (!args["id"].is_string () || !validBackgroundId (args["id"].get<std::string> ()))) {
-	    return { .command = std::nullopt, .errorResponse = failure (id, "set-fit id must match [A-Za-z0-9_-]{1,64}") };
+	    return { .command = std::nullopt,
+		     .errorResponse = failure (id, "set-fit id must match [A-Za-z0-9_-]{1,64}") };
 	}
 
 	if (!args.contains ("zoom") && !args.contains ("pan_x") && !args.contains ("pan_y")) {
