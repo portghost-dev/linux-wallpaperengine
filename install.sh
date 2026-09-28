@@ -74,6 +74,7 @@ echo "== step 4/6: installing the engine to ~/.local =="
 mkdir -p "$ENGINE_HOME" "$HOME/.local/bin"
 cmake --install build --prefix "$ENGINE_HOME" --component lwe
 ln -sf "$ENGINE_HOME/linux-wallpaperengine" "$HOME/.local/bin/linux-wallpaperengine"
+ln -sf "$ENGINE_HOME/linux-wallpaperengine" "$HOME/.local/bin/lwe"
 ln -sf "$ENGINE_HOME/lwe-web-service" "$HOME/.local/bin/lwe-web-service"
 
 if [ ! -f "$ENGINE_HOME/lwe_bc7enc" ]; then

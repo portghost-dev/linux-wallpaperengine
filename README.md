@@ -164,7 +164,7 @@ rm -f ~/.config/systemd/user/lwe-engine.service
 Everything else lives under your home directory:
 
 ```
-rm -f ~/.local/bin/linux-wallpaperengine ~/.local/bin/lwe-web-service
+rm -f ~/.local/bin/linux-wallpaperengine ~/.local/bin/lwe ~/.local/bin/lwe-web-service
 rm -f ~/.local/bin/lwe_bc7enc ~/.local/bin/lwe-ui
 rm -rf ~/.local/lib/lwe-engine ~/.local/share/lwe-ui
 rm -f ~/.local/share/applications/lwe-ui.desktop
@@ -241,6 +241,10 @@ argument and bound is in [`docs/FORK-MAP.md`](docs/FORK-MAP.md) chapters 1 and
 
 `linux-wallpaperengine --version` prints the engine's version stamp alone on one line and exits, and the
 `status` reply carries the same stamp in its `version` field.
+
+The engine also answers to the name `lwe`, which `install.sh` links into `~/.local/bin`:
+`lwe status`, `lwe off`, `lwe on` and `lwe --version` work with the engine alone. Every
+other `lwe` command needs the panel.
 
 ## Settings
 
