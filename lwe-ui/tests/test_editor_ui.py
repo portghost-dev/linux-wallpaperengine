@@ -306,6 +306,14 @@ def main() -> None:
         texts = {n: c.property("text") for n, c in chips.items()}
         assert texts == dict.fromkeys(chips, "120"), f"every volume chip must read the stored 120: {texts}"
         print("OK volume chips - a stored 120 reads 120 on both editor rows and the popup")
+        _wp.update_set("synthwp_hi", {"VOLUME": 7})
+        editor.open("synthwp_fit")
+        editor.open("synthwp_hi")
+        QTest.qWait(120)
+        texts = {n: chips[n].property("text") for n in ("editorVolumeChip", "editorWpVolumeChip")}
+        assert texts == {"editorVolumeChip": "120", "editorWpVolumeChip": "7"}, \
+            f"the wallpaper's Volume chip must read its own VOLUME, not ENGINE_VOLUME: {texts}"
+        print("OK volume chips - VOLUME 7 beside ENGINE_VOLUME 120 reads 7 on the wallpaper row")
     finally:
         for k, v in orig.items():
             if v is None:

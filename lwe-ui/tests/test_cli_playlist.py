@@ -229,6 +229,22 @@ class OrderIntervalTest(unittest.TestCase):
         self.assertEqual(self.lwe("order", "load"), (2, "", "the service is not running\n"))
         self.assertEqual(self.snapshot(), before)
 
+    def test_order_load_and_interval_load_under_an_enabled_schedule_send_the_engines_playlist(self) -> None:
+        self.seed()
+        before = self.snapshot()
+        engine = self.engine(schedule=SCHEDULE_ON, lanes=[{"id": "all", "playlist": "night"}])
+        self.assertEqual(self.lwe("order", "load"), (0, "Order of Night sent to the engine: sequential.\n", ""))
+        self.assertEqual(self.lwe("interval", "load"), (0, "Interval of Night sent to the engine: 90s.\n", ""))
+        self.assertEqual(self.sent(engine), [("playlist-set", "night", "sequential", 90, 1, 1, 1), lanes(True)] * 2)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_the_next_change_comes_from_the_engines_lane_clock_not_the_typed_interval(self) -> None:
+        self.seed(active="night")
+        engine = self.engine()
+        engine.script("lanes-set", _fake_engine.done({"lanes": [{"id": "all", "next_in_ms": 780000,
+                                                                 "interval_s": 1200}]}))
+        self.assertEqual(self.lwe("interval", "20"), (0, "Interval of Night set to 20m; next change in 13m.\n", ""))
+
     def test_config_unset_removes_every_mode_line_through_unset(self) -> None:
         self.write("playlists/main.conf", "NAME=Main\nMODE=static\nINTERVAL=1200\nMODE=sequential\nMEMBERS=111\n")
         self.write("settings.conf", "ACTIVE_PLAYLIST=main\n")
