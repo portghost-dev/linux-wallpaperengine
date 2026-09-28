@@ -910,6 +910,24 @@ nlohmann::json WallpaperEngine::Api::laneStatus (const Lane& lane, const Playlis
 	     { "fit", { { "zoom", lane.fit.zoom }, { "pan_x", lane.fit.panX }, { "pan_y", lane.fit.panY } } } };
 }
 
+void WallpaperEngine::Api::keepTitle (
+    ShownTitle& kept, const std::string& id, const std::optional<std::string>& loaded
+) {
+    if (loaded.has_value ()) {
+	kept = { .id = id, .title = *loaded };
+    }
+}
+
+std::string WallpaperEngine::Api::statusTitle (
+    const ShownTitle& kept, const std::string& id, const std::optional<std::string>& loaded
+) {
+    if (loaded.has_value ()) {
+	return *loaded;
+    }
+
+    return kept.id == id ? kept.title : "";
+}
+
 int WallpaperEngine::Api::scheduleIndexAt (const Schedule& schedule, int minute) {
     if (schedule.entries.empty ()) {
 	return -1;

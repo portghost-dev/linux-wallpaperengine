@@ -1936,6 +1936,41 @@ void WallpaperApplication::handleApiCommand (int client, const Api::Command& com
     );
 }
 
+std::string WallpaperApplication::statusCurrentId () const {
+    if (!this->lane ().current.id.empty ()) {
+	return this->lane ().current.id;
+    }
+
+    for (const auto& [screen, path] : this->m_context.settings.general.screenBackgrounds) {
+	if (screen.rfind ("span:", 0) != 0 && !path.empty ()) {
+	    return path.filename ().string ();
+	}
+    }
+
+    return "";
+}
+
+std::optional<std::string> WallpaperApplication::loadedTitle () const {
+    auto project = this->m_backgrounds.end ();
+
+    for (const auto& [screen, path] : this->m_context.settings.general.screenBackgrounds) {
+	if (screen.rfind ("span:", 0) != 0 && !path.empty ()) {
+	    project = this->m_backgrounds.find (screen);
+	    break;
+	}
+    }
+
+    if (project == this->m_backgrounds.end ()) {
+	project = this->m_backgrounds.find ("default");
+    }
+
+    if (project == this->m_backgrounds.end ()) {
+	return std::nullopt;
+    }
+
+    return project->second->title;
+}
+
 nlohmann::json WallpaperApplication::apiStatus () const {
     nlohmann::json screens = nlohmann::json::object ();
 
@@ -1967,34 +2002,13 @@ nlohmann::json WallpaperApplication::apiStatus () const {
 		     this->m_colorCorrection.w };
     result["speed"] = this->m_timescale;
 
-    std::string currentId = this->lane ().current.id;
+    const std::string currentId = this->statusCurrentId ();
+    const Api::ShownTitle none {};
+    const auto& kept = this->m_releaseReason == ReleaseReason::Live ? none : this->m_shownTitle;
 
-    if (currentId.empty ()) {
-	for (const auto& [screen, path] : this->m_context.settings.general.screenBackgrounds) {
-	    if (screen.rfind ("span:", 0) != 0 && !path.empty ()) {
-		currentId = path.filename ().string ();
-		break;
-	    }
-	}
-    }
-
-    auto currentProject = this->m_backgrounds.end ();
-
-    for (const auto& [screen, path] : this->m_context.settings.general.screenBackgrounds) {
-	if (screen.rfind ("span:", 0) != 0 && !path.empty ()) {
-	    currentProject = this->m_backgrounds.find (screen);
-	    break;
-	}
-    }
-
-    if (currentProject == this->m_backgrounds.end ()) {
-	currentProject = this->m_backgrounds.find ("default");
-    }
-
-    result["current"]
-	= { { "id", currentId },
-	    { "ui_id", this->lane ().current.uiId },
-	    { "title", currentProject != this->m_backgrounds.end () ? currentProject->second->title : "" } };
+    result["current"] = { { "id", currentId },
+			  { "ui_id", this->lane ().current.uiId },
+			  { "title", Api::statusTitle (kept, currentId, this->loadedTitle ()) } };
     result["outputs"] = { { "state", this->m_releaseReason == ReleaseReason::Live ? "live" : "released" },
 			  { "reason",
 			    this->m_releaseReason == ReleaseReason::Deadman            ? "deadman"
@@ -3524,6 +3538,7 @@ bool WallpaperApplication::apiReleaseOutputs (const ReleaseReason reason, std::s
 	return false;
     }
 
+    Api::keepTitle (this->m_shownTitle, this->statusCurrentId (), this->loadedTitle ());
     this->m_renderContext->clearWallpapers ();
     this->m_backgrounds.clear ();
     const auto evicted = this->m_renderContext->evictUnusedTextures ();

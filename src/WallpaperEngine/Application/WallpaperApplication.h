@@ -188,6 +188,10 @@ private:
     /** execute one validated command; may respond more than once (accepted, then done) */
     void handleApiCommand (int client, const Api::Command& command);
     [[nodiscard]] nlohmann::json apiStatus () const;
+    /** The id status reports as current: the lane's, else the first screen's background folder name. */
+    [[nodiscard]] std::string statusCurrentId () const;
+    /** The title of the first screen's loaded project, or of the default one; none while nothing is loaded. */
+    [[nodiscard]] std::optional<std::string> loadedTitle () const;
     /**
      * The `show` verb: all-outputs hot swap. Resolves the id against the library roots,
      * preflights it, acks, then rebuilds every screen through buildWallpapers so mirror
@@ -319,6 +323,8 @@ private:
     ApplicationContext& m_context;
     /** Maps screens to backgrounds */
     std::map<std::string, ProjectUniquePtr> m_backgrounds {};
+    /** The title status reports while the outputs are released and no project is loaded */
+    Api::ShownTitle m_shownTitle {};
     std::map<std::string, ActivePlaylist> m_activePlaylists {};
 
     std::unique_ptr<WallpaperEngine::Audio::Drivers::Detectors::AudioPlayingDetector> m_audioDetector = nullptr;

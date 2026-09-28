@@ -290,9 +290,10 @@ std::string statusText (const nlohmann::json& status) {
     }
 
     const auto& outputs = section (status, "outputs");
+    const bool released = text (outputs, "state") == "released";
     std::string screens = "on";
 
-    if (text (outputs, "state") == "released") {
+    if (released) {
 	const auto reason = text (outputs, "reason");
 
 	screens = reason == "verb"   ? "off (lwe off)"
@@ -316,8 +317,8 @@ std::string statusText (const nlohmann::json& status) {
 	}
     }
 
-    return line ("on screen", onScreen) + line ("playlist", joined (playlist)) + line ("screens", screens)
-	+ line ("version", runningVersion (status)) + line ("settings", joined (settings));
+    return line (released ? "last shown" : "on screen", onScreen) + line ("playlist", joined (playlist))
+	+ line ("screens", screens) + line ("version", runningVersion (status)) + line ("settings", joined (settings));
 }
 
 std::optional<std::string> versionMismatch (const nlohmann::json& status, const std::string& installed) {

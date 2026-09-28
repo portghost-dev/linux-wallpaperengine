@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <random>
 #include <string>
 
@@ -764,4 +765,18 @@ TEST_CASE ("a pause keeps the fraction of a second and the countdown is reported
     j.erase ("frozen_remaining_ms");
     j["frozen_remaining_s"] = 42;
     REQUIRE (laneFromJson (j).frozenRemainingMs == 42 * 1000);
+}
+
+TEST_CASE ("the title kept at a release names the wallpaper while no project is loaded", "[lane]") {
+    ShownTitle kept;
+    REQUIRE (statusTitle (kept, "1505438974", std::nullopt).empty ());
+
+    keepTitle (kept, "1505438974", std::string ("Deep Space"));
+    REQUIRE (statusTitle (kept, "1505438974", std::nullopt) == "Deep Space");
+    REQUIRE (statusTitle (kept, "2105138680", std::nullopt).empty ());
+    REQUIRE (statusTitle (kept, "1505438974", std::string ("Loaded")) == "Loaded");
+
+    // a release with nothing loaded keeps the earlier title
+    keepTitle (kept, "2105138680", std::nullopt);
+    REQUIRE (statusTitle (kept, "1505438974", std::nullopt) == "Deep Space");
 }

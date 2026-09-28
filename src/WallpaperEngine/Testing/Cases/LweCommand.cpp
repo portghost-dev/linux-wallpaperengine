@@ -445,8 +445,18 @@ TEST_CASE ("lwe status shows what is on screen, the playlist, the screens, the v
 	     }) {
 	    CAPTURE (reason);
 	    status["outputs"] = { { "state", "released" }, { "reason", reason } };
-	    CHECK (LweCommand::statusText (status) == head + timer + "screens     " + shown + "\n" + tail);
+	    CHECK (
+		LweCommand::statusText (status)
+		== "last shown  Deep Space (1505438974)\n" + timer + "screens     " + shown + "\n" + tail
+	    );
 	}
+    }
+
+    SECTION ("no title") {
+	status["current"]["title"] = "";
+	CHECK (LweCommand::statusText (status).starts_with ("on screen   1505438974\n"));
+	status["outputs"] = { { "state", "released" }, { "reason", "verb" } };
+	CHECK (LweCommand::statusText (status).starts_with ("last shown  1505438974\n"));
     }
 
     SECTION ("paused") {

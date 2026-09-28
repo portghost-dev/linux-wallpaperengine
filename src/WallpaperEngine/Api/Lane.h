@@ -245,4 +245,17 @@ void fromLegacyState (const nlohmann::json& state, Lane& lane, Playlist& playlis
 
 /** The lane's status block as reported to clients. */
 nlohmann::json laneStatus (const Lane& lane, const Playlist& playlist, Clock::time_point now);
+
+/** The title of the wallpaper last shown and the status id it was shown under. */
+struct ShownTitle {
+    std::string id;
+    std::string title;
+};
+
+/** Keeps the loaded project's title for `id`, so status can name it after the project is gone; no loaded
+ * project keeps nothing. */
+void keepTitle (ShownTitle& kept, const std::string& id, const std::optional<std::string>& loaded);
+
+/** The status title for `id`: the loaded project's, else the kept one when it was kept for `id`, else "". */
+std::string statusTitle (const ShownTitle& kept, const std::string& id, const std::optional<std::string>& loaded);
 } // namespace WallpaperEngine::Api
