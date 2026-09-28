@@ -5,7 +5,9 @@ comes from; reads take no lock and write nothing, and a running engine from anot
 stderr while the read goes on. A panel setting saves one line of settings.conf and sends nothing. A
 restart setting saves its line and rebuilds engine-env through daemon_unit.write_env while still holding
 the settings lock; watchdog and color are engine-env lines with no settings key. Apart from the status
-read of a restart setting or an engine-env line, none of them sends the engine a request.
+read, none of those sends the engine a request. A live or next-wallpaper setting saves its line through
+engine/push.py::run_change, which sends the key's targeted push; speed 0 and audiosmoothing are sent to
+the engine under sync and never saved.
 """
 from __future__ import annotations
 
@@ -24,10 +26,21 @@ _NEEDS_STATUS = ("order", "interval", "playlist", "audiosmoothing")
 _PANEL = ("reviewrequired", "storage", "detect", "detectevery", "libraryfolder", "workshopfolder", "steamfolder")
 _RESTART = ("layer", "videodecode", "texturecache", "texturedetail", "assetsfolder", "resclamp", "effectclamp")
 _LINES = ("watchdog", "color")
+_LIVE = ("volume", "mute", "audioreactive", "mouse", "parallax", "automute", "particles", "fps", "speed", "scaling",
+         "edge", "fullscreen", "lightdimming", "lightfalloff", "audiogain")
+_CONFIG_ONLY = ("audioreactivedefault", "mousedefault", "parallaxdefault")
+OWN_VALUE = "the wallpaper on screen keeps its own value (lwe wallpaper current unset {name})"
+NOT_SAVED_NOW = "applies now; not saved yet, so a restart goes back to the start value"
 _FOLDERS = ("libraryfolder", "workshopfolder", "steamfolder", "assetsfolder")
 _LOAD_REFUSED = ("layer", "videodecode", "assetsfolder", "watchdog", "color", *_PANEL)
 RESTART_ONLY = "applies only at a restart (lwe service restart)"
 PANEL_ONLY = "read by the panel, not the engine"
+NEXT_ONLY = "applies to the next wallpaper"
+RESTART_LINE = "the saved global takes effect at the next service restart (lwe service restart applies it)."
+_LOADS = ("volume", "mute", "audioreactive", "mouse", "parallax", "particles", "fps", "fullscreen", "lightdimming",
+          "lightfalloff", "audiogain", "speed", "audiosmoothing")
+_RESHOW_LOADS = {"resclamp": "LWE_SSFACTOR", "effectclamp": "LWE_CLAMPCOMPOSITES", "texturecache": "LWE_TEXCOMP",
+                 "texturedetail": "LWE_TEXDETAIL"}
 NO_SCREENS_SAVED = ("engine-env was not rebuilt because no screens were found; it catches up when the panel "
                     "next starts or lwe service start or restart runs from your desktop session")
 NO_SCREENS_REFUSED = ("not saved: engine-env is only rewritten where screens are found; run it from your desktop "
@@ -200,6 +213,211 @@ def _line_write(ctx: Context, name: str, text: str | None) -> int:
     return _receipt(ctx, name, env_state == "written")
 
 
+def _live_write(ctx: Context, name: str, fn: Callable[[dict], dict], edge: list[int] | None = None) -> int:
+    """A live or next-wallpaper setting: one status read, then its line and the key's targeted push
+    through the change runner; the receipt is the runner's outcome."""
+    from ... import version
+    from ...engine import push
+    from ...storage import wp
+    row = settings_table.BY_NAME[name]
+    status = push.read_status()
+    if status[0] == "ok":
+        refusal = version.running_refusal(status[1], version.panel_stamp())
+        if refusal is not None:
+            return _refuse(ctx, refusal, REFUSED)
+    saved: list[bool] = []
+    kind = push.SETTING_ROWS.get(row.key, "none")
+    locks = ("settings", "env") if kind in ("tuning", "restart") else ("settings",)
+    outcome = push.run_change(locks, lambda: saved.append(_write(fn)), [(kind, row.key)], status=status,
+                              run="command")
+    shown = row.format(settings_table.read(name, None)[0])
+    report.emit(ctx, report.receipt(name, shown, bool(saved and saved[0]), row.reach, outcome.kind,
+                                    outcome.message or ""))
+    if not ctx.json:
+        if edge:
+            print(f"{name} stops at {edge[0]}", file=ctx.out)
+        current = status[1].get("current") if status[0] == "ok" else None
+        on_screen = str(current.get("ui_id") or "") if isinstance(current, dict) else ""
+        if on_screen and row.wp_key:
+            try:
+                own = row.wp_key in wp.load_set(on_screen)
+            except OSError:
+                own = False
+            if own:
+                print(OWN_VALUE.format(name=name), file=ctx.out)
+    if outcome.env is not None and outcome.env not in ("written", "unchanged"):
+        ctx.error(f"warning: engine-env was not rewritten: {outcome.env}")
+    return REFUSED if outcome.kind == "refused" else DONE
+
+
+def _engine_only(ctx: Context, name: str, shown: str, verb: str, value: float, applies: str) -> int:
+    """speed 0 or audiosmoothing: the status read, then the engine's verb under sync; nothing saved."""
+    from ... import api_client, version
+    from ...storage import lock
+    status = api_client.status()
+    if status is None:
+        return _refuse(ctx, f"the service is not running, so {name} {shown} has nothing to apply to", ENGINE_DOWN)
+    refusal = version.running_refusal(status, version.panel_stamp())
+    if refusal is not None:
+        return _refuse(ctx, refusal, REFUSED)
+    with lock.held("sync"):
+        reply = api_client.set_speed(value) if verb == "set_speed" else api_client.set_tuning(audio_smooth=value)
+    if not isinstance(reply, dict):
+        return _refuse(ctx, f"{name} {shown}: the engine did not answer", REFUSED)
+    if not reply.get("ok"):
+        return _refuse(ctx, f"{name} {shown}: the engine refused it: {reply.get('error') or 'no reason given'}",
+                       REFUSED)
+    if ctx.json:
+        _print_json(ctx, {"setting": name, "value": shown, "saved": False, "outcome": "applied", "applies": "now",
+                          "reason": ""})
+    else:
+        print(f"{name} {shown}: {applies}.", file=ctx.out)
+    return DONE
+
+
+def _wp_line_problem(wid: str, key: str) -> str | None:
+    """The wallpaper file's own line for `key`, when it holds a value this build cannot use."""
+    from ... import constants as C
+    from ...storage import migrate, paths, tier_a
+    try:
+        lines = paths.wp_file(wid).read_bytes().decode("utf-8").split("\n")
+    except OSError:
+        return None
+    found = None
+    for number, line in enumerate(lines, 1):
+        raw = tier_a.parse(line)
+        if key in raw:
+            found = (number, line.strip(), raw[key])
+    if found is None:
+        return None
+    kind, _value, reason = migrate.coerce(C.WP_SCHEMA[key], found[2], False)
+    return None if kind == "ok" else f"wp/{wid}.conf line {found[0]} {found[1]} ({reason or 'out of range'})"
+
+
+def _load(ctx: Context, name: str) -> int:
+    """<setting> load: the saved value and the on-screen wallpaper's own key, re-read through the show
+    resolver after their lines are checked, sent under sync; nothing is written."""
+    from ... import api_client, version
+    from ...engine import resolve
+    from ...storage import lock, settings
+    row = settings_table.BY_NAME[name]
+    status = api_client.status()
+    if status is None:
+        return _refuse(ctx, f"the service is not running, so {name} load has nothing to apply to", ENGINE_DOWN)
+    refusal = version.running_refusal(status, version.panel_stamp())
+    if refusal is not None:
+        return _refuse(ctx, refusal, REFUSED)
+    current = status.get("current")
+    screen = str(current.get("ui_id") or "") if isinstance(current, dict) else ""
+    if name != "audiosmoothing":
+        problem = settings_table.read(name, None)[2]
+        if problem is None and screen and row.wp_key:
+            problem = _wp_line_problem(screen, row.wp_key)
+        if problem is not None:
+            return _refuse(ctx, f"{name} load: invalid: {problem}", REFUSED)
+    s = settings.load()
+    shown_args = resolve.resolve_show_args(screen)[1] if screen else {}
+    if name == "audiosmoothing":
+        entry = (status.get("config") or {}).get("LWE_AUDIOSMOOTH")
+        value = entry.get("value") if isinstance(entry, dict) else None
+        if value is None:
+            return _refuse(ctx, "audiosmoothing load: the engine reports no start value", REFUSED)
+        call, shown = (lambda: api_client.set_tuning(audio_smooth=float(value))), row.format(float(value))
+    elif name == "speed":
+        speed = resolve.effective_speed(screen)
+        call, shown = (lambda: api_client.set_speed(speed)), row.format(speed)
+    elif name in ("lightdimming", "lightfalloff", "audiogain"):
+        tuning = resolve.resolved_tuning(screen)
+        call, shown = (lambda: api_client.set_tuning(**tuning)), row.format(settings_table.read(name, None)[0])
+    elif name == "fps":
+        fps = max(1, min(480, int(s["ENGINE_FPS"])))
+        call, shown = (lambda: api_client.set_fps(fps)), str(fps)
+    elif name == "parallax":
+        on = bool(s["PARALLAX_DEFAULT"]) and not s["OVERRIDE_PARALLAX_OFF"]
+        call, shown = (lambda: api_client.set_parallax(on)), "on" if on else "off"
+    elif name == "particles":
+        on = bool(s["PARTICLES_DEFAULT"])
+        call, shown = (lambda: api_client.set_particles(on)), "on" if on else "off"
+    elif name == "fullscreen":
+        behavior = shown_args.get("fullscreen_behavior") or resolve.resolve_fullscreen_behavior(s)
+        call, shown = (lambda: api_client.set_fullscreen(behavior)), row.format(settings_table.read(name, None)[0])
+    elif not screen:
+        print(f"{name} load: no wallpaper is on screen, so nothing was sent", file=ctx.out)
+        return DONE
+    elif name in ("volume", "mute"):
+        call, shown = (lambda: api_client.set_volume(shown_args["volume"])), str(shown_args["volume"])
+    elif name == "audioreactive":
+        on = bool(shown_args["audio_processing"])
+        call, shown = (lambda: api_client.set_audio(on)), "on" if on else "off"
+    else:
+        on = bool(shown_args["mouse"])
+        call, shown = (lambda: api_client.set_mouse(on)), "on" if on else "off"
+    with lock.held("sync"):
+        reply = call()
+    if not isinstance(reply, dict):
+        return _refuse(ctx, f"{name} load: the engine did not answer", REFUSED)
+    if not reply.get("ok"):
+        return _refuse(ctx, f"{name} load: the engine refused it: {reply.get('error') or 'no reason given'}", REFUSED)
+    print(f"{name} {shown}: the saved value, applied now; nothing written.", file=ctx.out)
+    return DONE
+
+
+def _reshow_load(ctx: Context, name: str) -> int:
+    """resclamp, effectclamp, texturecache or texturedetail load: one re-show of the wallpaper on screen
+    keeping the speed status reported, plus the restart line when the saved value differs from the
+    engine's start value."""
+    from ... import api_client, version
+    from ...engine import push, resolve
+    from ...storage import lock, settings
+    row = settings_table.BY_NAME[name]
+    status = api_client.status()
+    if status is None:
+        return _refuse(ctx, f"the service is not running, so {name} load has nothing to apply to", ENGINE_DOWN)
+    refusal = version.running_refusal(status, version.panel_stamp())
+    if refusal is not None:
+        return _refuse(ctx, refusal, REFUSED)
+    current = status.get("current")
+    screen = str(current.get("ui_id") or "") if isinstance(current, dict) else ""
+    problem = settings_table.read(name, None)[2]
+    if problem is None and screen and row.wp_key:
+        problem = _wp_line_problem(screen, row.wp_key)
+    if problem is not None:
+        return _refuse(ctx, f"{name} load: invalid: {problem}", REFUSED)
+    if not screen:
+        print(f"{name} load: no wallpaper is on screen, so nothing was sent", file=ctx.out)
+        return DONE
+    speed = status.get("speed")
+    with lock.held("sync"):
+        reply = push.show_final(screen)
+        skips = resolve.resolve_show_args(screen)[1].get("skip_objects")
+        if skips:
+            api_client.set_skip(skips)
+        if isinstance(speed, (int, float)) and not isinstance(speed, bool):
+            api_client.set_speed(speed)
+    if not isinstance(reply, dict):
+        return _refuse(ctx, f"{name} load: the engine did not answer", REFUSED)
+    if not reply.get("ok"):
+        return _refuse(ctx, f"{name} load: the engine refused it: {reply.get('error') or 'no reason given'}", REFUSED)
+    shown = row.format(settings_table.read(name, None)[0])
+    print(f"{name} {shown}: the wallpaper on screen was shown again with it; nothing written.", file=ctx.out)
+    entry = (status.get("config") or {}).get(_RESHOW_LOADS[name])
+    started = entry.get("value") if isinstance(entry, dict) else None
+    saved = settings.load()[row.key]
+    if started is not None:
+        if isinstance(saved, bool):
+            differs = str(started).strip() != ("1" if saved else "0")
+        elif isinstance(saved, float):
+            try:
+                differs = float(started) != saved
+            except (TypeError, ValueError):
+                differs = True
+        else:
+            differs = str(started).strip() != str(saved)
+        if differs:
+            print(RESTART_LINE, file=ctx.out)
+    return DONE
+
+
 def _set(ctx: Context, name: str, args: list[str]) -> int:
     row = settings_table.BY_NAME[name]
     if not args:
@@ -210,6 +428,12 @@ def _set(ctx: Context, name: str, args: list[str]) -> int:
         return _refuse(ctx, f"{name} takes one value; got {' '.join(args)}", USAGE)
     if args[0] == "load" and name in _LOAD_REFUSED:
         return _refuse(ctx, PANEL_ONLY if name in _PANEL else RESTART_ONLY, REFUSED)
+    if args[0] == "load" and name in ("scaling", "edge", "automute"):
+        return _refuse(ctx, NEXT_ONLY, REFUSED)
+    if args[0] == "load" and name in _LOADS:
+        return _load(ctx, name)
+    if args[0] == "load" and name in _RESHOW_LOADS:
+        return _reshow_load(ctx, name)
     try:
         value = row.parse(args[0], ctx.cwd_entered)
     except UsageError as exc:
@@ -223,12 +447,25 @@ def _set(ctx: Context, name: str, args: list[str]) -> int:
             return _line_write(ctx, name, str(value))
         return _line_write(ctx, name, " ".join(format_number(part) for part in value))
 
+    if name == "speed" and value == 0:
+        return _engine_only(ctx, "speed", "0", "set_speed", 0.0,
+                            "applies now; not saved (speed load brings back the saved speed)")
+    if name == "audiosmoothing":
+        return _engine_only(ctx, name, row.format(value), "set_tuning", value, NOT_SAVED_NOW)
+    edge: list[int] = []
+
     def change(current: dict) -> dict:
         new = (not current[row.key]) if value == settings_table.TOGGLE else value
+        if isinstance(value, settings_table.Step):
+            new = max(0, min(128, current[row.key] + value))
+            if new != current[row.key] + value:
+                edge.append(new)
         return {} if current[row.key] == new else {row.key: new}
 
     if name in _RESTART:
         return _restart_write(ctx, name, change)
+    if name in _LIVE + _CONFIG_ONLY:
+        return _live_write(ctx, name, change, edge)
     code = _receipt(ctx, name, _write(change))
     if name == "libraryfolder":
         _library_warning(ctx, value)
@@ -249,6 +486,8 @@ def _config_set(ctx: Context, name: str, words: list[str]) -> int:
     if name not in settings_table.BY_NAME:
         return _unknown(ctx, name, CONFIG_USAGE)
     from ..registry import discover
+    if name in _CONFIG_ONLY:
+        return _set(ctx, name, words)
     verb = discover().get(name)
     return _unknown(ctx, name, CONFIG_USAGE) if verb is None else verb.run(ctx, words)
 
@@ -269,7 +508,7 @@ def _unset(ctx: Context, args: list[str]) -> int:
         return UNSET[name](ctx)
     if name in _LINES:
         return _line_write(ctx, name, None)
-    if name not in _PANEL + _RESTART:
+    if name not in _PANEL + _RESTART + _LIVE + _CONFIG_ONLY:
         return _unknown(ctx, name, CONFIG_USAGE)
     from ...storage import settings
     key = settings_table.BY_NAME[name].key
@@ -281,6 +520,8 @@ def _unset(ctx: Context, args: list[str]) -> int:
 
     if name in _RESTART:
         return _restart_write(ctx, name, change)
+    if name in _LIVE + _CONFIG_ONLY:
+        return _live_write(ctx, name, change)
     return _receipt(ctx, name, _write(change))
 
 
@@ -293,5 +534,5 @@ VERBS = (
     Verb("config", _config, "Lists every setting with its value and where it came from, or reads or sets one.",
          "Settings"),
     *(Verb(row["name"], _setting_verb(row["name"]), row["what"], "Settings") for row in vocabulary.SETTINGS
-      if row["name"] in _PANEL + _RESTART + _LINES),
+      if row["name"] in _PANEL + _RESTART + _LINES + _LIVE + ("audiosmoothing",)),
 )
