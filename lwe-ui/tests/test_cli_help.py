@@ -124,7 +124,7 @@ class CliHelpTest(unittest.TestCase):
         rows = ([(r["name"], help_pages.command_page, r) for r in vocabulary.COMMANDS]
                 + [(r["name"], help_pages.setting_page, r) for r in vocabulary.SETTINGS]
                 + [(r["name"], help_pages.wallpaper_page, r) for r in vocabulary.PER_WALLPAPER])
-        self.assertEqual(len(rows), 100)
+        self.assertEqual(len(rows), 99)
         for name, make, row in rows:
             with self.subTest(row=name):
                 page = make(row)
@@ -156,6 +156,13 @@ class CliHelpTest(unittest.TestCase):
                 code, out, err = self._help(topic)
                 self.assertEqual((code, err), (0, ""))
                 self.assertEqual(out.encode("utf-8"), (FIXTURES / "pages" / f"{topic}.txt").read_bytes())
+
+    def test_socket_has_no_page_and_speed_names_the_saved_range(self) -> None:
+        self.assertEqual(self._help("socket"), (3, "", "lwe help: no page for socket; lwe help lists every command and "
+                                                       "lwe help --all every setting\n"))
+        code, out, err = self._help("speed")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("0.1 to 10 (1 is normal; 0 freezes it and is not saved)", " ".join(out.split()))
 
     def test_an_unknown_topic_exits_3(self) -> None:
         code, out, err = self._help("nosuchtopic")

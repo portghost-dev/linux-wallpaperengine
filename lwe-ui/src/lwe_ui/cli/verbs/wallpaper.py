@@ -161,7 +161,7 @@ def _change(ctx: Context, pick, name: str, key: str, write_fn, shown_fn, *, unse
         print(f"{name} {shown}: {'saved' if written else 'unchanged'}; {DIAL_LATER}.", file=ctx.out)
     else:
         report.emit(ctx, dict(r, applies=applies))
-    if unset and name in COLOR_WORDS and written and not ctx.json:
+    if unset and name in COLOR_WORDS and None in written.values() and not ctx.json:
         print(COLOR_REMOVED + ".", file=ctx.out)
     if outcome.reason == "version" and outcome.message:
         ctx.error(outcome.message)
@@ -242,7 +242,17 @@ def _unset(ctx: Context, pick, name: str) -> int:
 
         def fn(raw: dict[str, str]) -> dict[str, Any]:
             if name in COLOR_WORDS:
-                return {k: None for k in ("CC", "CC_MODE") if k in raw}
+                chans = _channels(str(raw.get("CC") or ""))
+                chans[row.field] = _NEUTRAL[row.field]
+                if not str(raw.get("CC") or "") or tuple(chans) == _NEUTRAL:
+                    return {k: None for k in ("CC", "CC_MODE") if k in raw}
+                new = " ".join(values.format_number(c) for c in chans)
+                changes: dict[str, Any] = {}
+                if raw.get("CC") != new:
+                    changes["CC"] = new
+                if raw.get("CC_MODE") != "custom":
+                    changes["CC_MODE"] = "custom"
+                return changes
             if name in CLAMP_WORDS:
                 changes = wp.clamp_unset_changes(wp.load_set(wid), row.key)
                 if changes[row.key] is None:

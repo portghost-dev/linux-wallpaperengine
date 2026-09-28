@@ -516,7 +516,7 @@ SETTINGS: tuple[dict[str, str], ...] = (
     {
         "name": "speed",
         "typed": "",
-        "values": "0 to 10  (1 is normal)",
+        "values": "0.1 to 10  (1 is normal; 0 freezes it and is not saved)",
         "default": "1",
         "engine": "",
         "scope": "global and per wallpaper",
@@ -776,17 +776,6 @@ SETTINGS: tuple[dict[str, str], ...] = (
         "when": "restart",
         "what": "The color correction every wallpaper starts with when the engine runs without the panel.",
         "ptr": "LWE_CC",
-    },
-    {
-        "name": "socket",
-        "typed": "",
-        "values": "a file path",
-        "default": "$XDG_RUNTIME_DIR/lwe/engine.sock, else /tmp/lwe-<uid>/engine.sock",
-        "engine": "",
-        "scope": "engine start",
-        "when": "restart",
-        "what": "Where the engine listens for commands.",
-        "ptr": "LWE_SOCKET",
     },
 )
 

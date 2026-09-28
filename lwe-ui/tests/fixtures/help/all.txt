@@ -16,8 +16,8 @@ Every setting: its values, its default, and the engine name it points to.
   automute                    on | off | toggle. Default on. Points to AUTOMUTE_DEFAULT, AUTOMUTE.
   particles                   on | off | toggle. Default on. Points to PARTICLES_DEFAULT.
   fps                         1 to 480, a whole number. Default 60. Points to ENGINE_FPS.
-  speed                       0 to 10  (1 is normal). Default 1. Points to ENGINE_TIMESCALE, SPEED,
-                              LWE_TIMESCALE.
+  speed                       0.1 to 10  (1 is normal; 0 freezes it and is not saved). Default 1.
+                              Points to ENGINE_TIMESCALE, SPEED, LWE_TIMESCALE.
   scaling                     default | stretch | fit | fill. Default default. Points to
                               ENGINE_SCALING, SCALING.
   edge                        extend | blank | tile. Default extend. Points to ENGINE_CLAMP,
@@ -60,8 +60,6 @@ Every setting: its values, its default, and the engine name it points to.
                               LWE_DEADMAN.
   color                       one quoted value: "brightness contrast saturation hue", hue in
                               degrees. Default "1 1 1 0". Points to LWE_CC.
-  socket                      a file path. Default $XDG_RUNTIME_DIR/lwe/engine.sock, else
-                              /tmp/lwe-<uid>/engine.sock. Points to LWE_SOCKET.
   wallpaper <w> zoom          1 to 2. Points to FIT_ZOOM.
   wallpaper <w> panx          -1 to 1. Points to FIT_PAN_X.
   wallpaper <w> pany          -1 to 1. Points to FIT_PAN_Y.

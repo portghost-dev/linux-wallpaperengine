@@ -149,6 +149,22 @@ class WallpaperTest(unittest.TestCase):
         self.assertNotIn("CC_MODE", conf)
         self.assertIn(wallpaper.COLOR_REMOVED, out)
 
+    def test_unset_hue_resets_only_hue_and_keeps_the_other_three(self) -> None:
+        paths.wp_file(GRADED).write_text("CC=1.2 1.5 0.8 0.5\nCC_MODE=custom\n", encoding="utf-8")
+        code, out, _err = _run(GRADED, "unset", "hue")
+        self.assertEqual(code, 0)
+        self.assertEqual(_conf(GRADED), {"CC": "1.2 1.5 0.8 0", "CC_MODE": "custom"})
+        self.assertNotIn(wallpaper.COLOR_REMOVED, out)
+
+    def test_unsetting_the_last_channel_off_neutral_removes_cc_and_cc_mode(self) -> None:
+        paths.wp_file(GRADED).write_text("CC=1.2 1 1 0.5\nCC_MODE=custom\n", encoding="utf-8")
+        self.assertEqual(_run(GRADED, "unset", "hue")[0], 0)
+        self.assertEqual(_conf(GRADED), {"CC": "1.2 1 1 0", "CC_MODE": "custom"})
+        code, out, _err = _run(GRADED, "unset", "brightness")
+        self.assertEqual(code, 0)
+        self.assertEqual(_conf(GRADED), {})
+        self.assertIn(wallpaper.COLOR_REMOVED, out)
+
     def test_fullscreen_inherit_deletes_the_key(self) -> None:
         code, _out, _err = _run(PLAIN, "fullscreen", "inherit")
         self.assertEqual(code, 0)
