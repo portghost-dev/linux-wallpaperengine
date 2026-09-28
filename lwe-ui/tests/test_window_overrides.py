@@ -5,11 +5,13 @@ window turns one on, settings.conf names it as the window's in the same write (s
 write that changes the key ends that in its own text, and so does a command or a backup import that sets
 the key, even to the same value; a write that fails changes neither the value nor the ownership. At quit
 the window reads its ownership under the settings lock, then turns off what it still owns and ends all of
-it in one write the sync marker records first. So `lwe mute on` survives a window quit and the window's own mute is cleared;
-a later write that puts the window's value back does not revive its claim; a command whose write failed
-leaves the claim; an import that sets a key the window set takes it over, and one without the key leaves
-it; a quit racing a restore makes no write the marker has not recorded. Panel-state files that cannot be
-written change none of this, and the ownership line stays out of an export.
+it in one write the sync marker records first. So `lwe mute on` survives a window quit and the window's
+own mute is cleared; a later write that puts the window's value back does not revive its claim; a command
+whose write failed leaves the claim; an import that sets a key the window set takes it over, and one
+without the key leaves it; a quit racing a restore makes no write the marker has not recorded; a quit with
+nothing owned asks the engine nothing. Panel-state files that cannot be written change none of this. The
+ownership line stays out of an export, and an archive's copy of it is neither applied, kept aside nor
+exported again.
 
 Each case drives a real Backend offscreen and the command entry in this process, with HOME and the XDG
 folders at scratch, daemon_unit's subprocess call recorded and nothing listening on the sandbox socket.
@@ -23,6 +25,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -39,10 +42,10 @@ from PySide6.QtGui import QGuiApplication  # noqa: E402
 
 _APP = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
 
-from lwe_ui import cli, models, version  # noqa: E402
+from lwe_ui import api_client, cli, models, version  # noqa: E402
 from lwe_ui import constants as C  # noqa: E402
 from lwe_ui.engine import daemon_unit, marker  # noqa: E402
-from lwe_ui.storage import atomic, backup, lock, paths, settings, tier_a  # noqa: E402
+from lwe_ui.storage import atomic, backup, foreign, lock, paths, settings, tier_a  # noqa: E402
 
 
 def tearDownModule() -> None:
@@ -318,6 +321,50 @@ class WindowOverridesTest(unittest.TestCase):
         with zipfile.ZipFile(self.archive("out")) as z:
             keys = set(tier_a.parse(z.read(settings.MEMBER).decode("utf-8")))
         self.assertLessEqual(keys, set(C.SETTINGS_SCHEMA))
+
+    def carrying(self, archive: Path) -> list[str]:
+        with zipfile.ZipFile(archive) as z:
+            return [name for name in z.namelist() if settings.OWNED_KEY.encode("utf-8") in z.read(name)]
+
+    def test_a_quit_with_nothing_owned_asks_the_engine_nothing(self) -> None:
+        asked: list = []
+
+        def request(cmd, *args, **kwargs):
+            asked.append((cmd, "settings" in lock._holding()))
+            time.sleep(0.25)
+
+        def available(*args, **kwargs):
+            asked.append(("available", "settings" in lock._holding()))
+            return False
+
+        def quit_window() -> None:
+            with mock.patch.object(api_client, "request", request), \
+                    mock.patch.object(api_client, "available", available):
+                self.window.restoreSessionOverrides()
+        quit_window()
+        self.assertEqual(asked, [])
+        self.window.setSessionOverride("mute", True)
+        quit_window()
+        self.assertEqual((asked[:1], [cmd for cmd, held in asked if held]), ([("status", False)], []))
+        self.assertIs(settings.load()["OVERRIDE_MUTE"], False)
+
+    def test_an_imported_ownership_line_is_kept_nowhere(self) -> None:
+        crafted = paths.state_dir() / "crafted.lwebackup"
+        line = f"{settings.OWNED_KEY}=OVERRIDE_MUTE\n".encode("utf-8")
+        with zipfile.ZipFile(self.archive("full")) as source, zipfile.ZipFile(crafted, "w") as dest:
+            for item in source.infolist():
+                data = source.read(item)
+                dest.writestr(item, data + line if item.filename == settings.MEMBER else data)
+        receipt = backup.apply(backup.preflight(crafted))
+        self.assertEqual((receipt.get("refused", False), receipt["errors"]), (False, []))
+        kept = foreign._file().read_text(encoding="utf-8") if foreign._file().exists() else ""
+        named = [entry.get("key") for entry in receipt["preserved"]]
+        self.assertEqual((self.carrying(self.archive("again")), settings.OWNED_KEY in kept,
+                          settings.OWNED_KEY in named, settings.window_owned()), ([], False, False, []))
+
+    def test_an_ownership_line_kept_aside_never_goes_into_an_export(self) -> None:
+        foreign.save({"settings": {settings.MEMBER: {settings.OWNED_KEY: "OVERRIDE_MUTE"}}})
+        self.assertEqual(self.carrying(self.archive("out")), [])
 
 
 if __name__ == "__main__":

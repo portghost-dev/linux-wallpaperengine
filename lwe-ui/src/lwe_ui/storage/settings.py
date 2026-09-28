@@ -368,7 +368,7 @@ MACHINE_KEYS = tuple(k for k, s in C.SETTINGS_SCHEMA.items() if s["type"] == "pa
 def _backup_export(z: zipfile.ZipFile, r: dict[str, Any]) -> None:
     flat = dict(_to_text(load()))
     for key, val in foreign.extras("settings", MEMBER).items():
-        if key in flat:
+        if key in flat or key == OWNED_KEY:
             continue
         if tier_a.is_valid_key(key):
             flat[key] = str(val)
@@ -395,8 +395,9 @@ def _followups(r: dict[str, Any], after: dict[str, Any], current: dict[str, Any]
 def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any],
                       cfg_after: dict[str, Any]) -> bool:
     """The same tables, coercion and validation a normal load applies; a key this build does
-    not know is preserved, every clamp, snap and alias is named. A backup with no settings
-    member leaves the current settings to decide the rest of the plan."""
+    not know is preserved, every clamp, snap and alias is named. The window's ownership line
+    (OWNED_KEY) is this machine's own record, so an archive's copy is neither applied nor kept.
+    A backup with no settings member leaves the current settings to decide the rest of the plan."""
     current = load()
     if MEMBER not in z.namelist():
         r["notes"].append({"kind": "no-settings", "member": MEMBER})
@@ -409,7 +410,7 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
     for k, v in raw.items():
         if k in C.SETTINGS_SCHEMA:
             known[k] = v
-        else:
+        elif k != OWNED_KEY:
             foreign.record(plan, "settings", MEMBER, k, v, r)
     report: list = []
     coerced = _validate({k: _coerce(k, v, C.SETTINGS_SCHEMA[k], report) for k, v in known.items()}, report)

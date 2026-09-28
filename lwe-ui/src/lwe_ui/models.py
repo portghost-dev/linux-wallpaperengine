@@ -1192,10 +1192,14 @@ class Backend(QObject):
 
     def restoreSessionOverrides(self) -> None:
         """App quit: the session overrides this window still owns go back to off
-        (settings.clear_window_overrides), so a window exit never undoes another door's choice. The
-        status is read first; then the settings lock is held from the read of the ownership through
-        the pending record and the write (push.save_change), and the push follows."""
+        (settings.clear_window_overrides), so a window exit never undoes another door's choice. With
+        nothing owned under the settings lock it returns without asking the engine anything.
+        Otherwise the status is read, then the settings lock is held from a fresh read of the
+        ownership through the pending record and the write (push.save_change), and the push follows."""
         try:
+            with lock.held("settings"):
+                if not settings.window_owned():
+                    return
             first = push.read_status()
             with lock.held("settings"):
                 owned = settings.window_owned()
