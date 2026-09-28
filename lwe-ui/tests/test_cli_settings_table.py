@@ -242,7 +242,8 @@ class SettingsTableTest(unittest.TestCase):
         r = self.report
         for row in self.table.ROWS:
             with self.subTest(name=row.name, form=row.form):
-                self.assertTrue(r.text(r.receipt(row.name, "x", True, row.reach)))
+                outcome = r.APPLIED if row.reach in (self.table.NOW, self.table.NEXT_WALLPAPER) else None
+                self.assertTrue(r.text(r.receipt(row.name, "x", True, row.reach, outcome)))
         line = r.text(r.receipt("alias", "field", True, self.table.NO_ENGINE))
         self.assertEqual(line, "alias field: saved; nothing more is needed.")
         self.assertNotIn("engine", line)
