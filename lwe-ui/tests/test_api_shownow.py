@@ -263,6 +263,89 @@ class ApiShowNowTest(unittest.TestCase):
         self.assertTrue(self.backend.showNow("3134543499"))
         self.assertEqual(captured["volume"], 55, "absent VOLUME key -> global ENGINE_VOLUME")
 
+    def _shown(self, wid: str) -> dict:
+        captured: dict = {}
+
+        def _show(wid, wait_done=False, **kw):
+            captured.update(kw, wid=wid)
+            return {"id": 1, "ok": True, "status": "accepted"}
+
+        _API.available = lambda: True
+        _API.show = _show
+        self.assertTrue(self.backend.showNow(wid))
+        return captured
+
+    def test_absent_scaling_key_inherits_global(self) -> None:
+        """A file without SCALING follows ENGINE_SCALING; a file that carries SCALING keeps
+        it, the schema default included."""
+        from lwe_ui.storage import wp
+
+        settings.save({"ENGINE_SCALING": "fill"})
+        wp.save("3134543499", {"SPEED": 1.5})
+        wp.update_set("3134543499", {"SCALING": None})
+        self.assertEqual(self._shown("3134543499")["scaling"], "fill",
+                         "absent SCALING key -> global ENGINE_SCALING")
+        wp.update_set("3134543499", {"SCALING": "default"})
+        self.assertEqual(self._shown("3134543499")["scaling"], "default",
+                         "a present SCALING wins over the global")
+
+    def test_absent_audio_reactive_key_inherits_global(self) -> None:
+        """A file without AUDIO_REACTIVE follows AUDIO_REACTIVE_DEFAULT; a file that carries
+        AUDIO_REACTIVE=false keeps it."""
+        from lwe_ui.storage import wp
+
+        settings.save({"AUDIO_REACTIVE_DEFAULT": True})
+        wp.save("3134543499", {"SPEED": 1.5})
+        wp.update_set("3134543499", {"AUDIO_REACTIVE": None})
+        self.assertTrue(self._shown("3134543499")["audio_processing"],
+                        "absent AUDIO_REACTIVE key -> global AUDIO_REACTIVE_DEFAULT")
+        wp.update_set("3134543499", {"AUDIO_REACTIVE": False})
+        self.assertFalse(self._shown("3134543499")["audio_processing"],
+                         "a present AUDIO_REACTIVE wins over the global")
+
+    def test_absent_mouse_key_inherits_global(self) -> None:
+        """A file without MOUSE follows MOUSE_DEFAULT; a file that carries MOUSE=false keeps it."""
+        from lwe_ui.storage import wp
+
+        settings.save({"MOUSE_DEFAULT": True})
+        wp.save("3134543499", {"SPEED": 1.5})
+        wp.update_set("3134543499", {"MOUSE": None})
+        self.assertTrue(self._shown("3134543499")["mouse"], "absent MOUSE key -> global MOUSE_DEFAULT")
+        wp.update_set("3134543499", {"MOUSE": False})
+        self.assertFalse(self._shown("3134543499")["mouse"], "a present MOUSE wins over the global")
+
+    def test_absent_automute_key_inherits_global(self) -> None:
+        """A file without AUTOMUTE follows AUTOMUTE_DEFAULT; a file that carries AUTOMUTE=true
+        keeps it."""
+        from lwe_ui.storage import wp
+
+        settings.save({"AUTOMUTE_DEFAULT": False})
+        wp.save("3134543499", {"SPEED": 1.5})
+        wp.update_set("3134543499", {"AUTOMUTE": None})
+        self.assertFalse(self._shown("3134543499")["automute"],
+                         "absent AUTOMUTE key -> global AUTOMUTE_DEFAULT")
+        wp.update_set("3134543499", {"AUTOMUTE": True})
+        self.assertTrue(self._shown("3134543499")["automute"], "a present AUTOMUTE wins over the global")
+
+    def test_absent_cc_key_takes_the_authored_grade(self) -> None:
+        """A file without CC shows the color grade the wallpaper's project authors; a file that
+        carries CC keeps it, identity included."""
+        import json
+
+        from lwe_ui.storage import wp
+
+        project = Path(settings.load()["WALLPAPERS_DIR"]) / "3134543499"
+        project.mkdir(parents=True)
+        (project / "project.json").write_text(
+            json.dumps({"title": "graded", "type": "scene", "preset": {"wec_brs": 75}}), encoding="utf-8")
+        wp.save("3134543499", {"SPEED": 1.5})
+        wp.update_set("3134543499", {"CC": None})
+        self.assertEqual(self._shown("3134543499")["cc"], [1.5, 1.0, 1.0, 0.0],
+                         "absent CC key -> the project's authored grade")
+        wp.update_set("3134543499", {"CC": "1 1 1 0"})
+        self.assertEqual(self._shown("3134543499")["cc"], [1.0, 1.0, 1.0, 0.0],
+                         "a present CC wins over the authored grade")
+
     def test_preset_resolves_to_base_wallpaper(self) -> None:
         """A preset's conf BG names the real wallpaper; the API gets the BASE id plus
         the preset's render settings."""

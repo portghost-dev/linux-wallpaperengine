@@ -37,7 +37,7 @@ def _identity_dir(wid: str, wallpapers_dir: str) -> str:
     except Exception:
         pass
     try:
-        bg = str(wp.load(wid).get("BG", "") or "")
+        bg = str(wp.load_set(wid).get("BG", "") or "")
         if bg and os.path.isdir(bg):
             return bg
     except Exception:
@@ -165,7 +165,7 @@ def resolve_show_args(wid: str) -> tuple[str, dict[str, Any]]:
     s = settings.load()
     conf: dict[str, Any] = {}
     try:
-        conf = wp.load(wid)
+        conf = wp.load_set(wid)
     except Exception:
         pass  # unreadable conf must never kill a show; identity is safe (is_safe_wid gated)
 
@@ -205,9 +205,7 @@ def resolve_show_args(wid: str) -> tuple[str, dict[str, Any]]:
         if paths.is_safe_wid(base):
             engine_wid = base
 
-    # scaling/clamp: editor-saved confs always carry SCALING (wp.load fills the schema
-    # default for the rest), so the conf value wins; the ENGINE_* globals only reach a
-    # hand-written conf that clamp-omits. Empty clamp = the engine's launch default.
+    # Empty clamp = the engine's launch default.
     args["scaling"] = str(conf.get("SCALING") or s.get("ENGINE_SCALING") or "default")
     clamp = str(conf.get("CLAMPING") or s.get("ENGINE_CLAMP") or "").strip()
     if clamp:
