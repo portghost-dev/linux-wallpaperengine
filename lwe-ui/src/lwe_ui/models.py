@@ -687,6 +687,13 @@ class Backend(QObject):
         was_active = slug == self._active_slug()
         try:
             playlists.delete(slug)  # tombstones + reassigns the active pointer if it was active
+        except lock.StoreBusy as exc:
+            if paths.playlist_file(slug).exists():
+                return
+            logging.getLogger(__name__).warning("playlist %s deleted; the active playlist was not reassigned: %s",
+                                                slug, exc)
+            self._after_playlist_change(manual=was_active)
+            raise
         except Exception:
             return
         self._drop_from_schedule(slug)
@@ -699,6 +706,13 @@ class Backend(QObject):
             return
         try:
             playlists.delete(slug)  # tombstones + reassigns the active pointer
+        except lock.StoreBusy as exc:
+            if paths.playlist_file(slug).exists():
+                return
+            logging.getLogger(__name__).warning("playlist %s deleted; the active playlist was not reassigned: %s",
+                                                slug, exc)
+            self._after_playlist_change(manual=True)
+            raise
         except Exception:
             return
         self._drop_from_schedule(slug)
@@ -1135,7 +1149,11 @@ class Backend(QObject):
     def _ensure_open(self, name: str, header: str) -> None:
         fp = paths.config_dir() / name
         try:
-            rules.modify(name, lambda text: text if fp.exists() else header)
+            with lock.held("rules"):
+                try:
+                    fp.read_bytes()
+                except FileNotFoundError:
+                    rules.save(name, header)
         except OSError:
             pass
         self.openPath(str(fp))

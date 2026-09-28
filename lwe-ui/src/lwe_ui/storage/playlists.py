@@ -179,7 +179,8 @@ def delete(slug: str) -> None:
             return {}
         remaining = list_playlists()
         return {"ACTIVE_PLAYLIST": remaining[0]["slug"] if remaining else ""}
-    settings.modify(repoint)
+    if str(settings.load().get("ACTIVE_PLAYLIST") or "") == slug:
+        settings.modify(repoint)
 
 
 def members(slug: str) -> list[str]:

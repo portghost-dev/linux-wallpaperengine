@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import csv
 import io
+import time
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from . import atomic, lock, paths
@@ -79,18 +82,32 @@ def review_ids() -> set[str]:
 _WRITE_LOCK = __import__("threading").Lock()
 
 
+@contextmanager
+def _locked() -> Iterator[None]:
+    """The tags thread mutex, then the tags file lock, both within LOCK_WAIT_S in total; past
+    that, StoreBusy with nothing written."""
+    deadline = time.monotonic() + lock.LOCK_WAIT_S
+    if not _WRITE_LOCK.acquire(timeout=lock.LOCK_WAIT_S):
+        raise lock.StoreBusy(f"Store busy: another writer holds {paths.locks_dir() / 'tags.lock'}")
+    try:
+        with lock.held("tags", wait_s=max(0.0, deadline - time.monotonic())):
+            yield
+    finally:
+        _WRITE_LOCK.release()
+
+
 def set_state(id: str, title: str, state: str) -> None:
     """Upsert a row (match by id) and save. Updates the title on every call.
     States in use: good (rotates), bad (tombstone), review (imported, awaiting the
     card verdict; never rotates). Thread-safe."""
-    with _WRITE_LOCK, lock.held("tags"):
+    with _locked():
         _set_state_locked(id, title, state)
 
 
 def remove(id: str) -> None:
     """Delete a row entirely (tombstone restore: an unknown id reimports / re-pends
     naturally, which IS the restore semantics). Thread-safe. No-op when absent."""
-    with _WRITE_LOCK, lock.held("tags"):
+    with _locked():
         rows = load()
         kept = [r for r in rows if r.get("id") != id]
         if len(kept) != len(rows):
@@ -99,7 +116,7 @@ def remove(id: str) -> None:
 
 def save_rows(rows: list[dict]) -> None:
     """Replace the whole store under the module lock."""
-    with _WRITE_LOCK, lock.held("tags"):
+    with _locked():
         save(rows)
 
 
@@ -107,7 +124,7 @@ def remove_state(state: str) -> list[str]:
     """Drop every row in `state`, load-filter-save INSIDE the lock (a concurrent import
     worker's set_state must never be lost - tags.csv is watcher-load-bearing). Returns
     the removed ids (the tombstone clear-all reports what came back to life)."""
-    with _WRITE_LOCK, lock.held("tags"):
+    with _locked():
         rows = load()
         removed = [r["id"] for r in rows if r.get("state") == state and r.get("id")]
         if removed:

@@ -114,7 +114,9 @@ def timeline(wid: str) -> list[dict]:
 def purge_and_ungate(wid: str) -> bool:
     """Manager purge: delete the record file AND drop the tags row, so the item is no longer
     suppressed and can re-import. Wipes BOTH the suppression and the audit trail (the confirm
-    must say so). Returns True if a record file was removed."""
+    must say so). Returns True if a record file was removed. When none was removed, for
+    example with no file or the records store busy, the tags row is kept, one warning is
+    logged and it returns False."""
     removed = records.purge(wid)
     if not removed:
         logging.getLogger(__name__).warning("record for %s not purged; its tags row is kept", wid)

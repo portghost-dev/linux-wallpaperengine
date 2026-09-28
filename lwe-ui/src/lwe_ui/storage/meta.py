@@ -8,7 +8,10 @@ not preserved, since an open map has no schema to say what it was.
 from __future__ import annotations
 
 import json
+import time
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any, Callable
 
 from . import atomic, lock, paths
@@ -36,10 +39,24 @@ def get(id: str) -> dict:
 _WRITE_LOCK = __import__("threading").Lock()
 
 
+@contextmanager
+def _locked() -> Iterator[None]:
+    """The meta thread mutex, then the meta file lock, both within LOCK_WAIT_S in total; past
+    that, StoreBusy with nothing written."""
+    deadline = time.monotonic() + lock.LOCK_WAIT_S
+    if not _WRITE_LOCK.acquire(timeout=lock.LOCK_WAIT_S):
+        raise lock.StoreBusy(f"Store busy: another writer holds {paths.locks_dir() / 'meta.lock'}")
+    try:
+        with lock.held("meta", wait_s=max(0.0, deadline - time.monotonic())):
+            yield
+    finally:
+        _WRITE_LOCK.release()
+
+
 def update(id: str, patch: dict[str, Any]) -> None:
     """Merge `patch` into the entry for `id` and atomically save the whole map.
     Thread-safe."""
-    with _WRITE_LOCK, lock.held("meta"):
+    with _locked():
         _update_locked(id, patch)
 
 
@@ -47,7 +64,7 @@ def modify(id: str, fn: Callable[[dict[str, Any]], dict[str, Any] | None]) -> di
     """Under the meta locks: fn receives a copy of the entry for `id`, read fresh, and returns
     the keys to merge into it; the map is saved only when there are any. Returns the entry as
     it stands after the call. Thread-safe."""
-    with _WRITE_LOCK, lock.held("meta"):
+    with _locked():
         data = load()
         entry = data.get(id)
         entry = dict(entry) if isinstance(entry, dict) else {}
