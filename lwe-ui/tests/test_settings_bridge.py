@@ -41,9 +41,7 @@ from lwe_ui.storage import paths, settings  # noqa: E402
 from lwe_ui.engine import daemon_unit  # noqa: E402
 
 # hermetic systemd: regenerate commits call daemon-reload; never touch the host bus
-import types as _types
-daemon_unit.subprocess.run = lambda argv, **kw: _types.SimpleNamespace(
-    returncode=0, stderr="", stdout="")
+daemon_unit.RUNNER = lambda args, **kw: (0, "", "")
 daemon_unit.enumerate_outputs = lambda: ["DP-1"]
 
 

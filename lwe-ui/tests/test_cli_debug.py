@@ -15,7 +15,6 @@ import io
 import json
 import shutil
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -169,9 +168,9 @@ class DebugVerbTest(unittest.TestCase):
     def test_a_set_testtexturelimit_survives_write_files(self) -> None:
         self.seed(LWE_IMGPROBE="1")
         self.assertEqual(self.lwe("debug", "testtexturelimit", "2048")[0], 0)
-        reload = mock.Mock(return_value=types.SimpleNamespace(returncode=0, stderr="", stdout=""))
+        reload = mock.Mock(return_value=(0, "", ""))
         engine = "/usr/local/bin/linux-wallpaperengine"
-        with mock.patch.object(self.daemon_unit.subprocess, "run", reload), \
+        with mock.patch.object(self.daemon_unit, "RUNNER", reload), \
                 mock.patch.object(self.daemon_unit, "resolve_engine_bin", lambda: engine):
             self.daemon_unit.write_files()
         self.assertIn("\nLWE_TEXCAP=2048\n", self.env_path.read_text(encoding="utf-8"))

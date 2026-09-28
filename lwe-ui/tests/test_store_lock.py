@@ -313,9 +313,9 @@ class StoreLockTest(unittest.TestCase):
                 os.close(fd)
             real_write(path, text)
 
-        reload = mock.Mock(return_value=subprocess.CompletedProcess(["systemctl"], 0, "", ""))
+        reload = mock.Mock(return_value=(0, "", ""))
         with mock.patch.object(atomic, "atomic_write_text", probing_write), \
-                mock.patch.object(daemon_unit.subprocess, "run", reload):
+                mock.patch.object(daemon_unit, "RUNNER", reload):
             daemon_unit.write_files(["DP-1"])
         reload.assert_called_once()
         self.assertEqual(seen, [(daemon_unit.ENV_FILE_NAME, True), (daemon_unit.UNIT_FILE_NAME, True)])

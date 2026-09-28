@@ -15,7 +15,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -40,14 +39,13 @@ class _FakeReload:
         self.returncode = 0
         self.stderr = ""
 
-    def __call__(self, argv, **kw):
-        self.calls.append(argv)
-        return types.SimpleNamespace(returncode=self.returncode,
-                                     stderr=self.stderr, stdout="")
+    def __call__(self, args, **kw):
+        self.calls.append(["systemctl", "--user", *args])
+        return self.returncode, "", self.stderr
 
 
 _fake_reload = _FakeReload()
-daemon_unit.subprocess.run = _fake_reload
+daemon_unit.RUNNER = _fake_reload
 
 PID = 4242
 
@@ -316,6 +314,19 @@ class DaemonUnitTest(unittest.TestCase):
                 daemon_unit.build_env_content()
         finally:
             daemon_unit.enumerate_outputs = saved
+
+    def test_in_the_sandbox_the_reload_runs_nothing_and_fails_as_a_failed_reload(self) -> None:
+        settings.save(settings.load())
+        calls = []
+        with mock.patch.object(daemon_unit, "RUNNER", daemon_unit._systemctl), \
+                mock.patch.object(daemon_unit.subprocess, "run", lambda *a, **k: calls.append(a)), \
+                mock.patch.object(daemon_unit, "enumerate_outputs", lambda: ["DP-1"]), \
+                mock.patch.object(daemon_unit, "resolve_engine_bin", lambda: "/usr/local/bin/linux-wallpaperengine"):
+            with self.assertRaises(RuntimeError) as caught:
+                daemon_unit.write_files()
+        self.assertEqual(str(caught.exception), "systemd daemon-reload failed: systemctl is not run in the test "
+                                                "sandbox; run systemctl --user daemon-reload")
+        self.assertEqual(calls, [])
 
     def test_reload_failure_is_loud(self) -> None:
         """A failed daemon-reload surfaces instead of being swallowed."""

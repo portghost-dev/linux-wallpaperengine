@@ -217,8 +217,8 @@ class TargetedWriteTest(unittest.TestCase):
         engine = self.home / "linux-wallpaperengine"
         engine.write_text("#!/bin/sh\n", encoding="utf-8")
         settings.update({"ENGINE_BIN": str(engine)})
-        reload = mock.Mock(return_value=subprocess.CompletedProcess(["systemctl"], 0, "", ""))
-        with mock.patch.object(daemon_unit.subprocess, "run", reload):
+        reload = mock.Mock(return_value=(0, "", ""))
+        with mock.patch.object(daemon_unit, "RUNNER", reload):
             env_path, unit_path = daemon_unit.write_files(["DP-1"])
             inodes = (Path(env_path).stat().st_ino, Path(unit_path).stat().st_ino)
             daemon_unit.write_files(["DP-1"])

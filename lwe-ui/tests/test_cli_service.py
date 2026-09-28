@@ -1,6 +1,6 @@
 """lwe service: the status read and the start, stop, restart and autostart forms, in this process
-through cli.main, with every systemctl call recorded by a fake daemon_unit.RUNNER (and write_files'
-daemon-reload by a fake subprocess.run), enumerate_outputs, push.wait_ready and push.sync_all patched,
+through cli.main, with every systemctl call, write_files' daemon-reload included, recorded by a fake
+daemon_unit.RUNNER, enumerate_outputs, push.wait_ready and push.sync_all patched,
 and HOME and the XDG folders at scratch (_cli_env). Nothing reaches systemctl or an engine.
 
 Run: PYTHONPATH=src python3 tests/test_cli_service.py
@@ -10,7 +10,6 @@ import contextlib
 import io
 import json
 import shutil
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -29,6 +28,7 @@ STOPPED = {"LoadState": "loaded", "ActiveState": "inactive", "SubState": "dead",
            "MainPID": "0", "MemoryCurrent": "[not set]"}
 FAILED = {**STOPPED, "ActiveState": "failed", "SubState": "failed"}
 MISSING = {**STOPPED, "LoadState": "not-found"}
+ACTIVATING = {**RUNNING, "ActiveState": "activating", "SubState": "auto-restart", "MainPID": "0"}
 
 
 class FakeSystemctl:
@@ -67,18 +67,14 @@ class ServiceTest(unittest.TestCase):
         for path in (CONFIG / "engine-env", UNIT):
             path.unlink(missing_ok=True)
 
-    def run_lwe(self, words, state, outputs=("DP-1",), fail=None, ready=True, outcome=None):
-        def reload(args, **kwargs):
-            self.events.append(("subprocess", *args))
-            return subprocess.CompletedProcess(args, 0, "", "")
-
+    def run_lwe(self, words, state, outputs=("DP-1",), fail=None, ready=True, outcome=None, waiting=None):
         self.wait = mock.Mock(return_value={"pid": 4343} if ready else None)
         self.sync = mock.Mock(return_value=outcome or self.push.Outcome("applied"))
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.object(self.unit, "RUNNER", FakeSystemctl(self.events, state, fail or {})), \
-                mock.patch.object(self.unit.subprocess, "run", reload), \
                 mock.patch.object(self.unit, "enumerate_outputs", return_value=list(outputs)), \
-                mock.patch.object(self.unit, "restart_state", return_value=(False, {})), \
+                mock.patch.object(self.unit, "restart_state",
+                                  return_value=(True, waiting) if waiting else (False, {})), \
                 mock.patch.object(self.api, "status", return_value=None), \
                 mock.patch.object(self.push, "wait_ready", self.wait), \
                 mock.patch.object(self.push, "sync_all", self.sync), \
@@ -87,7 +83,7 @@ class ServiceTest(unittest.TestCase):
         return code, out.getvalue(), err.getvalue()
 
     def kinds(self):
-        return [event[1] if event[0] == "systemctl" else "daemon-reload" for event in self.events]
+        return [event[1] for event in self.events]
 
     def assert_no_now(self):
         self.assertFalse(any("--now" in event for event in self.events))
@@ -191,13 +187,39 @@ class ServiceTest(unittest.TestCase):
         self.sync.assert_not_called()
         code, out, err = self.run_lwe(["start"], STOPPED, ready=False)
         self.assertEqual((code, out), (1, ""))
-        self.assertEqual(err, f"The service started, but the engine did not answer within 20 s; {LOG} shows why.\n")
+        self.assertEqual(err, "The service started, but the engine did not answer within 20 s; your settings will "
+                              f"be sent at the next chance. {LOG} shows why.\n")
         pending = self.push.Outcome("pending", reason="away")
         self.assertEqual(self.run_lwe(["start"], STOPPED, outcome=pending),
                          (0, "Started the service. Autostart is unchanged (off).\n"
                              "It has not taken your settings yet (away); lwe reload sends them.\n", ""))
         refused = self.push.Outcome("refused", message="unknown playlist")
         self.assertEqual(self.run_lwe(["restart"], RUNNING, outcome=refused)[0], 1)
+
+    def test_stop_stops_an_activating_service(self) -> None:
+        self.assertEqual(self.run_lwe(["stop"], ACTIVATING), (0, "Stopped the service. Autostart is unchanged (on).\n", ""))
+        self.assertEqual(self.kinds(), ["show", "stop"])
+
+    def test_no_answer_records_bundle_in_the_marker(self) -> None:
+        from lwe_ui.engine import marker
+        self.run_lwe(["start"], STOPPED, ready=False)
+        self.assertIn("BUNDLE", marker.read()["classes"])
+        self.sync.assert_not_called()
+
+    def test_a_version_refusal_after_a_start_prints_the_refusal_and_exits_1(self) -> None:
+        refusal = "The running engine is 1.1.0 but 1.2.0 is installed; run lwe service restart."
+        version = self.push.Outcome("pending", reason="version", message=refusal)
+        for words, state in ((["start"], STOPPED), (["restart"], RUNNING)):
+            with self.subTest(words=words):
+                self.assertEqual(self.run_lwe(words, state, outcome=version), (1, "", refusal + "\n"))
+
+    def test_the_waiting_line_names_the_settings_that_wait_for_a_restart(self) -> None:
+        code, out, err = self.run_lwe([], RUNNING, waiting={"ENGINE_TEXCOMP": True, "ENGINE_LAYER": False})
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("Waiting for lwe service restart: texturecache\n", out)
+        self.assertNotIn("layer", out)
+        code, out, err = self.run_lwe(["-j"], RUNNING, waiting={"ENGINE_TEXCOMP": True, "ENGINE_LAYER": False})
+        self.assertEqual((code, err, json.loads(out)["waiting"]), (0, "", ["texturecache"]))
 
     def test_an_engine_bin_named_lwe_is_skipped(self) -> None:
         lwe = ROOT / "bin" / "lwe"

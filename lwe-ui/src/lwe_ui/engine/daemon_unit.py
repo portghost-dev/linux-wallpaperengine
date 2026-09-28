@@ -432,16 +432,10 @@ def write_files(outputs: list[str] | None = None) -> tuple[str, str]:
         if not unit_same:
             atomic.atomic_write_text(unit_path, unit_text)
 
-    try:
-        reload_proc = subprocess.run(["systemctl", "--user", "daemon-reload"],
-                                     capture_output=True, text=True, timeout=10, check=False)
-    except (OSError, subprocess.SubprocessError) as exc:
+    code, _, err = RUNNER(["daemon-reload"], timeout=10)
+    if code != 0:
         raise RuntimeError(
-            f"systemd daemon-reload failed: {exc}; run systemctl --user daemon-reload") from exc
-    if reload_proc.returncode != 0:
-        raise RuntimeError(
-            "systemd daemon-reload failed: "
-            + (reload_proc.stderr.strip() or f"exit {reload_proc.returncode}")
+            "systemd daemon-reload failed: " + (err.strip() or f"exit {code}")
             + "; run systemctl --user daemon-reload")
     return str(env_path), unit_path
 

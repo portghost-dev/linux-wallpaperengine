@@ -66,11 +66,15 @@ def _rebuild() -> list[str]:
 
 def _launch(args: list[str], old_pid: int | None) -> tuple[list[str], int]:
     """Start or restart, wait for the engine, sync it; returns the outcome line and the exit code."""
-    from ...engine import push
+    from ...engine import marker, push
     _call(args)
     if push.wait_ready(old_pid=old_pid, timeout_s=READY_S) is None:
-        raise _Stop(f"The service started, but the engine did not answer within {READY_S} s; {LOG} shows why.")
+        marker.ensure(("BUNDLE",))
+        raise _Stop(f"The service started, but the engine did not answer within {READY_S} s; your settings will be "
+                    f"sent at the next chance. {LOG} shows why.")
     outcome = push.sync_all("command")
+    if outcome.kind == "pending" and outcome.reason == "version":
+        raise _Stop(outcome.message or "The running engine is from another build.")
     line = {
         "pending": f"It has not taken your settings yet ({outcome.reason}); lwe reload sends them.",
         "refused": f"The engine refused part of your settings: {outcome.message}.",
@@ -134,7 +138,7 @@ def _act(ctx: Context, form: str, word: str | None) -> int:
     running = state.get("ActiveState") == "active"
     unchanged = f"Autostart is unchanged ({_autostart(state)})."
     if form == "stop":
-        if not running:
+        if state.get("ActiveState") in ("inactive", "failed"):
             _say(ctx, "not running", ["The service was not running."], state)
             return DONE
         _call(["stop", unit])
