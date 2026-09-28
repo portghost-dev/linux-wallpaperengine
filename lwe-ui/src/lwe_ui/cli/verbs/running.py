@@ -44,9 +44,17 @@ def _countdown(seconds: int) -> str:
 
 
 def _unfinished(acked: bool) -> str:
-    """A request with no final ok or refusal: accepted but not finished once the engine's ack arrived,
-    else the engine may have run it without answering."""
+    """A request with no final reply: accepted but not finished once the engine's ack arrived, else
+    the engine may have run it without answering."""
     return "accepted but not finished" if acked else UNCERTAIN
+
+
+def _replied_unfinished(reply: dict) -> str:
+    """A final reply that is neither a done ok nor a refusal, named by its status, else its message,
+    else the reply itself."""
+    named = reply.get("status") or reply.get("error") or json.dumps(reply, ensure_ascii=False,
+                                                                    separators=(",", ":"))
+    return f"the engine replied but did not finish: {named}"
 
 
 def _step(ctx: Context, name: str, args: list[str]) -> int:
@@ -85,7 +93,7 @@ def _step(ctx: Context, name: str, args: list[str]) -> int:
             print(EMPTY_HINT, file=ctx.err)
         return REFUSED
     if cls != "ok":
-        return _refuse(ctx, _unfinished(acked), REFUSED)
+        return _refuse(ctx, _replied_unfinished(reply), REFUSED)
     after = api_client.status()
     current = after.get("current") if isinstance(after, dict) else None
     if not isinstance(current, dict):
@@ -219,7 +227,7 @@ def _show(ctx: Context, args: list[str]) -> int:
     if cls == "refused":
         return refused(str(reply.get("error") or ""), REFUSED)
     if cls != "ok":
-        return refused(_unfinished(acked), REFUSED)
+        return refused(_replied_unfinished(reply), REFUSED)
     if ctx.json:
         _print_json(ctx, {"number": pick.number, "id": pick.ui_id, "title": pick.title,
                           "screens_back_on": released})

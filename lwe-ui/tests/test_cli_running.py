@@ -212,6 +212,16 @@ class NextPrevTest(RunningCase):
             self.assertEqual(self.lwe("next"), (1, "", "the engine did not answer in time, so it may have applied\n"))
         self.assertEqual(self.requests(engine), [("next", {})])
 
+    def test_a_final_reply_that_is_neither_done_nor_a_refusal_says_the_engine_replied(self) -> None:
+        engine = self.engine()
+        queued = {"id": 1, "ok": True, "status": "queued"}
+        for acked in (False, True):
+            with self.subTest(acked=acked), \
+                    mock.patch.object(self.api_client, "next_wallpaper", lambda wait_done=False: queued), \
+                    mock.patch.object(self.api_client, "acked", lambda: acked):
+                self.assertEqual(self.lwe("next"), (1, "", "the engine replied but did not finish: queued\n"))
+        self.assertEqual(self.requests(engine), [])
+
     def test_a_status_read_without_an_answer_exits_1(self) -> None:
         engine = self.engine()
         engine.script("status", silent())

@@ -159,6 +159,17 @@ class ShowTest(unittest.TestCase):
                                                                       "have applied\n"))
         self.assertEqual([cmd for cmd, _args in self.requests(engine)], ["show"])
 
+    def test_a_final_reply_that_is_neither_done_nor_a_refusal_says_the_engine_replied(self) -> None:
+        from lwe_ui.engine import push
+        engine = self.engine()
+        queued = {"id": 1, "ok": True, "status": "queued"}
+        for acked in (False, True):
+            with self.subTest(acked=acked), mock.patch.object(push, "show_final", lambda wid: queued), \
+                    mock.patch.object(self.api_client, "acked", lambda: acked):
+                self.assertEqual(self.lwe("show", "2"), (1, LINE + "\n", "the engine replied but did not finish: "
+                                                                          "queued\n"))
+        self.assertEqual(self.requests(engine), [])
+
     def test_engine_absent_or_from_another_build_or_busy_sends_no_show(self) -> None:
         self.assertEqual(self.lwe("show", "2"), (2, LINE + "\n", "the service is not running\n"))
         engine = self.engine(version="9.9.9")
