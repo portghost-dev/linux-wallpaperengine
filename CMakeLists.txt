@@ -333,6 +333,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Debugging/CallStack.cpp
     src/WallpaperEngine/Debugging/CallStack.h
 
+    src/WallpaperEngine/Api/CommandClient.cpp
+    src/WallpaperEngine/Api/CommandClient.h
     src/WallpaperEngine/Api/CommandDispatcher.cpp
     src/WallpaperEngine/Api/Lane.cpp
     src/WallpaperEngine/Api/CommandDispatcher.h
@@ -350,6 +352,10 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Application/FullscreenPolicy.h
     src/WallpaperEngine/Application/HelpText.cpp
     src/WallpaperEngine/Application/HelpText.h
+    src/WallpaperEngine/Application/LweCommand.cpp
+    src/WallpaperEngine/Application/LweCommand.h
+    src/WallpaperEngine/Application/PanelHandoff.cpp
+    src/WallpaperEngine/Application/PanelHandoff.h
     src/WallpaperEngine/Application/WallpaperApplication.cpp
     src/WallpaperEngine/Application/WallpaperApplication.h
 
@@ -649,7 +655,10 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/DebugSwitches.cpp
         src/WallpaperEngine/Testing/Cases/HelpText.cpp
         src/WallpaperEngine/Testing/Cases/SocketListeners.cpp
-        src/WallpaperEngine/Testing/Cases/FullscreenPolicy.cpp)
+        src/WallpaperEngine/Testing/Cases/FullscreenPolicy.cpp
+        src/WallpaperEngine/Testing/Cases/LweCommand.cpp
+        src/WallpaperEngine/Testing/Cases/CommandClient.cpp
+        src/WallpaperEngine/Testing/Cases/PanelHandoff.cpp)
 endif()
 
 add_library(

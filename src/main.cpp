@@ -12,6 +12,7 @@
 #endif
 
 #include "WallpaperEngine/Application/ApplicationContext.h"
+#include "WallpaperEngine/Application/LweCommand.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Logging/StatePaths.h"
@@ -87,6 +88,10 @@ int main (int argc, char* argv[]) {
     // first thing, before even the CEF subprocess dispatch: crashes in helpers and the
     // main engine alike must leave a trace in the journal
     installCrashHandler ();
+
+    if (WallpaperEngine::Application::LweCommand::isLweName (argc, argv)) {
+	return WallpaperEngine::Application::LweCommand::run (argc, argv);
+    }
 
     WallpaperEngine::WebHelper::SpawnGate::captureAtStartup ();
 
