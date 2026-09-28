@@ -3,7 +3,8 @@
 show picks one wallpaper by the rules in cli/select.py and prints the pick line; once status answers it sends the
 wallpaper through push.show_final under the sync lock, held until the load finishes, and set-tuning only
 after a done ok. It starts no service and writes nothing. The engine is always tests/_fake_engine.py on a
-socket the test made.
+socket the test made. A complete download in the scratch Workshop folder, numbered after the pool, is
+refused before anything is sent.
 
 In-process forms run through cli.main with HOME and the XDG folders at scratch (_cli_env.scratch_home), a
 scratch library named in settings.conf and the fake engine on the socket _sandbox pins; daemon_unit's
@@ -62,6 +63,7 @@ class ShowTest(unittest.TestCase):
         for wid, title in POOL:
             item(ROOT / "lib" / wid, title)
             tags.set_state(wid, title, "good")
+        item(ROOT / "ws" / "1505438990", "Nebula")
 
     def setUp(self) -> None:
         self.runs: list = []
@@ -110,6 +112,12 @@ class ShowTest(unittest.TestCase):
         show = sent[0][1]
         self.assertEqual((show["id"], show["ui_id"]), ("1505438974", "1505438974"))
         self.assertEqual(show["speed"], self.resolve.resolve_show_args("1505438974")[1]["speed"])
+
+    def test_a_download_not_in_the_pool_is_refused_and_nothing_is_sent(self) -> None:
+        engine = self.engine()
+        self.assertEqual(self.lwe("show", "5"), (1, "5 = Nebula (1505438990)\n", "not in your pool yet; lwe add 5 "
+                                                                               "brings it in, lwe bench 5 tries it\n"))
+        self.assertEqual(engine.calls, [])
 
     def test_show_alone_and_two_words_exit_3(self) -> None:
         engine = self.engine()
