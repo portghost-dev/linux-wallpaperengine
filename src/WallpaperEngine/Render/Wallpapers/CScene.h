@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <set>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "WallpaperEngine/Render/Camera.h"
@@ -26,6 +27,32 @@ struct RenderOrder {
 };
 
 [[nodiscard]] RenderOrder renderOrder (const ObjectList& objects, const std::function<bool (int)>& created);
+
+class CreationWalk {
+public:
+    CreationWalk (
+	const ObjectList& objects, std::function<bool (int)> created, std::function<void (const Object&)> create
+    );
+
+    void visit (const Object& root);
+    [[nodiscard]] size_t steps () const;
+
+private:
+    struct Frame {
+	const Object* object;
+	size_t next;
+    };
+
+    void enter (const Object& object);
+
+    std::function<bool (int)> m_created;
+    std::function<void (const Object&)> m_create;
+    std::unordered_map<int, const Object*> m_firstById;
+    std::unordered_set<const Object*> m_attempted;
+    std::unordered_set<int> m_resolving;
+    std::vector<Frame> m_stack;
+    size_t m_steps = 0;
+};
 
 class CScene final : public CWallpaper {
 public:
@@ -167,7 +194,6 @@ private:
     float m_ssfactor = 1.0f;
     float m_clampComposites = 1.0f;
     std::map<int, CObject*> m_objects = {};
-    std::unordered_set<int> m_objectsBeingResolved = {};
     std::shared_ptr<const CFBO> m_compositionRenderTarget = nullptr;
     void tickAnimations ();
     void simulateParticles ();

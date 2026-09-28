@@ -151,11 +151,15 @@ CScene::CScene (
 	return e == nullptr || std::string (e) != "0";
     }();
     const auto& skipObjs = this->getContext ().getApp ().getContext ().settings.render.debug.skipObjects;
+    CreationWalk creation (
+	scene->objects, [this] (const int id) { return this->m_objects.contains (id); },
+	[this] (const Object& object) { this->createObject (object); }
+    );
     for (const auto& object : scene->objects) {
 	if (skipGate && !skipObjs.empty () && std::ranges::find (skipObjs, object->id) != skipObjs.end ()) {
 	    continue;
 	}
-	this->createObject (*object);
+	creation.visit (*object);
     }
 
     // copy over objects by render order
@@ -527,50 +531,6 @@ Render::CObject* CScene::createObject (const Object& object) {
 	return current->second;
     }
 
-    if (!this->m_objectsBeingResolved.insert (object.id).second) {
-	sLog.error (
-	    "Scene graph cycle detected: object ", object.id,
-	    " is already being resolved (dependency/parent cycle) - skipping this edge to break the cycle"
-	);
-	return nullptr;
-    }
-
-    struct ResolvingGuard {
-	std::unordered_set<int>& set;
-	int id;
-	~ResolvingGuard () { set.erase (id); }
-    } resolvingGuard { this->m_objectsBeingResolved, object.id };
-
-    // check dependencies too!
-    for (const auto& cur : object.dependencies) {
-	// self-dependency is a possibility...
-	if (cur == object.id) {
-	    continue;
-	}
-
-	const auto dep
-	    = std::ranges::find_if (this->getScene ().objects, [&cur] (const auto& o) { return o->id == cur; });
-
-	if (dep != this->getScene ().objects.end ()) {
-	    this->createObject (**dep);
-	}
-    }
-
-    // check if the item has any parent and also create it first
-    if (object.parent.has_value ()) {
-	int parentId = object.parent.value ();
-
-	const auto dep = std::ranges::find_if (this->getScene ().objects, [&parentId] (const auto& o) {
-	    return o->id == parentId;
-	});
-
-	if (dep == this->getScene ().objects.end ()) {
-	    sLog.exception ("Cannot find parent ", parentId, " for object ", object.id);
-	}
-
-	this->createObject (**dep);
-    }
-
     renderObject = this->dispatchObjectType (object);
 
     if (renderObject != nullptr) {
@@ -593,6 +553,81 @@ Render::CObject* CScene::createObject (const Object& object) {
     }
 
     return renderObject;
+}
+
+CreationWalk::CreationWalk (
+    const ObjectList& objects, std::function<bool (int)> created, std::function<void (const Object&)> create
+) : m_created (std::move (created)), m_create (std::move (create)) {
+    for (const auto& object : objects) {
+	this->m_firstById.emplace (object->id, object.get ());
+    }
+}
+
+size_t CreationWalk::steps () const { return this->m_steps; }
+
+void CreationWalk::enter (const Object& object) {
+    this->m_steps++;
+
+    if (this->m_attempted.contains (&object) || this->m_created (object.id)) {
+	return;
+    }
+
+    if (!this->m_resolving.insert (object.id).second) {
+	sLog.error (
+	    "Scene graph cycle detected: object ", object.id,
+	    " is already being resolved (dependency/parent cycle) - skipping this edge to break the cycle"
+	);
+	return;
+    }
+
+    this->m_stack.push_back ({ &object, 0 });
+}
+
+void CreationWalk::visit (const Object& root) {
+    this->enter (root);
+
+    while (!this->m_stack.empty ()) {
+	auto& frame = this->m_stack.back ();
+	const Object& object = *frame.object;
+
+	// check dependencies too!
+	if (frame.next < object.dependencies.size ()) {
+	    const int cur = object.dependencies[frame.next++];
+
+	    // self-dependency is a possibility...
+	    if (cur == object.id) {
+		continue;
+	    }
+
+	    if (const auto dep = this->m_firstById.find (cur); dep != this->m_firstById.end ()) {
+		this->enter (*dep->second);
+	    }
+
+	    continue;
+	}
+
+	// check if the item has any parent and also create it first
+	if (frame.next == object.dependencies.size ()) {
+	    frame.next++;
+
+	    if (object.parent.has_value ()) {
+		const int parentId = object.parent.value ();
+		const auto dep = this->m_firstById.find (parentId);
+
+		if (dep == this->m_firstById.end ()) {
+		    sLog.exception ("Cannot find parent ", parentId, " for object ", object.id);
+		}
+
+		this->enter (*dep->second);
+		continue;
+	    }
+	}
+
+	this->m_stack.pop_back ();
+	this->m_create (object);
+	this->m_resolving.erase (object.id);
+	this->m_attempted.insert (&object);
+    }
 }
 
 void CScene::setupShadowStage () {
@@ -1013,17 +1048,21 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
 }
 
 namespace {
+constexpr size_t CYCLE_IDS_SHOWN = 16;
+
 struct RenderOrderWalk {
     const std::function<bool (int)>& created;
     std::unordered_map<int, const Object*> firstById;
     std::unordered_set<const Object*> done;
-    std::unordered_set<const Object*> onPath;
+    std::unordered_map<const Object*, size_t> onPath;
     std::vector<const Object*> path;
+    std::vector<size_t> nextDependency;
+    std::set<std::pair<const Object*, const Object*>> reportedCycles;
     std::unordered_set<int> placed;
     RenderOrder order;
 };
 
-void addObjectToRenderOrder (const Object& object, RenderOrderWalk& walk) {
+void enterRenderOrder (const Object& object, RenderOrderWalk& walk) {
     walk.order.steps++;
 
     // ignores not created objects like particle systems
@@ -1031,44 +1070,74 @@ void addObjectToRenderOrder (const Object& object, RenderOrderWalk& walk) {
 	return;
     }
 
+    walk.onPath.emplace (&object, walk.path.size ());
     walk.path.push_back (&object);
-    walk.onPath.insert (&object);
+    walk.nextDependency.push_back (0);
+}
 
-    // take into account any dependency first
-    for (const auto& dep : object.dependencies) {
-	// self-dependency is possible
-	if (dep == object.id) {
+void reportCycle (
+    RenderOrderWalk& walk, const size_t start, const Object& object, const Object& target, const int dep
+) {
+    if (!walk.reportedCycles.emplace (&object, &target).second) {
+	return;
+    }
+
+    const size_t length = walk.path.size () - start + 1;
+    std::string ids;
+
+    for (size_t i = 0; i < std::min (length, CYCLE_IDS_SHOWN); i++) {
+	ids += (i == 0 ? "" : ", ") + std::to_string (start + i < walk.path.size () ? walk.path[start + i]->id : dep);
+    }
+
+    if (length > CYCLE_IDS_SHOWN) {
+	ids += ", and " + std::to_string (length - CYCLE_IDS_SHOWN) + " more";
+    }
+
+    sLog.error (
+	"Dependency cycle among scene objects ", ids, ": render order ignores the dependency of ", object.id, " on ",
+	dep
+    );
+}
+
+void addObjectToRenderOrder (const Object& root, RenderOrderWalk& walk) {
+    enterRenderOrder (root, walk);
+
+    while (!walk.path.empty ()) {
+	const Object& object = *walk.path.back ();
+	auto& next = walk.nextDependency.back ();
+
+	// take into account any dependency first
+	if (next < object.dependencies.size ()) {
+	    const int dep = object.dependencies[next++];
+
+	    // self-dependency is possible
+	    if (dep == object.id) {
+		continue;
+	    }
+
+	    // add the dependency to the list if it's created
+	    const auto depIt = walk.firstById.find (dep);
+
+	    if (depIt == walk.firstById.end ()) {
+		sLog.error ("Cannot find dependency ", dep, " for object ", object.id);
+	    } else if (const auto cycle = walk.onPath.find (depIt->second); cycle != walk.onPath.end ()) {
+		reportCycle (walk, cycle->second, object, *depIt->second, dep);
+	    } else {
+		enterRenderOrder (*depIt->second, walk);
+	    }
+
 	    continue;
 	}
 
-	// add the dependency to the list if it's created
-	const auto depIt = walk.firstById.find (dep);
+	walk.onPath.erase (&object);
+	walk.path.pop_back ();
+	walk.nextDependency.pop_back ();
+	walk.done.insert (&object);
 
-	if (depIt == walk.firstById.end ()) {
-	    sLog.error ("Cannot find dependency ", dep, " for object ", object.id);
-	} else if (walk.onPath.contains (depIt->second)) {
-	    std::string ids;
-
-	    for (auto it = std::ranges::find (walk.path, depIt->second); it != walk.path.end (); ++it) {
-		ids += std::to_string ((*it)->id) + ", ";
-	    }
-
-	    sLog.error (
-		"Dependency cycle among scene objects ", ids, dep, ": render order ignores the dependency of ",
-		object.id, " on ", dep
-	    );
-	} else {
-	    addObjectToRenderOrder (*depIt->second, walk);
+	// ensure we're added only once to the render list
+	if (walk.placed.insert (object.id).second) {
+	    walk.order.ids.push_back (object.id);
 	}
-    }
-
-    walk.onPath.erase (&object);
-    walk.path.pop_back ();
-    walk.done.insert (&object);
-
-    // ensure we're added only once to the render list
-    if (walk.placed.insert (object.id).second) {
-	walk.order.ids.push_back (object.id);
     }
 }
 } // namespace
