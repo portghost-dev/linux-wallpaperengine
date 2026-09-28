@@ -151,11 +151,15 @@ def _help(ctx: Context, name: str) -> int:
     return DONE
 
 
-def _write(fn: Callable[[dict], dict]) -> bool:
-    """settings.modify(fn) under the settings lock; True when settings.conf changed."""
+def _write(fn: Callable[[dict], dict], key: str) -> bool:
+    """settings.modify(fn) under the settings lock, the one place every command write of a setting
+    passes; True when settings.conf changed. A session override named by `key` is taken over from
+    the window first, whether or not the value changes (settings.release_window_override)."""
     from ...storage import lock, paths, settings
     path = paths.settings_file()
     with lock.held("settings"):
+        if key in settings.WINDOW_OVERRIDES:
+            settings.release_window_override(key)
         before = path.read_bytes() if path.exists() else None
         settings.modify(fn)
         return (path.read_bytes() if path.exists() else None) != before
@@ -184,7 +188,7 @@ def _restart_write(ctx: Context, name: str, fn: Callable[[dict], dict]) -> int:
     if refused is not None:
         return refused
     with lock.held("settings"):
-        saved = _write(fn)
+        saved = _write(fn, settings_table.BY_NAME[name].key)
         try:
             env_state = daemon_unit.write_env()
         except (OSError, ValueError) as exc:
@@ -227,7 +231,7 @@ def _live_write(ctx: Context, name: str, fn: Callable[[dict], dict], edge: list[
     saved: list[bool] = []
     kind = push.SETTING_ROWS.get(row.key, "none")
     locks = ("settings", "env") if kind in ("tuning", "restart") else ("settings",)
-    outcome = push.run_change(locks, lambda: saved.append(_write(fn)), [(kind, row.key)], status=status,
+    outcome = push.run_change(locks, lambda: saved.append(_write(fn, row.key)), [(kind, row.key)], status=status,
                               run="command")
     shown = row.format(settings_table.read(name, None)[0])
     report.emit(ctx, report.receipt(name, shown, bool(saved and saved[0]), row.reach, outcome.kind,
@@ -469,7 +473,7 @@ def _set(ctx: Context, name: str, args: list[str]) -> int:
         return _restart_write(ctx, name, change)
     if name in _LIVE + _CONFIG_ONLY:
         return _live_write(ctx, name, change, edge)
-    code = _receipt(ctx, name, _write(change))
+    code = _receipt(ctx, name, _write(change, row.key))
     if name == "libraryfolder":
         _library_warning(ctx, value)
     return code
@@ -525,7 +529,7 @@ def _unset(ctx: Context, args: list[str]) -> int:
         return _restart_write(ctx, name, change)
     if name in _LIVE + _CONFIG_ONLY:
         return _live_write(ctx, name, change)
-    return _receipt(ctx, name, _write(change))
+    return _receipt(ctx, name, _write(change, key))
 
 
 def _quietly(fn: Callable[..., int], *args: object) -> int:

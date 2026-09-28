@@ -5,7 +5,11 @@ window sets one, it writes an owner note in panel state with the value it wrote;
 changes the key drops the note; at quit the window clears a key only while its note still matches the
 stored value, then removes the note. So `lwe mute on` survives a window quit, the window's own mute is
 cleared, a command's change after the window's drops the note, and a stale note is left alone. The same
-holds for parallax.
+holds for parallax. A command that sets a key the window set takes it over even with the same value,
+through a setting verb, config set or config unset. The note is written before the line: a note that
+cannot be written refuses the window's change with nothing written, and a line that cannot be written
+takes the note back; a note that cannot be dropped after a restore's settings were written is logged,
+and the restore reports its settings as written.
 
 Each case drives a real Backend offscreen and the command entry in this process, with HOME and the XDG
 folders at scratch, daemon_unit's subprocess call recorded and nothing listening on the sandbox socket.
@@ -35,7 +39,7 @@ _APP = QGuiApplication.instance() or QGuiApplication(sys.argv[:1])
 
 from lwe_ui import cli, models, version  # noqa: E402
 from lwe_ui.engine import daemon_unit  # noqa: E402
-from lwe_ui.storage import paths, settings  # noqa: E402
+from lwe_ui.storage import backup, paths, settings  # noqa: E402
 
 
 def tearDownModule() -> None:
@@ -110,6 +114,50 @@ class WindowOverridesTest(unittest.TestCase):
         self.window.restoreSessionOverrides()
         self.assertIs(settings.load()["OVERRIDE_MUTE"], True)
         self.assertEqual(settings.window_notes(), {"OVERRIDE_MUTE": False})
+
+
+    def test_a_command_with_the_same_value_takes_the_override_over(self) -> None:
+        for name, key, words in (("mute", "OVERRIDE_MUTE", ("mute", "on")),
+                                 ("audio", "OVERRIDE_AUDIO_OFF", ("audioreactive", "off")),
+                                 ("mouse", "OVERRIDE_MOUSE_OFF", ("mouse", "off")),
+                                 ("parallax", "OVERRIDE_PARALLAX_OFF", ("config", "parallax", "off"))):
+            with self.subTest(override=name):
+                self.window.setSessionOverride(name, True)
+                self.assertEqual(settings.window_notes(), {key: True})
+                self.assertEqual(self.lwe(*words), 0)
+                self.window.restoreSessionOverrides()
+                self.assertIs(settings.load()[key], True)
+                self.assertEqual(settings.window_notes(), {})
+        self.window.setSessionOverride("mute", False)
+        self.assertEqual(settings.window_notes(), {"OVERRIDE_MUTE": False})
+        self.assertEqual(self.lwe("config", "unset", "mute"), 0)
+        self.assertEqual(settings.window_notes(), {})
+
+    def test_a_note_that_cannot_be_written_refuses_the_window_change(self) -> None:
+        before = paths.settings_file().read_bytes()
+        with mock.patch.object(settings, "_save_notes", side_effect=OSError("note disk full")):
+            self.window.setSessionOverride("mute", True)
+        self.assertEqual(paths.settings_file().read_bytes(), before)
+        self.assertEqual(settings.window_notes(), {})
+        with mock.patch.object(settings.tier_a, "edit", side_effect=ValueError("line refused")):
+            with self.assertRaises(ValueError):
+                self.window.setSessionOverride("mute", True)
+        self.assertEqual(paths.settings_file().read_bytes(), before)
+        self.assertEqual(settings.window_notes(), {})
+
+    def test_a_restore_whose_note_drop_fails_reports_its_settings_written(self) -> None:
+        settings.update({"ENGINE_FPS": 90})
+        target = ROOT / "owner-failure.lwebackup"
+        self.assertFalse(backup.export_to(target)["errors"])
+        settings.update({"ENGINE_FPS": 30})
+        self.window.setSessionOverride("mute", True)
+        with mock.patch.object(settings, "_save_notes", side_effect=OSError("note unlink denied")), \
+                self.assertLogs("lwe_ui.storage.settings", "WARNING"):
+            receipt = backup.apply(backup.preflight(target))
+        self.assertEqual((receipt.get("refused", False), receipt["errors"]), (False, []))
+        self.assertEqual((settings.load()["ENGINE_FPS"], settings.load()["OVERRIDE_MUTE"]), (90, False))
+        self.window.restoreSessionOverrides()
+        self.assertIs(settings.load()["OVERRIDE_MUTE"], False)
 
 
 if __name__ == "__main__":

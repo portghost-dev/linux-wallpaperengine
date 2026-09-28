@@ -4,11 +4,14 @@ Values are python-typed on load (bool/int/float/str per C.SETTINGS_SCHEMA) and s
 back as shell-safe KEY=value via tier_a. Validation clamps + warns; it never crashes.
 
 The window's session overrides (WINDOW_OVERRIDES) carry an owner note in panel state when the
-window sets them. Every settings.conf write passes _write, which drops the note of each such key
-the write changes; at quit the window clears only the keys whose note still matches.
+window sets them, written before the line. Every settings.conf write passes _write, which drops
+the note of each such key another write changes, and a command's explicit write of a key drops its
+note even when the value does not change (release_window_override); at quit the window clears only
+the keys whose note still matches.
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import warnings
@@ -244,38 +247,65 @@ def _save_notes(notes: dict[str, Any]) -> None:
         _notes_file().unlink(missing_ok=True)
 
 
-def _write(path: Any, text: str, before: dict[str, Any]) -> None:
+def _write(path: Any, text: str, before: dict[str, Any], owner: str | None = None) -> None:
     """Write settings.conf atomically: the one place every settings write passes. A session
     override whose value the write changes loses the window's owner note, so only a key the
-    window set and nobody changed since keeps one."""
+    window set and nobody changed since keeps one; `owner` is the key the window itself is
+    writing, whose fresh note stays. A note that cannot be dropped once the write committed is
+    logged and left: the value check at quit keeps a stale note harmless."""
     atomic.atomic_write_text(path, text)
     notes = window_notes()
     if notes:
         after = load()
-        kept = {k: v for k, v in notes.items() if after.get(k) == before.get(k)}
+        kept = {k: v for k, v in notes.items() if k == owner or after.get(k) == before.get(k)}
         if kept != notes:
-            _save_notes(kept)
+            try:
+                _save_notes(kept)
+            except OSError as exc:
+                logging.getLogger(__name__).warning("the window's owner notes could not be updated: %s", exc)
 
 
 def set_window_override(key: str, value: bool) -> None:
-    """The window's own write of a session override: its line and, when that changed the stored
-    value, its owner note with the value written, both under the settings lock."""
+    """The window's own write of a session override, under the settings lock: when the value
+    changes, its owner note first, then its line. A note that cannot be written refuses the change
+    with nothing written; a line that cannot be written takes its note back, best effort."""
     with lock.held("settings"):
-        before = load().get(key)
-        update({key: value})
-        if before != value:
-            _save_notes({**window_notes(), key: value})
+        if load().get(key) == value:
+            return
+        notes = window_notes()
+        _save_notes({**notes, key: value})
+        try:
+            modify(lambda _current: {key: value}, owner=key)
+        except BaseException:
+            try:
+                _save_notes(notes)
+            except OSError:
+                pass
+            raise
+
+
+def release_window_override(key: str) -> None:
+    """A command's explicit write of a session override takes it over from the window: under the
+    settings lock, the window's owner note of the key is dropped whether or not the value changes.
+    A note that cannot be dropped raises OSError before the command writes anything."""
+    with lock.held("settings"):
+        notes = window_notes()
+        if key in notes:
+            _save_notes({k: v for k, v in notes.items() if k != key})
 
 
 def clear_window_overrides() -> list[str]:
     """At the window's quit, under the settings lock: each session override whose owner note still
     matches the stored value goes back to off and loses its note; a note that no longer matches is
-    left alone. Returns the keys turned off."""
+    left alone, and a note that cannot be removed is logged and left. Returns the keys turned off."""
     with lock.held("settings"):
         current = load()
         matched = {k: v for k, v in window_notes().items() if current.get(k) == v}
         cleared = modify(lambda now: {k: False for k, v in matched.items() if v and now.get(k) == v})
-        _save_notes({k: v for k, v in window_notes().items() if k not in matched})
+        try:
+            _save_notes({k: v for k, v in window_notes().items() if k not in matched})
+        except OSError as exc:
+            logging.getLogger(__name__).warning("the window's owner notes could not be updated: %s", exc)
         return list(cleared)
 
 
@@ -295,11 +325,12 @@ def ensure_exists() -> None:
                 save(paths.default_settings())
 
 
-def modify(fn: Callable[[dict[str, Any]], dict[str, Any] | None]) -> dict[str, Any]:
+def modify(fn: Callable[[dict[str, Any]], dict[str, Any] | None], owner: str | None = None) -> dict[str, Any]:
     """Under the settings lock: load settings.conf fresh, pass it to fn, and apply the keys fn
     returns to the file's own lines: a value sets its key, None deletes it and every old name
     of it, every other line stays. A missing file is first written with the full defaults when
-    fn returns a change. Returns those keys; the file is written only when its text changes."""
+    fn returns a change. Returns those keys; the file is written only when its text changes.
+    `owner` is set only by the window's own session override write (_write)."""
     with lock.held("settings"):
         p = paths.settings_file()
         current = load()
@@ -313,7 +344,7 @@ def modify(fn: Callable[[dict[str, Any]], dict[str, Any] | None]) -> dict[str, A
             flat.update({k: None for k, v in changes.items() if v is None and k in C.SETTINGS_SCHEMA})
             new = tier_a.edit(text, migrate.with_old_names("settings", flat), path=p)
             if new != text:
-                _write(p, new, current)
+                _write(p, new, current, owner)
         return changes
 
 
