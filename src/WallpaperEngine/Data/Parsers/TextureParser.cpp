@@ -24,12 +24,16 @@ TextureUniquePtr TextureParser::parse (const BinaryReader& file) {
     parseTextureHeader (*result, file);
     parseContainer (*result, file);
 
+    if (result->imageCount == 0) {
+	sLog.exception ("Texture declares no images");
+    }
+
     for (uint32_t image = 0; image < result->imageCount; image++) {
 	const uint32_t placeholderMipmapCount = file.nextUInt32 ();
 	const uint32_t mipmapCount = result->rawGLMipLevels > 0 ? result->rawGLMipLevels : placeholderMipmapCount;
 	MipmapList mipmaps;
 
-	if (mipmapCount > MAX_MIPMAP_COUNT) {
+	if (mipmapCount == 0 || mipmapCount > MAX_MIPMAP_COUNT) {
 	    sLog.exception ("Texture image ", image, " declares ", mipmapCount, " mipmaps");
 	}
 
@@ -84,6 +88,37 @@ static void chargeTextureBudget (const Mipmap& mipmap, uint64_t& budget) {
     budget -= bytes;
 }
 
+static void validateRawPixelBytes (const Mipmap& mipmap, const Texture& header) {
+    if (header.freeImageFormat != FIF_UNKNOWN || header.isVideoMp4 || (header.flags & TextureFlags_Video)) {
+	return;
+    }
+
+    uint64_t bytesPerPixel = 0;
+
+    switch (header.format) {
+	case TextureFormat_ARGB8888:
+	    bytesPerPixel = 4;
+	    break;
+	case TextureFormat_RG88:
+	    bytesPerPixel = 2;
+	    break;
+	case TextureFormat_R8:
+	    bytesPerPixel = 1;
+	    break;
+	default:
+	    return;
+    }
+
+    const uint64_t pixels = static_cast<uint64_t> (mipmap.width) * mipmap.height;
+
+    if (pixels > static_cast<uint64_t> (mipmap.uncompressedSize) / bytesPerPixel) {
+	sLog.exception (
+	    "Texture mipmap payload of ", mipmap.uncompressedSize, " bytes is smaller than ", mipmap.width, "x",
+	    mipmap.height, " pixels at ", bytesPerPixel, " bytes each"
+	);
+    }
+}
+
 MipmapSharedPtr TextureParser::parseMipmap (
     const BinaryReader& file, const Texture& header, uint32_t imageIndex, uint32_t mipIndex, uint64_t& budget
 ) {
@@ -106,6 +141,7 @@ MipmapSharedPtr TextureParser::parseMipmap (
 	result->compression = (result->uncompressedSize != result->compressedSize) ? 1 : 0;
 
 	validateMipmapPayloadBounds (*result, file);
+	validateRawPixelBytes (*result, header);
 	chargeTextureBudget (*result, budget);
 
 	result->uncompressedData = std::unique_ptr<char[]> (new char[result->uncompressedSize]);
@@ -159,6 +195,7 @@ MipmapSharedPtr TextureParser::parseMipmap (
     }
 
     validateMipmapPayloadBounds (*result, file);
+    validateRawPixelBytes (*result, header);
     chargeTextureBudget (*result, budget);
 
     result->uncompressedData = std::unique_ptr<char[]> (new char[result->uncompressedSize]);

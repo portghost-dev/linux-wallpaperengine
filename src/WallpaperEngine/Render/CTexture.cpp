@@ -1,9 +1,9 @@
 #include "CTexture.h"
 #include "WallpaperEngine/Application/WallpaperApplication.h"
-#include "WallpaperEngine/Render/LoadQuality.h"
 #include "WallpaperEngine/Data/Utils/Sha256.h"
 #include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Logging/StatePaths.h"
+#include "WallpaperEngine/Render/LoadQuality.h"
 #include <set>
 
 #include <lz4.h>
@@ -450,6 +450,21 @@ void CTexture::createGL () {
 		    textureFormat = GL_RED;
 		} else if (this->m_header->format == TextureFormat_RG88) {
 		    textureFormat = GL_RG;
+		}
+
+		const uint64_t bytesPerPixel = internalFormat == GL_R8                ? 1
+		    : internalFormat == GL_RG8                                        ? 2
+		    : internalFormat == GL_RGBA8 || internalFormat == GL_SRGB8_ALPHA8 ? 4
+										      : 0;
+		const uint64_t pixelCount = static_cast<uint64_t> (mipmap->width) * mipmap->height;
+
+		if (bytesPerPixel > 0 && pixelCount > bufferSize / bytesPerPixel) {
+		    sLog.error (
+			"texture level ", level, " payload of ", bufferSize, " bytes is smaller than ", mipmap->width,
+			"x", mipmap->height, " pixels at ", bytesPerPixel, " bytes each, upload stops here"
+		    );
+		    glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, glLevel > 0 ? glLevel - 1 : 0);
+		    break;
 		}
 	    }
 

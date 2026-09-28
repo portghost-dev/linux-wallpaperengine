@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_string.hpp>
 
 #include <cstring>
 #include <memory>
@@ -12,6 +13,7 @@
 
 using namespace WallpaperEngine::Data::Utils;
 using namespace WallpaperEngine::Data::Parsers;
+using Catch::Matchers::ContainsSubstring;
 
 namespace {
 void u32 (std::string& b, uint32_t v) {
@@ -55,6 +57,74 @@ std::string validTexture (uint32_t flags, int compressedSize, const std::string&
     u32 (b, 1);
     u32 (b, uint32_t (compressedSize)); // compression stays 0 for TEXB0001
     b += payload;
+    return b;
+}
+
+std::string rawTexture (uint32_t format, uint32_t width, uint32_t height, const std::string& payload) {
+    std::string b;
+    magic (b, "TEXV0005");
+    magic (b, "TEXI0001");
+    u32 (b, format);
+    u32 (b, 0);
+    u32 (b, width);
+    u32 (b, height);
+    u32 (b, width);
+    u32 (b, height);
+    u32 (b, 0);
+    magic (b, "TEXB0002");
+    u32 (b, 1);
+    u32 (b, 1);
+    u32 (b, width);
+    u32 (b, height);
+    u32 (b, 0);
+    u32 (b, uint32_t (payload.size ()));
+    u32 (b, uint32_t (payload.size ()));
+    b += payload;
+    return b;
+}
+
+std::string rawGLTexture (uint32_t format, uint32_t width, uint32_t height, const std::string& payload) {
+    std::string b;
+    magic (b, "TEXV0005");
+    magic (b, "TEXI0001");
+    u32 (b, format);
+    u32 (b, 0);
+    u32 (b, width);
+    u32 (b, height);
+    u32 (b, width);
+    u32 (b, height);
+    u32 (b, 0);
+    magic (b, "TEXB0004");
+    u32 (b, 1);
+    u32 (b, uint32_t (FIF_UNKNOWN));
+    u32 (b, 0);
+    u32 (b, 1);
+    u32 (b, 0);
+    u32 (b, 0);
+    u32 (b, 1);
+    u32 (b, uint32_t (payload.size ()));
+    u32 (b, uint32_t (payload.size ()));
+    b += payload;
+    return b;
+}
+
+std::string pngTextureWithCounts (uint32_t imageCount, uint32_t mipmapCount) {
+    std::string b;
+    magic (b, "TEXV0005");
+    magic (b, "TEXI0001");
+    u32 (b, TextureFormat_ARGB8888);
+    u32 (b, 0);
+    u32 (b, 4);
+    u32 (b, 4);
+    u32 (b, 4);
+    u32 (b, 4);
+    u32 (b, 0);
+    magic (b, "TEXB0003");
+    u32 (b, imageCount);
+    u32 (b, FIF_PNG);
+    for (uint32_t image = 0; image < imageCount; image++) {
+	u32 (b, mipmapCount);
+    }
     return b;
 }
 } // namespace
@@ -150,5 +220,51 @@ TEST_CASE ("TextureParser validates untrusted sizes and counts") {
 	u32 (b, 0);
 
 	REQUIRE_THROWS (TextureParser::parse (*reader (b)));
+    }
+}
+
+TEST_CASE ("TextureParser refuses raw payloads smaller than their pixels and empty image or mip lists") {
+    SECTION ("a 4096x4096 R8 mip with a 1-byte payload is refused") {
+	REQUIRE_THROWS_WITH (
+	    TextureParser::parse (*reader (rawTexture (TextureFormat_R8, 4096, 4096, std::string (1, '\0')))),
+	    ContainsSubstring ("smaller than 4096x4096 pixels at 1 bytes each")
+	);
+    }
+
+    SECTION ("an 8192x8192 ARGB8888 mip with a 16-byte payload is refused") {
+	REQUIRE_THROWS_WITH (
+	    TextureParser::parse (*reader (rawTexture (TextureFormat_ARGB8888, 8192, 8192, std::string (16, '\0')))),
+	    ContainsSubstring ("smaller than 8192x8192 pixels at 4 bytes each")
+	);
+    }
+
+    SECTION ("a 2x2 ARGB8888 mip with an 8-byte payload is refused") {
+	REQUIRE_THROWS_WITH (
+	    TextureParser::parse (*reader (rawTexture (TextureFormat_ARGB8888, 2, 2, std::string (8, '\0')))),
+	    ContainsSubstring ("smaller than 2x2 pixels at 4 bytes each")
+	);
+    }
+
+    SECTION ("a 2x2 RG88 raw-GL mip with a 4-byte payload is refused") {
+	REQUIRE_THROWS_WITH (
+	    TextureParser::parse (*reader (rawGLTexture (TextureFormat_RG88, 2, 2, std::string (4, '\0')))),
+	    ContainsSubstring ("smaller than 2x2 pixels at 2 bytes each")
+	);
+    }
+
+    SECTION ("a texture that declares zero images is refused") {
+	REQUIRE_THROWS_WITH (
+	    TextureParser::parse (*reader (pngTextureWithCounts (0, 1))), ContainsSubstring ("declares no images")
+	);
+    }
+
+    SECTION ("an image that declares zero mips is refused") {
+	REQUIRE_THROWS_WITH (
+	    TextureParser::parse (*reader (pngTextureWithCounts (1, 0))), ContainsSubstring ("declares 0 mipmaps")
+	);
+    }
+
+    SECTION ("a valid small texture still loads") {
+	REQUIRE_NOTHROW (TextureParser::parse (*reader (rawTexture (TextureFormat_R8, 2, 2, std::string (4, '\0')))));
     }
 }
