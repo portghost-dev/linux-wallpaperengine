@@ -1123,21 +1123,25 @@ class Backend(QObject):
 
     @Slot(str, bool)
     def setSessionOverride(self, key: str, on: bool) -> None:
-        """Deck override icons: settings-persisted, reset on app quit."""
+        """Deck override icons: settings-persisted with the window's owner note, so quit clears
+        only what this window set."""
         skey = self._SESSION_KEYS.get(key)
         if not skey:
             return
-        self._set_setting(skey, bool(on))
+        self._set_setting(skey, bool(on), write=lambda: settings.set_window_override(skey, bool(on)))
 
     def restoreSessionOverrides(self) -> None:
-        """App quit: clear every session override so nothing outlives the session."""
+        """App quit: clear only the session overrides this window set that nobody changed since, the
+        keys whose owner note still matches (settings.clear_window_overrides), so a window exit
+        never undoes another door's choice."""
         try:
-            cur = settings.load()
-            keys = [skey for skey in self._SESSION_KEYS.values() if cur.get(skey)]
+            notes, cur = settings.window_notes(), settings.load()
+            keys = [k for k, v in notes.items() if v and cur.get(k) == v]
             if keys:
-                push.run_change(("settings",),
-                                lambda: settings.modify(lambda now: {k: False for k in keys if now.get(k)}),
+                push.run_change(("settings",), settings.clear_window_overrides,
                                 [(push.SETTING_ROWS[k], k) for k in keys], defer_current=self.delivery_due())
+            elif notes:
+                settings.clear_window_overrides()
         except Exception:
             return
 
@@ -1455,20 +1459,21 @@ class Backend(QObject):
     def _app_condition_names(self) -> list[str]:
         return push._app_condition_names()
 
-    def save_setting(self, key: str, value: Any) -> Any:
+    def save_setting(self, key: str, value: Any, write: Any = None) -> Any:
         """One setting through the change runner: the settings lock (and env for a tuning or
-        restart row), the store write, then the key's row. settingsChanged fires after the write."""
+        restart row), the store write (`write` when given), then the key's row. settingsChanged
+        fires after the write."""
         row = push.SETTING_ROWS.get(key, "none")
         outcome = push.run_change(("settings", "env") if row in ("tuning", "restart") else ("settings",),
-                                  lambda: settings.update({key: value}), [(row, key)],
+                                  write or (lambda: settings.update({key: value})), [(row, key)],
                                   defer_current=self.delivery_due())
         self.settingsChanged.emit()
         self._note(outcome, schedule=row == "schedule")
         return outcome
 
-    def _set_setting(self, key: str, value: Any) -> None:
+    def _set_setting(self, key: str, value: Any, write: Any = None) -> None:
         try:
-            self.save_setting(key, value)
+            self.save_setting(key, value, write)
         except (lock.StoreBusy, ValueError):
             raise
         except Exception:

@@ -2,6 +2,10 @@
 
 Values are python-typed on load (bool/int/float/str per C.SETTINGS_SCHEMA) and serialized
 back as shell-safe KEY=value via tier_a. Validation clamps + warns; it never crashes.
+
+The window's session overrides (WINDOW_OVERRIDES) carry an owner note in panel state when the
+window sets them. Every settings.conf write passes _write, which drops the note of each such key
+the write changes; at quit the window clears only the keys whose note still matches.
 """
 from __future__ import annotations
 
@@ -15,6 +19,8 @@ from .. import constants as C
 from . import atomic, foreign, lock, migrate, paths, tier_a
 from .store import Store
 
+
+WINDOW_OVERRIDES = ("OVERRIDE_MUTE", "OVERRIDE_AUDIO_OFF", "OVERRIDE_PARALLAX_OFF", "OVERRIDE_MOUSE_OFF")
 
 _TRUE = ("true", "1", "yes", "on")
 _FALSE = ("false", "0", "no", "off", "")
@@ -221,12 +227,64 @@ def _to_text(d: dict[str, Any]) -> dict[str, str]:
     return flat
 
 
+def _notes_file():
+    return paths.panel_state_dir() / "window-overrides.json"
+
+
+def window_notes() -> dict[str, Any]:
+    """The window's owner notes: {session override key: the value the window wrote}; {} when none."""
+    notes = atomic.read_json(_notes_file(), {})
+    return {k: v for k, v in notes.items() if k in WINDOW_OVERRIDES} if isinstance(notes, dict) else {}
+
+
+def _save_notes(notes: dict[str, Any]) -> None:
+    if notes:
+        atomic.atomic_write_json(_notes_file(), notes)
+    else:
+        _notes_file().unlink(missing_ok=True)
+
+
+def _write(path: Any, text: str, before: dict[str, Any]) -> None:
+    """Write settings.conf atomically: the one place every settings write passes. A session
+    override whose value the write changes loses the window's owner note, so only a key the
+    window set and nobody changed since keeps one."""
+    atomic.atomic_write_text(path, text)
+    notes = window_notes()
+    if notes:
+        after = load()
+        kept = {k: v for k, v in notes.items() if after.get(k) == before.get(k)}
+        if kept != notes:
+            _save_notes(kept)
+
+
+def set_window_override(key: str, value: bool) -> None:
+    """The window's own write of a session override: its line and, when that changed the stored
+    value, its owner note with the value written, both under the settings lock."""
+    with lock.held("settings"):
+        before = load().get(key)
+        update({key: value})
+        if before != value:
+            _save_notes({**window_notes(), key: value})
+
+
+def clear_window_overrides() -> list[str]:
+    """At the window's quit, under the settings lock: each session override whose owner note still
+    matches the stored value goes back to off and loses its note; a note that no longer matches is
+    left alone. Returns the keys turned off."""
+    with lock.held("settings"):
+        current = load()
+        matched = {k: v for k, v in window_notes().items() if current.get(k) == v}
+        cleared = modify(lambda now: {k: False for k, v in matched.items() if v and now.get(k) == v})
+        _save_notes({k: v for k, v in window_notes().items() if k not in matched})
+        return list(cleared)
+
+
 def save(d: dict[str, Any]) -> None:
     """Validate, serialize (bools as true/false), atomically write settings.conf."""
     valid = _validate(d)
     text = tier_a.serialize(_to_text(valid), header="lwe settings (Tier A) - managed by LWE Control Panel")
     with lock.held("settings"):
-        atomic.atomic_write_text(paths.settings_file(), text)
+        _write(paths.settings_file(), text, load())
 
 
 def ensure_exists() -> None:
@@ -244,7 +302,8 @@ def modify(fn: Callable[[dict[str, Any]], dict[str, Any] | None]) -> dict[str, A
     fn returns a change. Returns those keys; the file is written only when its text changes."""
     with lock.held("settings"):
         p = paths.settings_file()
-        changes = fn(load()) or {}
+        current = load()
+        changes = fn(current) or {}
         if changes:
             if not p.exists():
                 save(paths.default_settings())
@@ -254,7 +313,7 @@ def modify(fn: Callable[[dict[str, Any]], dict[str, Any] | None]) -> dict[str, A
             flat.update({k: None for k, v in changes.items() if v is None and k in C.SETTINGS_SCHEMA})
             new = tier_a.edit(text, migrate.with_old_names("settings", flat), path=p)
             if new != text:
-                atomic.atomic_write_text(p, new)
+                _write(p, new, current)
         return changes
 
 
