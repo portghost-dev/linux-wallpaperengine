@@ -1,9 +1,15 @@
-"""order and interval: how the playing playlist moves on, and how long each wallpaper stays up.
+"""playlist, order and interval: which playlist plays, how it moves on, and how long each wallpaper stays up.
 
-Both act on the derived active playlist, the playlist the engine plays for the panel: the engine's
-binding while its schedule is on and that playlist's file exists, else the saved active playlist
-(cli/settings_table.py::derived_active_playlist). They edit that playlist's file, name it in the
-receipt and never write ACTIVE_PLAYLIST. A change saves one line through the change runner, which
+`playlist` and `playlist list` number the playlists by name and mark the playing one. `playlist <p>`
+switches: with the schedule on it needs the running service, since the engine takes a hand switch only
+as a manual bind, and it is refused before any write while the service is away; otherwise
+ACTIVE_PLAYLIST is saved through the change runner, which binds the playlist, manual while the schedule
+is on. `playlist load` binds the saved playlist again without manual.
+
+order and interval act on the derived active playlist, the playlist the engine plays for the panel:
+the engine's binding while its schedule is on and that playlist's file exists, else the saved active
+playlist (cli/settings_table.py::derived_active_playlist). They edit that playlist's file, name it in
+the receipt and never write ACTIVE_PLAYLIST. A change saves one line through the change runner, which
 sends the playlist's transfer and then the lane's enabled state; an unchanged value writes and sends
 nothing. `order load` and `interval load` send the playlist from its file again under the sync lock
 and write nothing. UNSET holds config unset's form of each: every assignment deleted, with the same
@@ -24,7 +30,10 @@ NO_PLAYLIST = "No playlist is playing; lwe playlist <p> picks one"
 NOT_RUNNING = "the service is not running"
 NOT_ANSWERING = "the service is not answering"
 NO_ANSWER = "the engine did not answer in time, so it may have applied"
+SWITCH_AWAY = "The schedule is on; a hand switch needs the running service (it holds until the next start time)."
 _NAMES = ("order", "interval")
+_DID_NOT_HAPPEN = {report.PENDING: "the service is not running or is busy",
+                   report.UNCERTAIN: "the engine did not answer in time"}
 
 
 class _Gone(Exception):
@@ -40,6 +49,10 @@ def _gone(path: Any) -> str:
     return f"{path} is gone, so nothing was saved"
 
 
+def _print_json(ctx: Context, data: object) -> None:
+    print(json.dumps(data, ensure_ascii=False, separators=(",", ":")), file=ctx.out)
+
+
 def _version(ctx: Context, first: tuple[str, dict | None]) -> int | None:
     """The version check of a status read that answered: REFUSED, named on stderr, for a running
     engine from another build; otherwise None."""
@@ -48,6 +61,45 @@ def _version(ctx: Context, first: tuple[str, dict | None]) -> int | None:
         return None
     refusal = version.running_refusal(first[1], version.panel_stamp())
     return None if refusal is None else _refuse(ctx, refusal, REFUSED)
+
+
+def _engine_first(ctx: Context) -> tuple[tuple[str, dict | None], int | None]:
+    """An engine-only form's status read: away exits 2, an engine that does not answer exits 1, and so
+    does one from another build."""
+    from ...engine import push
+    first = push.read_status()
+    if first[0] == "away":
+        return first, _refuse(ctx, NOT_RUNNING, ENGINE_DOWN)
+    if first[0] != "ok":
+        return first, _refuse(ctx, NOT_ANSWERING, REFUSED)
+    return first, _version(ctx, first)
+
+
+def _send(ctx: Context, slug: str, bind: bool, manual: bool = False) -> int | None:
+    """The playlist's parts, then lanes-set with its enabled state, with the playlist field when bind
+    and manual true when manual, all under the sync lock; the exit code of a request that did not end
+    ok, else None."""
+    from ... import api_client
+    from ...engine import push
+    from ...engine.resolve import split_playlist_parts
+    with push.engine_only():
+        entries, interval, order, enabled, label = push._playlist_payload(slug)
+        parts = split_playlist_parts(entries)
+        for number, part in enumerate(parts, start=1):
+            reply = api_client.playlist_set(slug, part, order, interval, part=number, of=len(parts), label=label)
+            if api_client.last_class() != "ok":
+                break
+        else:
+            lane = {"id": "all", "playlist": slug, "enabled": enabled} if bind else {"id": "all", "enabled": enabled}
+            reply = api_client.lanes_set([{**lane, "manual": True} if manual else lane])
+    cls = api_client.last_class()
+    if cls == "away":
+        return _refuse(ctx, NOT_RUNNING, ENGINE_DOWN)
+    if cls == "refused":
+        return _refuse(ctx, f"the engine refused it: {reply.get('error') or ''}", REFUSED)
+    if cls != "ok":
+        return _refuse(ctx, NO_ANSWER, REFUSED)
+    return None
 
 
 def _receipt(ctx: Context, name: str, slug: str, saved: bool, kind: str | None = None, reason: str = "",
@@ -118,37 +170,14 @@ def _change(ctx: Context, name: str, value: Any) -> int:
 def _load(ctx: Context, name: str) -> int:
     """order load or interval load: the playlist sent again from its file under the sync lock, its
     parts and then the lane's enabled state; nothing is written."""
-    from ... import api_client
-    from ...engine import push
-    from ...engine.resolve import split_playlist_parts
-    first = push.read_status()
-    if first[0] == "away":
-        return _refuse(ctx, NOT_RUNNING, ENGINE_DOWN)
-    if first[0] != "ok":
-        return _refuse(ctx, NOT_ANSWERING, REFUSED)
-    code = _version(ctx, first)
+    first, code = _engine_first(ctx)
     if code is not None:
         return code
     slug = settings_table.derived_active_playlist(first[1])[0]
     if slug is None:
         return _refuse(ctx, NO_PLAYLIST, REFUSED)
-    with push.engine_only():
-        entries, interval, order, enabled, label = push._playlist_payload(slug)
-        parts = split_playlist_parts(entries)
-        for number, part in enumerate(parts, start=1):
-            reply = api_client.playlist_set(slug, part, order, interval, part=number, of=len(parts), label=label)
-            if api_client.last_class() != "ok":
-                break
-        else:
-            reply = api_client.lanes_set([{"id": "all", "enabled": enabled}])
-    cls = api_client.last_class()
-    if cls == "away":
-        return _refuse(ctx, NOT_RUNNING, ENGINE_DOWN)
-    if cls == "refused":
-        return _refuse(ctx, f"the engine refused it: {reply.get('error') or ''}", REFUSED)
-    if cls != "ok":
-        return _refuse(ctx, NO_ANSWER, REFUSED)
-    return _receipt(ctx, name, slug, False, report.APPLIED, sent=True)
+    code = _send(ctx, slug, bind=False)
+    return code if code is not None else _receipt(ctx, name, slug, False, report.APPLIED, sent=True)
 
 
 def _set(ctx: Context, name: str, args: list[str]) -> int:
@@ -170,10 +199,174 @@ def _verb(name: str) -> Callable[[Context, list[str]], int]:
     return lambda ctx, args: _set(ctx, name, args)
 
 
+def _bound(status: dict | None) -> str:
+    """The playlist the engine's lane is bound to, from a status that answered; "" otherwise."""
+    lanes = status.get("lanes") if isinstance(status, dict) else None
+    return str(lanes[0].get("playlist") or "") if isinstance(lanes, list) and lanes and isinstance(lanes[0], dict) \
+        else ""
+
+
+def _schedule_on(status: dict | None) -> bool:
+    schedule = status.get("schedule") if isinstance(status, dict) else None
+    return isinstance(schedule, dict) and bool(schedule.get("enabled"))
+
+
+def _takes_over(status: dict | None) -> str:
+    """" The schedule takes over again when night starts at 20:00." from the schedule block of a
+    status that answered with the schedule on; "" when it does not say."""
+    schedule = status.get("schedule") if isinstance(status, dict) else None
+    entries = schedule.get("entries") if isinstance(schedule, dict) else None
+    if not _schedule_on(status) or not isinstance(entries, list) or len(entries) < 2 \
+            or not isinstance(schedule.get("is_day"), bool):
+        return ""
+    word, entry = ("night", entries[1]) if schedule["is_day"] else ("day", entries[0])
+    at = entry.get("at") if isinstance(entry, dict) else None
+    return f" The schedule takes over again when {word} starts at {at}." if at else ""
+
+
+def _list(ctx: Context) -> int:
+    """The playlists numbered by name: number, name, file, wallpaper count, order and interval, the
+    playing one marked (the engine's binding when status answers, else the saved active playlist)."""
+    from ... import api_client, version
+    from ...storage import playlists
+    from .. import select
+    status = api_client.status()
+    if status is not None:
+        refusal = version.running_refusal(status, version.panel_stamp())
+        if refusal is not None:
+            ctx.error(refusal)
+    playing = _bound(status) or playlists.active_slug(validate=True)
+    rows = []
+    for pick in select.playlist_rows():
+        loaded = playlists.load(pick.slug)
+        rows.append({"number": pick.number, "name": pick.name, "file": f"{pick.slug}.conf",
+                     "count": len(str(loaded["MEMBERS"]).split()),
+                     "order": settings_table.BY_NAME["order"].format(loaded["MODE"]),
+                     "interval": settings_table.BY_NAME["interval"].format(loaded["INTERVAL"]),
+                     "playing": pick.slug == playing})
+    if ctx.json:
+        _print_json(ctx, {"playlists": rows})
+        return DONE
+    if not rows:
+        print("No playlists.", file=ctx.out)
+    for row in rows:
+        line = f"{row['number']}  {row['name']}  {row['file']}  {row['count']}  {row['order']}  {row['interval']}"
+        print(line + ("  playing" if row["playing"] else ""), file=ctx.out)
+    return DONE
+
+
+def _switch(ctx: Context, word: str) -> int:
+    """playlist <p>: steps 1 and 2 here (the pick, one status read, the version check and the
+    schedule's state), then ACTIVE_PLAYLIST through the change runner, which binds p, manual while
+    the schedule is on. The playlist already playing sends nothing; when only the store names p, the
+    manual bind is sent under the sync lock with no store change."""
+    from ...engine import push
+    from ...storage import paths, playlists, settings
+    from .. import select
+    try:
+        pick = select.playlist(word)
+    except select.PickError as exc:
+        return select.report(ctx, exc)
+    first = push.read_status()
+    code = _version(ctx, first)
+    if code is not None:
+        return code
+    status = first[1]
+    schedule_on = _schedule_on(status) if first[0] == "ok" else bool(settings.load()["SCHEDULE_ENABLED"])
+    if schedule_on and first[0] != "ok":
+        return _refuse(ctx, SWITCH_AWAY, ENGINE_DOWN)
+    title = f"{pick.name or pick.slug} ({pick.number})"
+    if settings_table.derived_active_playlist(status)[0] == pick.slug:
+        if ctx.json:
+            _print_json(ctx, {"playlist": pick.name, "setting": "playlist", "value": pick.name, "saved": False,
+                              "outcome": None, "reason": ""})
+        else:
+            print(f"{title} is already playing.", file=ctx.out)
+        return DONE
+    if playlists.active_slug(validate=False) == pick.slug:
+        code = _send(ctx, pick.slug, bind=True, manual=True)
+        if code is not None:
+            return code
+        if ctx.json:
+            _print_json(ctx, {"playlist": pick.name, "setting": "playlist", "value": pick.name, "saved": False,
+                              "outcome": report.APPLIED, "reason": ""})
+        else:
+            print(f"Switched to {title}; the next wallpaper comes from it.{_takes_over(status)}", file=ctx.out)
+        return DONE
+    path = paths.settings_file()
+    saved: list[bool] = []
+
+    def write() -> None:
+        before = path.read_bytes() if path.exists() else None
+        playlists.set_active(pick.slug)
+        saved.append((path.read_bytes() if path.exists() else None) != before)
+
+    try:
+        outcome = push.run_change(("settings",), write, [("active", "ACTIVE_PLAYLIST")], slug=pick.slug,
+                                  manual=True, status=first, run="command")
+    except push.SwitchRefused:
+        return _refuse(ctx, SWITCH_AWAY, ENGINE_DOWN)
+    kind, reason = outcome.kind, outcome.message or outcome.reason or ""
+    if ctx.json:
+        _print_json(ctx, {"playlist": pick.name, "setting": "playlist", "value": pick.name,
+                          "saved": bool(saved and saved[0]), "outcome": kind, "reason": reason})
+    elif kind == report.APPLIED:
+        print(f"Switched to {title}; the next wallpaper comes from it.{_takes_over(status)}", file=ctx.out)
+    elif kind == report.REFUSED:
+        print(f"{title} is saved as your playlist, but the engine refused the switch: {reason}.", file=ctx.out)
+    else:
+        print(f"{title} is saved as your playlist, but the switch did not happen: {_DID_NOT_HAPPEN[kind]}.",
+              file=ctx.out)
+    return REFUSED if kind == report.REFUSED else DONE
+
+
+def _bind(ctx: Context) -> int:
+    """playlist load: the saved active playlist bound again without manual, under the sync lock; under
+    an enabled schedule the engine keeps its own choice, and the receipt says so."""
+    from ...storage import playlists
+    from .. import select
+    first, code = _engine_first(ctx)
+    if code is not None:
+        return code
+    slug = playlists.active_slug(validate=True)
+    if not slug:
+        return _refuse(ctx, NO_PLAYLIST, REFUSED)
+    code = _send(ctx, slug, bind=True)
+    if code is not None:
+        return code
+    pick = next(p for p in select.playlist_rows() if p.slug == slug)
+    title = f"{pick.name or pick.slug} ({pick.number})"
+    keeps = _schedule_on(first[1]) and _bound(first[1]) not in ("", slug)
+    if ctx.json:
+        _print_json(ctx, {"playlist": pick.name, "setting": "playlist", "value": pick.name, "saved": False,
+                          "outcome": report.APPLIED, "reason": "the schedule keeps its choice" if keeps else ""})
+    elif keeps:
+        print(f"Sent {title} to the engine; the schedule is on, so the engine keeps playing its own choice.",
+              file=ctx.out)
+    else:
+        print(f"Sent {title} to the engine.", file=ctx.out)
+    return DONE
+
+
+def _playlist(ctx: Context, args: list[str]) -> int:
+    if not args or args == ["list"]:
+        return _list(ctx)
+    if len(args) > 1:
+        return _refuse(ctx, f"playlist takes one playlist, a number or a name (quote a name with spaces); "
+                            f"got {' '.join(args)}", USAGE)
+    if args[0] == "load":
+        return _bind(ctx)
+    return _switch(ctx, args[0])
+
+
 UNSET: dict[str, Callable[[Context], int]] = {
     "order": lambda ctx: _change(ctx, "order", None),
     "interval": lambda ctx: _change(ctx, "interval", None),
 }
 
-VERBS = tuple(Verb(row["name"], _verb(row["name"]), row["what"], "Settings") for row in vocabulary.SETTINGS
-              if row["name"] in _NAMES)
+VERBS = (
+    Verb("playlist", _playlist, next(row["what"] for row in vocabulary.COMMANDS if row["name"] == "playlist"),
+         "Playlists"),
+    *(Verb(row["name"], _verb(row["name"]), row["what"], "Settings") for row in vocabulary.SETTINGS
+      if row["name"] in _NAMES),
+)

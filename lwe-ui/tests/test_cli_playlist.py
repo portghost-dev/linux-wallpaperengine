@@ -1,6 +1,17 @@
-"""order and interval: the order and interval of the playlist that plays.
+"""playlist, order and interval: which playlist plays, and its order and interval.
 
-Both change the derived active playlist's file, the saved active playlist or, while the engine's
+playlist and playlist list number the playlists by name, ties by file name, and mark the playing one:
+the engine's binding when status answers, else the saved active playlist; with none, "No playlists."
+and nothing is made. playlist <p> saves only the ACTIVE_PLAYLIST line and sends playlist-set then
+lanes-set with the playlist, manual only while the engine's schedule is on, and the receipt names the
+next start time. With the schedule on in the store and the engine away it exits 2 with nothing saved
+and no marker; with it off, the switch is saved and pending; an engine lost after the status read
+leaves it saved, pending and not made. The playlist already playing sends nothing; one the store names
+while the engine is bound elsewhere under the schedule gets the manual bind with nothing written.
+playlist load binds the saved playlist without manual. A name shared by two files exits 1 listing both,
+and the words list and load win over playlists with those names.
+
+order and interval both change the derived active playlist's file, the saved active playlist or, while the engine's
 schedule is on, the playlist the engine is bound to, and never write ACTIVE_PLAYLIST. A change saves
 only its MODE or INTERVAL line, UNIT staying as it was, and sends, apart from status reads, the
 playlist's transfer and then lanes-set with its enabled state, with no playlist field, no manual and
@@ -41,6 +52,7 @@ OPPORTUNITIES = ("It can apply the next time the panel window opens or polls, an
                  "the engine uses, lwe reload or a backup import runs, or lwe service start or restart starts "
                  "the engine.")
 INTERVAL_RANGE = "takes a whole number with s, m or h from 15s to 9999m (a bare number is minutes)"
+SWITCHED = "Switched to {}; the next wallpaper comes from it.\n"
 
 
 def lanes(enabled: bool) -> tuple:
@@ -264,6 +276,131 @@ class OrderIntervalTest(unittest.TestCase):
         engine = self.engine()
         self.assertEqual(self.lwe("config", "order", "static"), (0, "Order of Main set to static.\n", ""))
         self.assertEqual(self.sent(engine), [("playlist-set", "main", "static", 900, 1, 1, 2), lanes(False)])
+
+
+class PlaylistVerbTest(unittest.TestCase):
+    setUpClass = classmethod(OrderIntervalTest.setUpClass.__func__)
+    setUp, tearDown, engine, lwe = OrderIntervalTest.setUp, OrderIntervalTest.tearDown, OrderIntervalTest.engine, \
+        OrderIntervalTest.lwe
+    write, read, snapshot = OrderIntervalTest.write, OrderIntervalTest.read, OrderIntervalTest.snapshot
+    sent = staticmethod(OrderIntervalTest.sent)
+
+    def four(self, settings: str = "ACTIVE_PLAYLIST=main\n") -> None:
+        """Calm twice (alpha.conf and zeta.conf), Main and Night: numbers 1 to 4 by name, then file name."""
+        self.write("playlists/alpha.conf", "NAME=Calm\nMEMBERS=111\n")
+        self.write("playlists/zeta.conf", "NAME=Calm\n")
+        self.write("playlists/main.conf", MAIN)
+        self.write("playlists/night.conf", NIGHT)
+        self.write("settings.conf", settings)
+
+    def test_playlist_list_is_numbered_by_name_and_marks_the_playing_one(self) -> None:
+        self.four()
+        rows = ["1  Calm  alpha.conf  1  shuffle  15m", "2  Calm  zeta.conf  0  shuffle  15m",
+                "3  Main  main.conf  2  shuffle  15m", "4  Night  night.conf  1  sequential  90s"]
+        marked = lambda n: "".join(row + ("  playing" if i == n else "") + "\n" for i, row in enumerate(rows, 1))
+        self.assertEqual(self.lwe("playlist"), (0, marked(3), ""))
+        engine = self.engine(schedule=SCHEDULE_ON, lanes=[{"id": "all", "playlist": "night"}])
+        self.assertEqual(self.lwe("playlist", "list"), (0, marked(4), ""))
+        code, out, err = self.lwe("-j", "playlist")
+        self.assertEqual((code, json.loads(out)["playlists"][3], err),
+                         (0, {"number": 4, "name": "Night", "file": "night.conf", "count": 1, "order": "sequential",
+                              "interval": "90s", "playing": True}, ""))
+        self.assertEqual(self.sent(engine), [])
+        engine.set(schedule={"enabled": False})
+        self.assertEqual(self.lwe("playlist", "4"), (0, SWITCHED.format("Night (4)"), ""))
+        self.assertEqual(self.read("settings.conf"), "ACTIVE_PLAYLIST=night\n")
+
+    def test_a_switch_binds_manual_only_while_the_schedule_is_on_and_names_the_next_start(self) -> None:
+        self.four("ENGINE_VOLUME=40\nACTIVE_PLAYLIST=main\nSCHEDULE_ENABLED=false\n")
+        engine = self.engine()
+        self.assertEqual(self.lwe("playlist", "Night"), (0, SWITCHED.format("Night (4)"), ""))
+        self.assertEqual(self.read("settings.conf"),
+                         "ENGINE_VOLUME=40\nACTIVE_PLAYLIST=night\nSCHEDULE_ENABLED=false\n")
+        self.assertEqual(self.sent(engine), [("playlist-set", "night", "sequential", 90, 1, 1, 1),
+                                             ("lanes-set", {"lanes": [{"id": "all", "playlist": "night",
+                                                                       "enabled": True}]})])
+        engine.calls.clear()
+        engine.set(schedule={"enabled": True, "entries": [{"at": "08:00", "playlist": "main"},
+                                                          {"at": "20:00", "playlist": "night"}],
+                             "active": "night", "is_day": True, "held": False, "pending": ""},
+                   lanes=[{"id": "all", "playlist": "night"}])
+        self.assertEqual(self.lwe("playlist", "3"),
+                         (0, "Switched to Main (3); the next wallpaper comes from it. The schedule takes over again "
+                             "when night starts at 20:00.\n", ""))
+        self.assertEqual(self.sent(engine), [("playlist-set", "main", "shuffle", 900, 1, 1, 2),
+                                             ("lanes-set", {"lanes": [{"id": "all", "playlist": "main",
+                                                                       "enabled": True, "manual": True}]})])
+
+    def test_a_hand_switch_under_the_schedule_while_away_is_refused_and_saves_nothing(self) -> None:
+        self.four("ACTIVE_PLAYLIST=main\nSCHEDULE_ENABLED=true\n")
+        before = self.snapshot()
+        self.assertEqual(self.lwe("playlist", "night"),
+                         (2, "", "The schedule is on; a hand switch needs the running service (it holds until the next "
+                                 "start time).\n"))
+        self.assertEqual(self.snapshot(), before)
+        self.assertIsNone(self.marker.read()["generation"], "the marker was set")
+        self.write("settings.conf", "ACTIVE_PLAYLIST=main\n")
+        self.assertEqual(self.lwe("playlist", "night"),
+                         (0, "Night (4) is saved as your playlist, but the switch did not happen: the service is not "
+                             "running or is busy.\n", ""))
+        self.assertEqual((self.read("settings.conf"), self.marker.read()["classes"]),
+                         ("ACTIVE_PLAYLIST=night\n", ["BUNDLE"]))
+
+    def test_the_engine_gone_after_the_status_read_leaves_the_switch_saved_pending_and_not_made(self) -> None:
+        self.four()
+        engine = self.engine(schedule=SCHEDULE_ON, lanes=[{"id": "all", "playlist": "main"}])
+        derive = self.settings_table.derived_active_playlist
+
+        def gone(status):
+            engine.stop()
+            return derive(status)
+        with mock.patch.object(self.settings_table, "derived_active_playlist", gone):
+            self.assertEqual(self.lwe("playlist", "night"),
+                             (0, "Night (4) is saved as your playlist, but the switch did not happen: the service is "
+                                 "not running or is busy.\n", ""))
+        self.assertEqual((self.read("settings.conf"), self.marker.read()["classes"]),
+                         ("ACTIVE_PLAYLIST=night\n", ["BUNDLE"]))
+        self.assertEqual(self.sent(engine), [])
+
+    def test_playlist_load_binds_the_saved_playlist_without_manual_and_writes_nothing(self) -> None:
+        self.four()
+        before = self.snapshot()
+        engine = self.engine(schedule=SCHEDULE_ON, lanes=[{"id": "all", "playlist": "night"}])
+        self.assertEqual(self.lwe("playlist", "load"),
+                         (0, "Sent Main (3) to the engine; the schedule is on, so the engine keeps playing its own "
+                             "choice.\n", ""))
+        self.assertEqual(self.sent(engine), [("playlist-set", "main", "shuffle", 900, 1, 1, 2),
+                                             ("lanes-set", {"lanes": [{"id": "all", "playlist": "main",
+                                                                       "enabled": True}]})])
+        self.assertEqual(self.snapshot(), before)
+        engine.stop()
+        self.assertEqual(self.lwe("playlist", "load"), (2, "", "the service is not running\n"))
+
+    def test_the_playing_playlist_sends_nothing_and_a_stored_one_bound_elsewhere_gets_the_manual_bind(self) -> None:
+        self.four()
+        before = self.snapshot()
+        engine = self.engine(schedule=SCHEDULE_ON, lanes=[{"id": "all", "playlist": "night"}])
+        self.assertEqual(self.lwe("playlist", "night"), (0, "Night (4) is already playing.\n", ""))
+        self.assertEqual(engine.calls, [("status", {})])
+        self.assertEqual(self.lwe("playlist", "main"), (0, SWITCHED.format("Main (3)"), ""))
+        self.assertEqual(self.sent(engine), [("playlist-set", "main", "shuffle", 900, 1, 1, 2),
+                                             ("lanes-set", {"lanes": [{"id": "all", "playlist": "main",
+                                                                       "enabled": True, "manual": True}]})])
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_shared_name_exits_1_listing_both_and_the_words_list_and_load_win(self) -> None:
+        self.assertEqual(self.lwe("playlist"), (0, "No playlists.\n", ""))
+        self.assertEqual(self.snapshot(), {})
+        self.four()
+        self.write("playlists/list.conf", "NAME=list\n")
+        self.write("playlists/load.conf", "NAME=load\n")
+        before = self.snapshot()
+        self.assertEqual(self.lwe("playlist", "calm"),
+                         (1, "", "lwe: calm matches more than one playlist\n  1 = Calm (alpha.conf)\n"
+                                 "  2 = Calm (zeta.conf)\n"))
+        self.assertEqual(self.lwe("playlist", "list")[1].splitlines()[2], "3  list  list.conf  0  shuffle  15m")
+        self.assertEqual(self.lwe("playlist", "load"), (2, "", "the service is not running\n"))
+        self.assertEqual(self.snapshot(), before)
 
 
 class PlaylistHandoffTest(unittest.TestCase):
