@@ -44,6 +44,7 @@ from lwe_ui.engine import daemon_unit  # noqa: E402
 import types as _types
 daemon_unit.subprocess.run = lambda argv, **kw: _types.SimpleNamespace(
     returncode=0, stderr="", stdout="")
+daemon_unit.enumerate_outputs = lambda: ["DP-1"]
 
 
 def _test_store_round_trips(b) -> None:

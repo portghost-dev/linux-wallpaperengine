@@ -10,11 +10,15 @@ from __future__ import annotations
 
 import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _SRC = str(Path(__file__).resolve().parent.parent / "src")
 if _SRC not in sys.path:
@@ -72,8 +76,8 @@ class DaemonUnitTest(unittest.TestCase):
     def test_texture_detail_env(self) -> None:
         """Mip residency: auto emits ONLY the on/off switch - the cap
         derives engine-side from live outputs, so no number can go stale in this file;
-        full emits nothing. A stale LWE_TEXCAP line from the brief panel-derived era is
-        a MANAGED key, so a regenerate strips it rather than carrying it as foreign."""
+        full emits nothing. LWE_TEXCAP is the engine's testtexturelimit switch, not a key
+        this generator owns, so a regenerate carries a hand-added line like any other."""
         settings.save({"TEXTURE_DETAIL": "auto"})
         content = daemon_unit.build_env_content(outputs=["DP-1"])
         self.assertIn("LWE_TEXDETAIL=auto", content)
@@ -81,7 +85,7 @@ class DaemonUnitTest(unittest.TestCase):
 
         stale = content + "LWE_TEXCAP=2560\n"
         regenerated = daemon_unit.build_env_content(outputs=["DP-1"], existing=stale)
-        self.assertNotIn("LWE_TEXCAP", regenerated)
+        self.assertIn("LWE_TEXCAP=2560\n", regenerated)
 
         settings.save({"TEXTURE_DETAIL": "full"})
         content = daemon_unit.build_env_content(outputs=["DP-1"])
@@ -386,6 +390,184 @@ class DaemonUnitTest(unittest.TestCase):
                                      'Q="0"', "R='a b'", 'S="x'])
         self.assertEqual(got, {"A": "1", "B": "x=y", "C": "", "": "D",
                                "Q": "0", "R": "a b", "S": '"x'})
+
+
+HOLDER = r"""
+import sys, time
+from pathlib import Path
+from lwe_ui.storage import lock
+with lock.held("env"):
+    Path(sys.argv[1]).touch()
+    time.sleep(60)
+"""
+
+
+def _systemd_value(line: str) -> str:
+    """The value systemd gives the process for one EnvironmentFile line (systemd.exec(5)):
+    '...' verbatim; "..." keeps the character after a backslash for \\" \\\\ \\` \\$ and both
+    characters otherwise; unquoted, a backslash keeps the next character and outer blanks go."""
+    raw = line.partition("=")[2].strip(" \t\r")
+    if raw[:1] == "'":
+        end = raw.index("'", 1)
+        assert raw[end + 1:].strip(" \t\r") == "", line
+        return raw[1:end]
+    out, i = [], 1 if raw[:1] == '"' else 0
+    while i < len(raw):
+        ch = raw[i]
+        if raw[:1] == '"' and ch == '"':
+            assert raw[i + 1:].strip(" \t\r") == "", line
+            return "".join(out)
+        if ch == "\\" and i + 1 < len(raw):
+            keep_both = raw[:1] == '"' and raw[i + 1] not in '"\\`$'
+            out.append(raw[i:i + 2] if keep_both else raw[i + 1])
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    assert raw[:1] != '"', f"unterminated double quote in {line!r}"
+    return "".join(out)
+
+
+class EngineEnvWriterTest(unittest.TestCase):
+    """write_env, the one engine-env writer, and write_files as the service operations' rebuild."""
+
+    def setUp(self) -> None:
+        self.home = Path(tempfile.mkdtemp(prefix="lwe-envwriter-"))
+        self.addCleanup(shutil.rmtree, self.home, True)
+        scratch = {"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.home / "c"),
+                   "XDG_STATE_HOME": str(self.home / "s"), "XDG_DATA_HOME": str(self.home / "d"),
+                   "XDG_CACHE_HOME": str(self.home / "k")}
+        self.outputs = ["DP-1"]
+        for patcher in (mock.patch.dict(os.environ, scratch),
+                        mock.patch.object(daemon_unit, "enumerate_outputs", lambda: list(self.outputs)),
+                        mock.patch.object(daemon_unit, "resolve_engine_bin",
+                                          lambda: "/usr/local/bin/linux-wallpaperengine"),
+                        mock.patch.object(daemon_unit, "live_engine_env", lambda: None)):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        _fake_reload.calls.clear()
+        self.env_path = daemon_unit.paths.config_dir() / daemon_unit.ENV_FILE_NAME
+        self.unit_path = self.home / ".config" / "systemd" / "user" / daemon_unit.UNIT_FILE_NAME
+
+    def _file(self, text: str) -> bytes:
+        self.env_path.parent.mkdir(parents=True, exist_ok=True)
+        self.env_path.write_bytes(text.encode("utf-8"))
+        return self.env_path.read_bytes()
+
+    def _text(self) -> str:
+        return self.env_path.read_text(encoding="utf-8")
+
+    def test_no_screens_leaves_engine_env_as_it_was(self) -> None:
+        before = self._file("# by hand\r\nLWE_ENGINE_ARGS=--screen-root DP-9\nLWE_AUDIT=0\nLWE_DEADMAN=7")
+        self.outputs = []
+        self.assertEqual(daemon_unit.write_env(), "no screens")
+        self.assertEqual(daemon_unit.write_env({"LWE_AUDIT": "1", "LWE_DEADMAN": None}), "no screens")
+        self.assertEqual(self.env_path.read_bytes(), before)
+        daemon_unit.write_files()
+        self.assertEqual(self.env_path.read_bytes(), before)
+        self.assertTrue(self.unit_path.exists(), "the unit and daemon-reload still follow")
+        self.assertEqual(_fake_reload.calls, [["systemctl", "--user", "daemon-reload"]])
+
+    def test_the_kept_watchdog_and_a_texture_limit_line_survive_write_files(self) -> None:
+        self._file("LWE_DEADMAN=60\nLWE_TEXCAP=2048\n")
+        daemon_unit.write_files()
+        text = self._text()
+        self.assertIn("\nLWE_DEADMAN=60\n", text)
+        self.assertEqual(text.count("LWE_DEADMAN="), 1)
+        self.assertIn("\nLWE_TEXCAP=2048\n", text)
+        for kept, lines, emitted in (("86401", None, "300"), ("60", {"LWE_DEADMAN": 90}, "90"),
+                                     ("60", {"LWE_DEADMAN": None}, "300")):
+            with self.subTest(kept=kept, lines=lines):
+                self._file(f"LWE_DEADMAN={kept}\n")
+                daemon_unit.write_env(lines)
+                self.assertIn(f"\nLWE_DEADMAN={emitted}\n", self._text())
+
+    def test_write_env_runs_no_subprocess_and_never_writes_the_unit(self) -> None:
+        self._file("# the audit probe\nLWE_AUDIT=0\nLWE_IMGPROBE=1\n")
+        self.assertEqual(daemon_unit.write_env({"LWE_AUDIT": "1", "LWE_NEW": "on"}), "written")
+        text = self._text()
+        self.assertIn("# the audit probe\nLWE_AUDIT=1\nLWE_IMGPROBE=1\nLWE_NEW=on\n", text)
+        self.assertEqual(daemon_unit.write_env({"LWE_AUDIT": "1"}), "unchanged")
+        self.assertEqual(daemon_unit.write_env({"LWE_AUDIT": None}), "written")
+        self.assertNotIn("audit", self._text().lower(), "an unset takes the line and its comment")
+        self.assertEqual(_fake_reload.calls, [])
+        self.assertFalse(self.unit_path.exists())
+        for owned in ("LWE_HWDEC", "LWE_ENGINE_ARGS", "LWE_AUDIOGAIN"):
+            with self.assertRaises(ValueError):
+                daemon_unit.write_env({owned: "1"})
+
+    def test_line_values_round_trip_through_parse_env_and_systemd_rules(self) -> None:
+        cases = (("a b", "LWE_TEST='a b'"), ("it's", "LWE_TEST=\"it's\""), ("$HOME", "LWE_TEST='$HOME'"),
+                 ("it's \"$x\" \\ `y`", "LWE_TEST=\"it's \\\"\\$x\\\" \\\\ \\`y\\`\""), ("60", "LWE_TEST=60"))
+        for value, written in cases:
+            with self.subTest(value=value):
+                daemon_unit.write_env({"LWE_TEST": value})
+                line = next(ln for ln in self._text().splitlines() if ln.startswith("LWE_TEST="))
+                self.assertEqual(line, written)
+                self.assertEqual(daemon_unit.parse_env([line])["LWE_TEST"], value)
+                self.assertEqual(_systemd_value(line), value)
+                self.assertEqual(daemon_unit.write_env(), "unchanged", "a rebuild keeps the line")
+        for bad in ("a\nb", "a\0b", "a\x85b"):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                daemon_unit.write_env({"LWE_TEST": bad})
+
+    def _holder_env(self) -> dict[str, str]:
+        """An environment built from nothing: every folder in this test's home, and a PySide6
+        that fails to import ahead of the panel's sources."""
+        poison = self.home / "poison" / "PySide6"
+        poison.mkdir(parents=True)
+        (poison / "__init__.py").write_text("raise ImportError('PySide6 is blocked here')\n",
+                                            encoding="utf-8")
+        (self.home / "bin").mkdir()
+        return {"HOME": str(self.home), "XDG_CONFIG_HOME": str(self.home / "c"),
+                "XDG_STATE_HOME": str(self.home / "s"), "XDG_DATA_HOME": str(self.home / "d"),
+                "XDG_CACHE_HOME": str(self.home / "k"), "XDG_RUNTIME_DIR": str(self.home / "rt"),
+                "LWE_SOCKET": str(self.home / "rt" / "engine.sock"), "LWE_SANDBOX": "1",
+                "PATH": str(self.home / "bin"), "PYTHONDONTWRITEBYTECODE": "1",
+                "PYTHONPATH": os.pathsep.join([str(self.home / "poison"), _SRC])}
+
+    def test_a_process_holding_env_makes_write_env_busy(self) -> None:
+        """HOLDER takes the env lock in another process and touches `held`, then sleeps until
+        it is killed."""
+        held = self.home / "held"
+        holder = subprocess.Popen([sys.executable, "-c", HOLDER, str(held)], env=self._holder_env(),
+                                  stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        self.addCleanup(holder.communicate, timeout=30)
+        self.addCleanup(holder.kill)
+        deadline = time.monotonic() + 30
+        while not held.exists():
+            self.assertIsNone(holder.poll(), "the holder exited before it held the lock")
+            self.assertLess(time.monotonic(), deadline, "the holder never held the lock")
+            time.sleep(0.01)
+        start = time.monotonic()
+        with self.assertRaises(daemon_unit.lock.StoreBusy):
+            daemon_unit.write_env()
+        self.assertTrue(2.0 <= time.monotonic() - start < 5.0, time.monotonic() - start)
+        self.assertFalse(self.env_path.exists())
+
+    def test_a_failed_daemon_reload_names_the_fix(self) -> None:
+        self.addCleanup(setattr, _fake_reload, "returncode", 0)
+        self.addCleanup(setattr, _fake_reload, "stderr", "")
+        _fake_reload.returncode, _fake_reload.stderr = 1, "Access denied"
+        with self.assertRaises(RuntimeError) as caught:
+            daemon_unit.write_files()
+        self.assertIn("Access denied", str(caught.exception))
+        self.assertIn("systemctl --user daemon-reload", str(caught.exception))
+
+    def test_the_start_up_reconcile_writes_engine_env_only(self) -> None:
+        self.assertTrue(daemon_unit.reconcile_env())
+        self.assertIn("--screen-root DP-1", self._text())
+        self.assertFalse(self.unit_path.exists())
+        self.assertFalse(daemon_unit.reconcile_env(), "a current file is left alone")
+        self.assertEqual(_fake_reload.calls, [])
+
+    def test_a_changed_unit_still_records_one_daemon_reload(self) -> None:
+        daemon_unit.write_files()
+        unit = self.unit_path.read_text(encoding="utf-8")
+        with mock.patch.object(daemon_unit, "resolve_engine_bin", lambda: "/opt/lwe/linux-wallpaperengine"):
+            daemon_unit.write_files()
+        self.assertNotEqual(self.unit_path.read_text(encoding="utf-8"), unit)
+        self.assertEqual(_fake_reload.calls, [["systemctl", "--user", "daemon-reload"]] * 2)
 
 
 def _test_cross_compositor_enumeration() -> None:

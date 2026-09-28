@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -152,15 +153,15 @@ def _fmt_dial(value: float) -> str:
     return text or "0"
 
 
-#: The env keys this generator OWNS. Every one is resolved from settings on each run, so a
-#: hand-edit of one of these is transient by design - the settings store is its source.
+#: The env keys this generator OWNS. Every one but LWE_DEADMAN is resolved from settings on each
+#: run, so a hand-edit of one of these is transient by design - the settings store is its source.
 #: Anything NOT in this set is a foreign line and is preserved verbatim (see _foreign_lines).
 #: LWE_NOPAUSEVRAM is RETIRED (the engine no longer reads it) but stays owned: ownership of
 #: a key the generator never emits is what scrubs the stale line from older env files,
 #: instead of carrying it forever under the foreign-lines banner.
 MANAGED_ENV_KEYS = frozenset({
     "LWE_ENGINE_ARGS", "LWE_HWDEC", "LWE_TEXCOMP", "LWE_DEADMAN", "LWE_NOPAUSEVRAM",
-    "LWE_TEXDETAIL", "LWE_TEXCAP", "LWE_SSFACTOR", "LWE_CLAMPCOMPOSITES",
+    "LWE_TEXDETAIL", "LWE_SSFACTOR", "LWE_CLAMPCOMPOSITES",
     *tuple(C.AUDIO_DIAL_ENV.values()),
 })
 
@@ -179,8 +180,9 @@ _OWN_COMMENTS = frozenset({_HEADER, *_FOREIGN_BANNER})
 _FOREIGN_PREFIXES = ("LWE_", "__NV_")
 
 
-def _foreign_lines(existing: str | None) -> list[str]:
-    """Lines from the current env file whose key this generator does not own.
+def _foreign_lines(existing: str | None, drop: frozenset[str] = frozenset()) -> list[str]:
+    """Lines from the current env file whose key this generator does not own. A key in `drop`
+    is left out with its comments, as an owned key is.
 
     THE HAZARD THIS CLOSES. Until the settings rework, `write_files()` had no
     production caller, so the engine-env on this box
@@ -209,7 +211,7 @@ def _foreign_lines(existing: str | None) -> list[str]:
             pending.append(line)
             continue
         key = stripped.split("=", 1)[0].strip()
-        if key in MANAGED_ENV_KEYS or not key.startswith(_FOREIGN_PREFIXES):
+        if key in MANAGED_ENV_KEYS or key in drop or not key.startswith(_FOREIGN_PREFIXES):
             pending.clear()          # re-emitted by the generator, or not this file's to keep
             continue
         kept.extend(pending)
@@ -222,14 +224,54 @@ def _foreign_lines(existing: str | None) -> list[str]:
     return kept
 
 
-def build_env_content(outputs: list[str] | None = None, existing: str | None = None) -> str:
+_LINE_BREAKS = "\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029"
+_LINE_KEY_RE = re.compile(r"(?:LWE_|__NV_)[A-Za-z0-9_]*\Z")
+_DEADMAN_RE = re.compile(r"[ \t\n\v\f\r]*[+-]?[0-9]+")
+
+
+def _env_value(value: str) -> str:
+    """`value` as an engine-env line writes it: bare unless it holds a space, quote, backslash,
+    $ or backtick; then single-quoted, or double-quoted with \\" \\\\ \\` \\$ escaped when it holds a
+    single quote. NUL, or any character the file is read back as ending a line at (read_text
+    and str.splitlines, _LINE_BREAKS), raises ValueError."""
+    if "\0" in value or any(c in value for c in _LINE_BREAKS):
+        raise ValueError(f"an engine-env value cannot hold a line break or NUL: {value!r}")
+    if not any(c in value for c in " \"'\\$`"):
+        return value
+    # systemd's EnvironmentFile reads '...' verbatim and undoes only \" \\ \` \$ inside "..."
+    if "'" not in value:
+        return f"'{value}'"
+    return '"' + re.sub(r'([\\"`$])', r"\\\1", value) + '"'
+
+
+def _deadman_ok(value: str | None) -> bool:
+    """True for a watchdog value the engine takes: strtol's leading integer, 0 to 86400
+    seconds (Config.cpp)."""
+    m = _DEADMAN_RE.match(value or "")
+    return m is not None and 0 <= int(m.group(0)) <= 86400
+
+
+def _line_key(line: str) -> str:
+    """The variable an env line assigns; "" for a comment, a blank or a line without =."""
+    stripped = line.strip()
+    if stripped.startswith("#") or "=" not in stripped:
+        return ""
+    return stripped.split("=", 1)[0].strip()
+
+
+def build_env_content(outputs: list[str] | None = None, existing: str | None = None,
+                      edits: dict[str, str | None] | None = None) -> str:
     """The engine daemon's launch-shape env, resolved from settings.
     Everything per-wallpaper rides `show` instead; everything
     session-global has a verb; only true launch shape lands here.
 
     `existing` is the current file's text; any line whose key this generator does not own is
     preserved (see _foreign_lines). Passing None means "no file yet", not "discard".
+    LWE_DEADMAN keeps the file's value when the engine takes it (_deadman_ok), else 300.
+    `edits` ({VAR: value, or None}, checked by write_env) sets or removes lines the generator
+    does not own, and sets LWE_DEADMAN's kept value, None restoring 300.
     """
+    edits = edits or {}
     s = settings.load()
     outs = outputs if outputs is not None else enumerate_outputs()
 
@@ -256,13 +298,15 @@ def build_env_content(outputs: list[str] | None = None, existing: str | None = N
         args += ["--layer", layer]
 
     texcomp = "1" if str(s.get("ENGINE_TEXCOMP", True)).lower() in ("1", "true", "yes", "on") else "0"
+    deadman = (edits["LWE_DEADMAN"] if "LWE_DEADMAN" in edits
+               else parse_env((existing or "").splitlines()).get("LWE_DEADMAN"))
     lines = [
         _HEADER,
         "LWE_ENGINE_ARGS=" + " ".join(args),
         f"LWE_HWDEC={s.get('ENGINE_HWDEC') or 'no'}",
         # value-inspected by the engine ("1" vs "0"), so writing "0" really does disable it
         f"LWE_TEXCOMP={texcomp}",
-        "LWE_DEADMAN=300",
+        f"LWE_DEADMAN={_env_value(deadman) if _deadman_ok(deadman) else '300'}",
     ]
 
     # written either way: the engine caps by default, so "full" must say so explicitly
@@ -284,13 +328,53 @@ def build_env_content(outputs: list[str] | None = None, existing: str | None = N
             value = float(C.SETTINGS_SCHEMA[skey]["default"])
         lines.append(f"{env_name}={_fmt_dial(value)}")
 
-    foreign = _foreign_lines(existing)
+    foreign = _foreign_lines(existing, frozenset(k for k, v in edits.items() if v is None))
+    for key, value in edits.items():
+        if value is None or key == "LWE_DEADMAN":
+            continue
+        line = f"{key}={_env_value(value)}"
+        at = [i for i, kept in enumerate(foreign) if _line_key(kept) == key]
+        if at:
+            foreign[at[-1]] = line
+        else:
+            foreign.append(line)
     if foreign:
         lines.append("")
         lines.extend(_FOREIGN_BANNER)
         lines.extend(foreign)
 
     return "\n".join(lines) + "\n"
+
+
+def write_env(lines: dict[str, object] | None = None, outputs: list[str] | None = None) -> str:
+    """Rebuild engine-env alone through the one generator; return "written", "unchanged" or
+    "no screens". `lines` ({VAR: value, or None to remove}) edits the lines the generator does
+    not own, and LWE_DEADMAN sets its kept value (None restores 300); another owned key, or a
+    name engine-env does not carry (LWE_ and __NV_ names only), raises ValueError. With no
+    outputs (given, else enumerated) the file is left exactly as it was, the lines named in
+    `lines` included. Never the unit, never systemctl."""
+    edits = {key: None if value is None else str(value) for key, value in (lines or {}).items()}
+    for key, value in edits.items():
+        if key != "LWE_DEADMAN" and key in MANAGED_ENV_KEYS:
+            raise ValueError(f"{key} belongs to the engine-env generator and cannot be set as a line")
+        if not _LINE_KEY_RE.match(key):
+            raise ValueError(f"{key!r} is not a name engine-env keeps (LWE_ or __NV_ names only)")
+        if value is not None:
+            _env_value(value)
+    outs = enumerate_outputs() if outputs is None else list(outputs)
+    if not outs:
+        return "no screens"
+    env_path = paths.config_dir() / ENV_FILE_NAME
+    with lock.held("env"):
+        try:
+            existing = env_path.read_text(encoding="utf-8")
+        except OSError:
+            existing = None
+        text = build_env_content(outs, existing, edits)
+        if text == existing:
+            return "unchanged"
+        atomic.atomic_write_text(env_path, text)
+    return "written"
 
 
 def reconcile_env() -> bool:
@@ -306,36 +390,23 @@ def reconcile_env() -> bool:
     touched, and the change lands at whatever restart happens next.
 
     Skipped entirely when outputs cannot be enumerated - a reconcile must never
-    degrade the file to an engine with nowhere to draw."""
+    degrade the file to an engine with nowhere to draw. It writes engine-env only, through
+    write_env; the unit and daemon-reload belong to write_files."""
     try:
         settings.load()
     except Exception:
         return False
-    outs = enumerate_outputs()
-    if not outs:
-        return False
-    env_path = paths.config_dir() / ENV_FILE_NAME
-    try:
-        existing = env_path.read_text(encoding="utf-8")
-    except OSError:
-        existing = None
-    if existing is not None and existing == build_env_content(outs, existing):
-        return False
-    write_files(outs)
-    return True
+    return write_env(outputs=enumerate_outputs()) == "written"
 
 
 def write_files(outputs: list[str] | None = None) -> tuple[str, str]:
-    """Write env file + unit file, daemon-reload, return their paths. Never enables."""
+    """The service operations' writer: engine-env through write_env (left as it was when no
+    output is found), then the unit only when its text changed, then daemon-reload; return
+    their paths. A failed daemon-reload raises naming `systemctl --user daemon-reload`. Never
+    enables."""
     env_path = paths.config_dir() / ENV_FILE_NAME
     with lock.held("env"):
-        try:
-            existing = env_path.read_text(encoding="utf-8")
-        except OSError:
-            existing = None
-        env_text = build_env_content(outputs, existing)
-        if env_text != existing:
-            atomic.atomic_write_text(env_path, env_text)
+        write_env(outputs=outputs)
 
         unit_dir = os.path.expanduser("~/.config/systemd/user")
         os.makedirs(unit_dir, exist_ok=True)
@@ -361,11 +432,13 @@ def write_files(outputs: list[str] | None = None) -> tuple[str, str]:
         reload_proc = subprocess.run(["systemctl", "--user", "daemon-reload"],
                                      capture_output=True, text=True, timeout=10, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
-        raise RuntimeError(f"systemd daemon-reload failed: {exc}") from exc
+        raise RuntimeError(
+            f"systemd daemon-reload failed: {exc}; run systemctl --user daemon-reload") from exc
     if reload_proc.returncode != 0:
         raise RuntimeError(
             "systemd daemon-reload failed: "
-            + (reload_proc.stderr.strip() or f"exit {reload_proc.returncode}"))
+            + (reload_proc.stderr.strip() or f"exit {reload_proc.returncode}")
+            + "; run systemctl --user daemon-reload")
     return str(env_path), unit_path
 
 
@@ -395,7 +468,8 @@ def _probe(env: dict[str, str], probe: str | tuple[str, str]) -> str | None:
 
 
 def parse_env(lines) -> dict[str, str]:
-    """KEY=VALUE entries to a dict; comments, blanks and lines without = are skipped."""
+    """KEY=VALUE entries to a dict; comments, blanks and lines without = are skipped. A value
+    in double quotes also loses its \\" \\\\ \\` \\$ escapes."""
     out: dict[str, str] = {}
     for line in lines:
         line = line.strip()
@@ -405,7 +479,7 @@ def parse_env(lines) -> dict[str, str]:
         value = value.strip()
         # systemd strips one pair of matching quotes from an EnvironmentFile value
         if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
+            value = value[1:-1] if value[0] == "'" else re.sub(r'\\([\\"`$])', r"\1", value[1:-1])
         out[key.strip()] = value
     return out
 
