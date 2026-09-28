@@ -190,6 +190,7 @@ WP_SCHEMA: dict[str, dict] = {
     "FIT_PAN_X": {"type": "float", "default": 0.0, "min": -1.0, "max": 1.0},
     "FIT_PAN_Y": {"type": "float", "default": 0.0, "min": -1.0, "max": 1.0},
     "SKIP": {"type": "str", "default": ""},  # space-separated object ids
+    "ALIAS": {"type": "str", "default": ""},
 }
 
 # the fit window's three fields, engine name -> conf key

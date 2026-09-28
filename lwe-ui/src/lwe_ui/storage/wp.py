@@ -17,7 +17,7 @@ from . import atomic, foreign, lock, migrate, paths, tier_a
 from .store import Store
 
 # Keys whose empty value means "unset / inherit" and must NOT be written.
-_OMIT_IF_EMPTY = ("FPS", "CLAMPING", "FULLSCREEN_PAUSE", "SKIP", "CC_MODE")
+_OMIT_IF_EMPTY = ("FPS", "CLAMPING", "FULLSCREEN_PAUSE", "SKIP", "CC_MODE", "ALIAS")
 
 
 def _read_raw(path) -> str:
@@ -439,18 +439,44 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
             r["held"].append({"kind": "override", "id": wid})
             held += 1
         out[wid] = kept
-    plan["overrides"] = out
+    plan["overrides"] = _aliases_kept(out, cfg_after, r)
     r["counts"]["overrides"] = len(out)
     r["counts"]["overrides_held"] = held
     return True
 
 
+def _aliases_kept(planned: dict[str, dict[str, str]], cfg: dict[str, Any],
+                  r: dict[str, Any]) -> dict[str, dict[str, str]]:
+    """The planned files, each ALIAS that breaks a rule or that an earlier planned file or a
+    file the import leaves already claims removed and named in the receipt."""
+    from . import alias
+    ids = alias.existing_ids(cfg) | set(planned)
+    taken = {name: [w for w in wids if w not in planned] for name, wids in alias.claims().items()}
+    out: dict[str, dict[str, str]] = {}
+    for wid, kept in planned.items():
+        name = kept.get("ALIAS", "")
+        reason = alias.check(name, wid, ids=ids, taken=taken) if name else None
+        if reason:
+            r["dropped"].append({"kind": "override-key", "id": f"{wid}:ALIAS", "reason": reason})
+            kept = {k: v for k, v in kept.items() if k != "ALIAS"}
+        elif name:
+            taken.setdefault(name.casefold(), []).append(wid)
+        out[wid] = kept
+    return out
+
+
 def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
-    for wid, kept in (plan.get("overrides") or {}).items():
-        try:
-            write_keys(wid, kept)
-        except Exception as exc:
-            r["errors"].append({"file": f"{PREFIX}{wid}.conf", "reason": str(exc)})
+    from . import settings
+    planned = plan.get("overrides") or {}
+    try:
+        with lock.held("overrides"):
+            for wid, kept in _aliases_kept(planned, settings.load(), r).items():
+                try:
+                    write_keys(wid, kept)
+                except Exception as exc:
+                    r["errors"].append({"file": f"{PREFIX}{wid}.conf", "reason": str(exc)})
+    except lock.StoreBusy as exc:
+        r["errors"] += [{"file": f"{PREFIX}{wid}.conf", "reason": str(exc)} for wid in planned]
     return True
 
 

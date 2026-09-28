@@ -31,7 +31,7 @@ from pathlib import Path
 from .. import constants as C
 from ..discovery import project
 from ..discovery.project import derive_cc as _derive_cc
-from . import meta, paths, settings, tags, wp
+from . import lock, meta, paths, settings, tags, wp
 
 
 def _snapshot() -> dict:
@@ -398,7 +398,14 @@ def _wire_preset_conf(wid: str, proj: dict, dep: str, cfg: dict) -> bool:
     d["CC"] = _derive_cc(preset)
     d["props"] = _preset_props(preset)
     try:
-        wp.write_keys(wid, wp.facts_to_keys(d))
+        with lock.held("overrides"):
+            try:
+                name = wp.load_set(wid).get("ALIAS")
+            except Exception:
+                name = None
+            if name:
+                d["ALIAS"] = name
+            wp.write_keys(wid, wp.facts_to_keys(d))
         return True
     except Exception:
         return False

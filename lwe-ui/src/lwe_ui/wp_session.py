@@ -38,7 +38,7 @@ from .storage import wp
 
 # Identity, not customization: BG names the directory a preset renders from, so a revert or a
 # defaults strip that dropped it would unmake the wallpaper rather than reset it.
-IDENTITY_KEYS = ("BG", "TYPE")
+IDENTITY_KEYS = ("BG", "TYPE", "ALIAS")
 
 
 def is_wallpaper_key(key: str) -> bool:

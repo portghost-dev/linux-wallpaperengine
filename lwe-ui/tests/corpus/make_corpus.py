@@ -204,7 +204,7 @@ def build_variant(i: int, home: str) -> tuple[str, dict[str, Any]]:
     props = {f"{C.WP_PROP_PREFIX}hue": "0.35", f"{C.WP_PROP_PREFIX}label": "Ōsaka, night"}
 
     def full(wid: str, *, dense: bool) -> dict[str, str]:
-        free_wp = {"BG": wid, "CC": "0.8 1.2 1.1 0.25", "SKIP": "obj-a obj-b"}
+        free_wp = {"BG": wid, "CC": "0.8 1.2 1.1 0.25", "SKIP": "obj-a obj-b", "ALIAS": f"{wid}.Alias_{i}"}
         flat = {k: _text(value_for("wp", k, spec, i, free_wp, dense=dense))
                 for k, spec in C.WP_SCHEMA.items()}
         return {**flat, **props}
