@@ -260,8 +260,8 @@ private:
     /** orphan reflex: no frames AND no client heartbeat for the window => shed the outputs if the driver can */
     void tickDeadman ();
     /**
-     * FullscreenBehavior::Stop edge, once per main-loop pass: shed the outputs while
-     * something is fullscreen and take them back the moment it clears. Derives its
+     * FullscreenBehavior::Stop edge, once per main-loop pass: shed the outputs, where the driver
+     * can release them, while something is fullscreen and take them back the moment it clears. Derives its
      * decision from m_releaseReason (not a shadow flag) so an interleaved acquire -
      * an explicit show re-arms released outputs - self-corrects on the next pass.
      */

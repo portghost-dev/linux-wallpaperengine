@@ -3569,6 +3569,7 @@ void WallpaperApplication::tickDeadman () {
     const auto sincePing = std::chrono::duration_cast<std::chrono::seconds> (now - this->m_lastPing).count ();
 
     if (sincePing < this->m_deadmanSeconds || this->secondsSinceLastRender () < this->m_deadmanSeconds) {
+	this->m_deadmanCannotReleaseLogged = false;
 	return;
     }
 
