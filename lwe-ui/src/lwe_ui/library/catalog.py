@@ -96,7 +96,7 @@ def _aliases() -> dict[str, str]:
         if not paths.is_safe_wid(conf.stem):
             continue
         try:
-            text = conf.read_text(encoding="utf-8")
+            text = conf.read_bytes().decode("utf-8")
         except (OSError, UnicodeDecodeError):
             continue
         name = tier_a.parse(text).get("ALIAS", "").strip()
@@ -147,7 +147,7 @@ def _numbered(groups: list[list[tuple[str, str, str, str, bool]]], aliases: dict
 
 def wallpaper_rows() -> tuple[list[Row], int]:
     """The pool, numbered from 1, then the Workshop rows numbered on from it, and the count of ids
-    left out because their names are not safe.
+    left out because their names are not safe, the folders of both pending roots included.
 
     Pool: the ids of library_ids() the tags know and do not hold for review (the grid's All
     scope); "missing" when nothing renders them, else "pool". Workshop: tags review rows and
@@ -178,6 +178,8 @@ def wallpaper_rows() -> tuple[list[Row], int]:
         title, wtype = _described(wid, _identity_dir(wid, lib), titles)
         shop.append((title, wid, wtype, "waiting", False))
     workshop = importer.workshop_dir()
+    for root in (workshop, str(paths.manual_dir())):
+        unsafe.update(name for name in _scan_dir_ids(root) if not paths.is_safe_wid(name))
     seen = {entry[1] for entry in shop}
     for wid in importer.scan_new():
         if wid in seen:

@@ -9,6 +9,9 @@ from .. import texcomp
 from . import catalog
 
 
+UNREADABLE = "its package could not be read"
+
+
 class Result(NamedTuple):
     kind: str
     before: int
@@ -19,14 +22,18 @@ class Result(NamedTuple):
 
 def compress_one(row: catalog.Row, *, folder: str | None = None) -> Result:
     """Encode the uncached textures in folder, by default the one the row renders from (a preset's
-    base), owned by that folder. kind is "compressed", "already", "nothing" or "missing"."""
+    base), owned by that folder. kind is "compressed", "already", "nothing", "missing" or
+    "unreadable" (the package could not be read, so nothing was written)."""
     d = catalog.render_dir(row.id) if folder is None else folder
     if not d:
         return Result("missing", 0, 0, 0, 0)
     if row.type in ("video", "web"):
         return Result("nothing", 0, 0, 0, 0)
     measure: dict[str, int] = {}
-    done = texcomp.encode_scene(d, os.path.basename(d.rstrip("/")), measure=measure)
+    try:
+        done = texcomp.encode_scene(d, os.path.basename(d.rstrip("/")), measure=measure)
+    except texcomp.PackageError:
+        return Result("unreadable", 0, 0, 0, 0)
     if measure["eligible"] == 0:
         return Result("nothing", 0, 0, 0, 0)
     if done["total"] == 0:
@@ -57,6 +64,8 @@ def result_text(row: catalog.Row, result: Result) -> str:
         text = "already compressed"
     elif result.kind == "nothing":
         text = f"{row.type or 'scene'}, nothing to compress"
+    elif result.kind == "unreadable":
+        text = f"not compressed: {UNREADABLE}"
     else:
         text = "files missing, nothing to compress"
     return text

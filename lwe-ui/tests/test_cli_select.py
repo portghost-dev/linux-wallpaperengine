@@ -3,7 +3,9 @@
 Up to five ASCII digits are a place in the list (the pool, then the Workshop rows), six to eight are
 refused with both readings, nine or more are an id, @name is an alias, current is the wallpaper on
 screen and any other word is an exact id or a title ignoring case; ambiguity and no match refuse,
-and a refusal returns nothing. Playlists are picked by number or by name. The engine's status and
+and a refusal returns nothing. current wins over a wallpaper titled current; a trashed wallpaper on
+screen is picked as trashed and a preset on screen as the preset; an unreadable version file
+refuses with its message. Playlists are picked by number or by name. The engine's status and
 availability are replaced for each call. A PySide6-poisoned child with an environment built from
 nothing imports the catalog and the pick module.
 
@@ -32,6 +34,7 @@ from lwe_ui import api_client, version  # noqa: E402
 from lwe_ui.cli import Context  # noqa: E402
 from lwe_ui.cli import select  # noqa: E402
 from lwe_ui.cli.select import Pick, PickError, PlaylistPick  # noqa: E402
+from lwe_ui.library import catalog  # noqa: E402
 from lwe_ui.storage import paths, playlists, settings, tags  # noqa: E402
 
 LIB = _ROOT / "lib"
@@ -82,6 +85,14 @@ def _status(current: dict | None, version_text: str | None = None, available: bo
             mock.patch.object(api_client, "available", lambda *a, **k: available))
 
 
+def _one_more_row(wid: str, title: str):
+    """A patch for catalog.wallpaper_rows: the fixture's rows and one more pool row numbered after
+    them, so the fixture's numbers stay as they are."""
+    rows, unsafe = catalog.wallpaper_rows()
+    extra = catalog.Row(len(rows) + 1, wid, title, "", "scene", "pool", False)
+    return mock.patch.object(catalog, "wallpaper_rows", return_value=(rows + [extra], unsafe))
+
+
 class WallpaperGrammarTest(unittest.TestCase):
     def refused(self, word: str, code: int, message: str, lines: list[str] | None = None, **kw) -> None:
         with self.assertRaises(PickError) as caught:
@@ -112,6 +123,12 @@ class WallpaperGrammarTest(unittest.TestCase):
         self.assertEqual(select.wallpaper("123456789").number, 9)
         self.assertEqual(select.wallpaper("1234567890").number, 12)
         self.refused("111111111", 1, "nothing matches 111111111")
+
+    def test_nine_or_more_digits_never_match_a_title(self) -> None:
+        with _one_more_row("303030303", "123456789"):
+            self.assertEqual(select.wallpaper("123456789").ui_id, "123456789")
+        with _one_more_row("303030303", "1234567890123"):
+            self.refused("1234567890123", 1, "nothing matches 1234567890123")
 
     def test_other_words_are_an_exact_id_or_a_title_ignoring_case(self) -> None:
         self.assertEqual(select.wallpaper("hand_made").number, 8)
@@ -184,6 +201,26 @@ class CurrentTest(unittest.TestCase):
     def test_an_engine_from_another_build_is_refused(self) -> None:
         text = version.running_refusal({"version": "0.0.1"}, version.panel_stamp())
         self.refused(1, text, {"ui_id": "401", "id": "401", "title": ""}, version_text="0.0.1")
+
+    def test_an_unreadable_version_file_refuses_with_its_message(self) -> None:
+        missing = _ROOT / "no-VERSION"
+        with mock.patch.object(version, "STAMP_FILE", missing):
+            self.refused(1, f"the panel's version file {missing} is missing or empty; reinstall with bash "
+                         "install.sh", {"ui_id": "401", "id": "401", "title": ""}, version_text="0.0.1")
+
+    def test_current_wins_over_a_wallpaper_titled_current(self) -> None:
+        with _one_more_row("303030303", "current"):
+            self.assertEqual(self.pick({"ui_id": "401", "id": "401", "title": "Deep Space"}).ui_id, "401")
+            self.assertEqual(select.wallpaper("303030303"), Pick(14, "303030303", "303030303", "current", "", "pool"))
+            self.assertEqual(select.wallpaper("14").ui_id, "303030303")
+
+    def test_a_trashed_wallpaper_on_screen_is_trashed(self) -> None:
+        self.assertEqual(self.pick({"ui_id": "987654321", "id": "987654321", "title": "Gone"}),
+                         Pick(None, "987654321", "987654321", "Gone", "", "trashed"))
+
+    def test_a_preset_on_screen_is_the_preset_not_its_base(self) -> None:
+        self.assertEqual(self.pick({"ui_id": "801", "id": "401", "title": "Deep Space"}),
+                         Pick(10, "801", "401", "Preset", "", "pool"))
 
 
 class PlaylistTest(unittest.TestCase):

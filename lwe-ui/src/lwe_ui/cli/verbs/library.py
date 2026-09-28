@@ -113,13 +113,16 @@ def _compress(ctx: Context, args: list[str]) -> int:
     for row in named:
         result = compress.compress_one(row)
         results.append(result)
-        if not ctx.json:
+        if result.kind == "unreadable":
+            message = f"{row.title}: {compress.result_text(row, result)}"
+            ctx.error(message, "lwe: " + message)
+        elif not ctx.json:
             print(compress.result_line(row, result), file=ctx.out, flush=True)
     if ctx.json:
         print(json.dumps({
             "wallpapers": [{"id": row.id, "title": row.title, "result": r.kind, "bytes_before": r.before,
                             "bytes_after": r.after, "failed": r.failed, "disk_bytes": r.disk}
-                           for row, r in zip(named, results)],
+                           for row, r in zip(named, results) if r.kind != "unreadable"],
             "total": {"compressed": sum(1 for r in results if compress.written(r)), "named": len(results),
                       "bytes_before": sum(r.before for r in results),
                       "bytes_after": sum(r.after for r in results),
@@ -127,7 +130,7 @@ def _compress(ctx: Context, args: list[str]) -> int:
         }, ensure_ascii=False, separators=(",", ":")), file=ctx.out)
     elif len(results) > 1:
         print(compress.total_line(results), file=ctx.out)
-    return DONE
+    return REFUSED if any(r.kind == "unreadable" for r in results) else DONE
 
 
 _REASONS = {"skipped-copy-failed": "the copy failed",
@@ -187,6 +190,8 @@ def _add_one(row, cfg: dict) -> tuple[str, dict]:
         deps, own = _download_deps(row.id)
         folder = catalog.render_dir(deps[0]) if deps and not own else None
         result = compress.compress_one(row, folder=folder)
+        if result.kind == "unreadable":
+            return _failed(facts, compress.UNREADABLE)
         done = importer.import_one(row.id)
         if done["action"] not in ("imported-review", "imported-good"):
             return _failed(facts, _REASONS.get(done["action"], done["action"]))
@@ -201,6 +206,8 @@ def _add_one(row, cfg: dict) -> tuple[str, dict]:
             if meta.get(row.id).get("depMissing"):
                 return _failed(facts, _REASONS["skipped-conf-failed"])
         result = compress.compress_one(row)
+        if result.kind == "unreadable":
+            return _failed(facts, compress.UNREADABLE)
         head, kind = "in the pool", "approved"
     actions.approve(row.id, title, wizard.approved_untested(where="workshop"))
     text = f"{head}; {compress.result_text(row, result)}"

@@ -7,7 +7,8 @@ wired and approved and names the base imported on the way, as does a preset down
 a download too; a base already in the pool is not named, and a base named after its preset is
 approved in its turn. A held item the wiring left held is not approved. A missing base, an
 ambiguous word, a trashed pick, a pick only on screen or a refusal on a later word changes no file.
-A failed import is reported on its line and the rest continue. untrash alone lists the trash;
+A failed import is reported on its line and the rest continue; so is a package that cannot be
+read, and nothing is imported or approved for it, in text and under -j. untrash alone lists the trash;
 untrash lifts a block, with or without files, and the wallpaper can be added again. No child
 connects to the engine socket.
 
@@ -44,6 +45,7 @@ CACHE = _ROOT / "s" / "lwe" / "engine" / "texcache"
 BIN = _ROOT / "bin"
 SOCK = _ROOT / "rt" / "engine.sock"
 ARGB_AFTER = 16384 + 4096 + 1024 + 256 + 64 + 16 + 16 + 16
+NINE_BYTES = b"\x04\x00\x00\x00PKGV\x01"
 _RUNS: dict[str, subprocess.CompletedProcess] = {}
 _SAME: dict[str, bool] = {}
 _FACTS: dict[str, dict] = {}
@@ -147,6 +149,15 @@ def _stores() -> None:
     _preset("1400000021", "Uniform Preset", "1400000022")
     _scene(WORKSHOP / "1400000022", "Victor Base", 22)
     _scene(WORKSHOP / "1400000023", "Sierra\u0007Dunes", 23)
+    _scene(WORKSHOP / "1400000031", "Whiskey", 31)
+    _scene(WORKSHOP / "1400000032", "X-ray", None)
+    _scene(LIB / "1400000033", "Yankee", None)
+    tags.set_state("1400000033", "Yankee", "review")
+    _scene(WORKSHOP / "1400000034", "Zulu", 34)
+    _scene(WORKSHOP / "1400000035", "Oscar", 35)
+    _scene(WORKSHOP / "1400000036", "Nine Bytes", None)
+    for folder in (WORKSHOP / "1400000032", LIB / "1400000033", WORKSHOP / "1400000036"):
+        (folder / "scene.pkg").write_bytes(NINE_BYTES)
 
 
 def setUpModule() -> None:
@@ -218,6 +229,13 @@ def _commands() -> None:
     _run("failure", ["add", "1400000016", "1400000017"])
     _FACTS["failure"] = {"tags": (_tag("1400000016"), _tag("1400000017")),
                          "staged": sorted(p.name for p in LIB.iterdir() if p.name.startswith("."))}
+    unreadable = ("1400000031", "1400000032", "1400000033", "1400000034")
+    _run("unreadable", ["add", *unreadable])
+    _FACTS["unreadable"] = {"tags": [_tag(w) for w in unreadable], "events": [_events(w) for w in unreadable],
+                            "copied": (LIB / "1400000032").exists(), "owners": _owners()}
+    _run("unreadable-json", ["-j", "add", "1400000035", "1400000036"])
+    _FACTS["unreadable-json"] = {"tags": [_tag("1400000035"), _tag("1400000036")],
+                                 "copied": (LIB / "1400000036").exists()}
     _run("untrash", ["untrash", "1400000010"])
     _FACTS["untrash"] = {"tag": _tag("1400000010"), "events": _events("1400000010")}
     _run("workshop", ["workshop"])
@@ -371,6 +389,31 @@ class AddTest(unittest.TestCase):
             _line("Papa (1400000016)", "not added: the copy failed"),
             _line("Quebec (1400000017)", "imported into the pool; textures 0 MB before, 0 MB after")])
         self.assertEqual(_FACTS["failure"], {"tags": (None, "good"), "staged": []})
+
+    def test_an_unreadable_package_is_named_and_skipped_and_the_rest_go_on(self) -> None:
+        r = _RUNS["unreadable"]
+        self.assertEqual((r.returncode, r.stderr), (1, ""))
+        self.assertEqual(r.stdout.splitlines(), [
+            _line("Whiskey (1400000031)", "imported into the pool; textures 0 MB before, 0 MB after"),
+            _line("X-ray (1400000032)", "not added: its package could not be read"),
+            _line("Yankee (1400000033)", "not added: its package could not be read"),
+            _line("Zulu (1400000034)", "imported into the pool; textures 0 MB before, 0 MB after")])
+        approved = [("approved", "workshop", "human")]
+        facts = _FACTS["unreadable"]
+        self.assertEqual((facts["tags"], facts["events"], facts["copied"]),
+                         (["good", None, "review", "good"], [approved, [], [], approved], False))
+        self.assertTrue({"1400000031", "1400000034"} <= facts["owners"])
+        r = _RUNS["unreadable-json"]
+        self.assertEqual((r.returncode, r.stderr), (1, ""))
+        result = json.loads(r.stdout)
+        self.assertGreater(result["results"][0]["compress"].pop("disk_bytes"), ARGB_AFTER)
+        self.assertEqual(result, {"results": [
+            {"id": "1400000035", "title": "Oscar", "result": "imported",
+             "compress": {"result": "compressed", "bytes_before": 65536, "bytes_after": ARGB_AFTER, "failed": 0},
+             "bases": []},
+            {"id": "1400000036", "title": "Nine Bytes", "result": "failed",
+             "reason": "its package could not be read"}], "receipt": None})
+        self.assertEqual(_FACTS["unreadable-json"], {"tags": ["good", None], "copied": False})
 
 
 class UntrashTest(unittest.TestCase):

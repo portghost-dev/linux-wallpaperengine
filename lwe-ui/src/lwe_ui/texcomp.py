@@ -82,6 +82,10 @@ def shim_available() -> bool:
     return os.path.isfile(p) and os.access(p, os.X_OK)
 
 
+class PackageError(Exception):
+    """A wallpaper's package could not be read: an OS error, or a truncated or corrupt file."""
+
+
 def read_pkg(path: str) -> dict[str, bytes]:
     b = open(path, "rb").read()
     o = [0]
@@ -326,7 +330,10 @@ def _iter_scene_all(d: str):
     pk = glob.glob(os.path.join(d, "*.pkg"))
     if not pk:
         return
-    files = read_pkg(pk[0])
+    try:
+        files = read_pkg(pk[0])
+    except (OSError, struct.error) as exc:
+        raise PackageError(pk[0]) from exc
     exempt_extra: set[str] = set()
     ex_path = os.path.join(d, "exempt.txt")
     if os.path.exists(ex_path):
@@ -387,7 +394,7 @@ def encode_scene(d: str, wid: str,
     A measure dict receives "eligible" (eligible textures, cached or not) and, over the
     textures encoded in this run, "bytes_before" (their stored levels at the engine's
     upload size), "bytes_after" (the block bytes written) and "disk_bytes" (the .bc and
-    .meta files written). A failed texture adds to none of them.
+    .meta files written, each key's pair once). A failed texture adds to none of them.
     """
     jobs = []
     eligible = 0
@@ -398,6 +405,7 @@ def encode_scene(d: str, wid: str,
     total = len(jobs)
     done = encoded = failed = 0
     before = after = disk = 0
+    on_disk: set[str] = set()
     if progress:
         progress(0, total)
     os.makedirs(CACHE, exist_ok=True)
@@ -440,7 +448,9 @@ def encode_scene(d: str, wid: str,
                 encoded += 1
                 before += sum(mw * mh for (mw, mh, _raw) in images[0]) * _UPLOAD_BPT[fmt]
                 after += sum(len(blk) for blk in blocks)
-                disk += written
+                if key not in on_disk:
+                    disk += written
+                on_disk.add(key)
             except Exception:
                 failed += 1
             finally:

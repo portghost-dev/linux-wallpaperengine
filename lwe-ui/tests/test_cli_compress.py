@@ -7,18 +7,24 @@ with the stub encoder and a scratch state tree: a 128x128 ARGB8888 and a 128x128
 known byte counts, a truncated texture counts as failed and in neither figure, a second run is
 already compressed, a video has nothing to compress and is never encoded, a scene with nothing
 eligible and a pool row without files say so, --all covers the pool only, a missing encoder
-refuses with no cache written, and a preset's textures are owned by its base.
+refuses with no cache written, and a preset's textures are owned by its base. A package that
+cannot be read is named on stderr and skipped, the rest go on and the run exits 1; two textures
+that share a cache key count their pair on disk once. before counts every stored mip at the
+engine's upload size (RG88 at 2 bytes a texel), a web wallpaper is never encoded even when its
+folder holds textures, and megabytes round to the nearest whole.
 
 Run: PYTHONPATH=src python3 tests/test_cli_compress.py
 """
 import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import json
 import os
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _TMP = tempfile.TemporaryDirectory(prefix="lwe-compress-")
 _ROOT = Path(_TMP.name)
@@ -45,6 +51,15 @@ _CACHES: dict[str, dict[str, tuple[int, str]]] = {}
 
 def _pixels(seed: int, n: int) -> bytes:
     return bytes((i * 7 + seed) % 256 for i in range(n))
+
+
+def _two_mips(tw: int, th: int, mip0: bytes, mip1: bytes) -> bytes:
+    """An ARGB8888 texture laid out as _tex lays one out, with a second stored mip of half the size."""
+    out = b"TEXV0005" + b"\x00" * 10 + struct.pack("<7I", 0, 0, tw, th, 0, 0, 0) + b"TEXB0003\x00"
+    out += struct.pack("<III", 1, 0xFFFFFFFF, 2)
+    for w, h, raw in ((tw, th, mip0), (tw // 2, th // 2, mip1)):
+        out += struct.pack("<IIIii", w, h, 0, 0, len(raw)) + raw
+    return out
 
 
 def _scene(folder: Path, title: str, textures: dict[str, bytes] | None, kind: str = "scene") -> None:
@@ -130,6 +145,15 @@ def setUpModule() -> None:
     for name, words in (("bare", ["compress"]), ("both", ["compress", "--all", "1"]),
                         ("option", ["compress", "--fast", "1"])):
         _RUNS[name] = _child(words, stub)
+    _good("1100000012", "Bad Package", None)
+    (LIB / "1100000012" / "scene.pkg").write_bytes(b"\x08\x00\x00\x00PKGV0001\xff\xff\xff\x7f" + b"x" * 40)
+    _good("1100000013", "Kilo", {"materials/kilo.tex": _tex(0, 128, 128, _pixels(9, side * 4))})
+    _RUNS["unreadable"] = _child(["compress", "--all"], stub)
+    _CACHES["unreadable"] = _cache()
+    _RUNS["unreadable-json"] = _child(["-j", "compress", "1100000012", "1100000001"], stub)
+    _good("1100000014", "Lima", {"materials/lima.tex": _tex(0, 128, 128, _pixels(10, side * 4))}, "web")
+    _RUNS["web"] = _child(["compress", "1100000014"], stub)
+    _CACHES["web"] = _cache()
 
 
 class FormatterTest(unittest.TestCase):
@@ -143,6 +167,11 @@ class FormatterTest(unittest.TestCase):
                    Result("already", 0, 0, 0, 0), Result("nothing", 0, 0, 0, 0)]
         self.assertEqual([result_line(r, x) for r, x in zip(rows, results)] + [total_line(results)], COMPRESS[1:6])
         self.assertEqual(result_line(rows[1], Result("compressed", 1200 * 10**6, 288 * 10**6, 0, 1)), COMPRESS[8])
+
+    def test_megabytes_round_to_the_nearest_whole(self) -> None:
+        short = Row(2, "8", "Short", "", "", "pool", False)
+        self.assertEqual(result_line(short, Result("compressed", 1_600_000, 2_700_000, 0, 1))[29:],
+                         "textures 2 MB before, 3 MB after")
 
     def test_other_texts(self) -> None:
         row = Row(1, "7", "A title of exactly twenty-four", "", "", "pool", False)
@@ -182,6 +211,37 @@ class MeasureTest(unittest.TestCase):
                 os.environ.pop("LWE_BC7ENC", None)
             else:
                 os.environ["LWE_BC7ENC"] = saved[1]
+
+    def test_before_counts_every_stored_mip_at_the_upload_size(self) -> None:
+        scene = _ROOT / "mips"
+        big, small = _pixels(16, 128 * 128 * 4), _pixels(17, 64 * 64 * 4)
+        _scene(scene, "Mips", {"materials/rg.tex": _tex(8, 128, 128, _pixels(18, 128 * 128 * 2)),
+                               "materials/two.tex": _two_mips(128, 128, big, small)})
+        cache = _ROOT / "mips-cache"
+        with mock.patch.object(texcomp, "CACHE", str(cache)), \
+                mock.patch.dict(os.environ, {"LWE_BC7ENC": str(BIN / "stub_bc7enc")}):
+            m: dict = {}
+            self.assertEqual(texcomp.encode_scene(str(scene), "Mips", measure=m),
+                             {"encoded": 2, "failed": 0, "total": 2})
+        self.assertEqual(m, {"eligible": 2, "bytes_before": 128 * 128 * 2 + (128 * 128 + 64 * 64) * 4,
+                             "bytes_after": 16384 + 16384 + 4096,
+                             "disk_bytes": sum(p.stat().st_size for p in cache.iterdir())})
+
+    def test_two_textures_sharing_a_key_count_their_cache_pair_once(self) -> None:
+        scene = _ROOT / "shared"
+        side = 128 * 128
+        texture = _tex(0, 128, 128, _pixels(15, side * 4))
+        _scene(scene, "Shared", {"materials/a.tex": texture, "materials/b.tex": texture})
+        cache = _ROOT / "shared-cache"
+        with mock.patch.object(texcomp, "CACHE", str(cache)), \
+                mock.patch.dict(os.environ, {"LWE_BC7ENC": str(BIN / "stub_bc7enc")}):
+            m: dict = {}
+            self.assertEqual(texcomp.encode_scene(str(scene), "Shared", measure=m),
+                             {"encoded": 2, "failed": 0, "total": 2})
+        files = list(cache.iterdir())
+        self.assertEqual(len(files), 2)
+        self.assertEqual(m, {"eligible": 2, "bytes_before": 2 * side * 4, "bytes_after": 2 * ARGB_AFTER,
+                             "disk_bytes": sum(p.stat().st_size for p in files)})
 
 
 class CompressTest(unittest.TestCase):
@@ -225,6 +285,11 @@ class CompressTest(unittest.TestCase):
         self.assertEqual((r.returncode, r.stdout), (0, "Charlie (1100000003)         video, nothing to compress\n"))
         self.assertEqual(_CACHES["video"], {"exists": False})
 
+    def test_a_web_wallpaper_is_never_encoded_even_with_textures(self) -> None:
+        r = _RUNS["web"]
+        self.assertEqual((r.returncode, r.stdout), (0, "Lima (1100000014)            web, nothing to compress\n"))
+        self.assertNotIn("1100000014", {owner for _size, owner in _CACHES["web"].values()})
+
     def test_a_second_run_is_already_compressed(self) -> None:
         r = _RUNS["again"]
         self.assertEqual((r.returncode, r.stdout), (0, "Alpha (1100000001)           already compressed\n"))
@@ -243,6 +308,32 @@ class CompressTest(unittest.TestCase):
             "Juliet (1100000011)          files missing, nothing to compress",
             "Compressed 1 of 8 wallpapers. Textures 0 MB before, 0 MB after. The cache adds 0 MB on disk."])
         self.assertNotIn("1100000008", {owner for _size, owner in _CACHES["all"].values()})
+
+    def test_an_unreadable_package_is_named_and_skipped_and_the_rest_go_on(self) -> None:
+        r = _RUNS["unreadable"]
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stderr.splitlines(), ["lwe: Bad Package: not compressed: its package could not be read"])
+        self.assertEqual(r.stdout.splitlines(), [
+            "Alpha (1100000001)           already compressed",
+            "Bravo (1100000002)           textures 0 MB before, 0 MB after; 1 texture failed",
+            "Charlie (1100000003)         video, nothing to compress",
+            "Delta Base (1100000005)      already compressed",
+            "Echo Preset (1100000004)     already compressed",
+            "Golf (1100000007)            already compressed",
+            "India (1100000010)           scene, nothing to compress",
+            "Juliet (1100000011)          files missing, nothing to compress",
+            "Kilo (1100000013)            textures 0 MB before, 0 MB after",
+            "Compressed 1 of 10 wallpapers. Textures 0 MB before, 0 MB after. The cache adds 0 MB on disk."])
+        owners = {owner for _size, owner in _CACHES["unreadable"].values()}
+        self.assertIn("1100000013", owners)
+        self.assertNotIn("1100000012", owners)
+        r = _RUNS["unreadable-json"]
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stderr.splitlines(), ['{"error":"Bad Package: not compressed: its package could not be read"}'])
+        self.assertEqual(json.loads(r.stdout), {
+            "wallpapers": [{"id": "1100000001", "title": "Alpha", "result": "already", "bytes_before": 0,
+                            "bytes_after": 0, "failed": 0, "disk_bytes": 0}],
+            "total": {"compressed": 0, "named": 2, "bytes_before": 0, "bytes_after": 0, "disk_bytes": 0}})
 
     def test_refusals(self) -> None:
         r = _RUNS["trashed"]

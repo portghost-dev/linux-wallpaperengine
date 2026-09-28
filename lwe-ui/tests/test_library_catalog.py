@@ -1,12 +1,14 @@
 """The library catalog: the pool, the Workshop rows and the trash as commands list them, without Qt.
 
 One scratch store holds a good item, a good item without files, a review item, a bad item whose
-library folder is still on disk, a legacy tags state, an unknown library folder, an unsafe folder
-name, a complete download, a half download, a manual-root item, a preset and a reference import.
-The catalog agrees with the grid (library_ids and the All scope), the Workshop tiles and the
-importer's scan; the pool is numbered by title then id from 1 and the Workshop rows continue it;
-the unsafe name is counted and left out; trash rows, render folders and the alias index read as
-the panel reads them; and the catalog calls write nothing.
+library folder is still on disk, a legacy tags state, an unknown library folder, unsafe folder
+names in the library, the Workshop root and the manual root, a complete download, a half download,
+a manual-root item, a preset, a reference import and a trashed manual-root folder whose tags title
+differs from its project title. The catalog agrees with the grid (library_ids
+and the All scope), the Workshop tiles and the importer's scan; the pool is numbered by title then
+id from 1 and the Workshop rows continue it; every unsafe name is counted and left out; trash
+rows, render folders and the alias index read as the panel reads them, a row's alias as the alias
+store and wp read the raw lines; and the catalog calls write nothing.
 
 Run: PYTHONPATH=src QT_QPA_PLATFORM=offscreen python3 tests/test_library_catalog.py
 """
@@ -32,7 +34,7 @@ _APP = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
 from lwe_ui import models  # noqa: E402
 from lwe_ui.library import catalog  # noqa: E402
 from lwe_ui.library.catalog import Row  # noqa: E402
-from lwe_ui.storage import importer, paths, records, settings, tags  # noqa: E402
+from lwe_ui.storage import alias, importer, paths, records, settings, tags, wp  # noqa: E402
 from lwe_ui.workshop import WorkshopBridge  # noqa: E402
 
 LIB = _ROOT / "lib"
@@ -80,6 +82,8 @@ def setUpModule() -> None:
     tags.set_state("105", "alpha", "old")
     _item(LIB / "701", "Golf")
     _item(LIB / "bad name", "Unsafe")
+    _item(WORKSHOP / "bad download", "Unsafe Download")
+    _item(paths.manual_dir() / "bad hand", "Unsafe Hand")
     _item(WORKSHOP / "301", "Golf", "video")
     _item(WORKSHOP / "302", "Half", payload=False)
     _item(paths.manual_dir() / "hand_made", "Hotel", "web")
@@ -90,6 +94,8 @@ def setUpModule() -> None:
     tags.set_state("501", "India", "good")
     _conf("501", f"BG={REFERENCE}\n")
     records.append("601", records.make_event("deleted", where="library"))
+    _item(paths.manual_dir() / "hand_gone", "Folder Title")
+    tags.set_state("hand_gone", "Zulu Hand", "bad")
     _conf("101", "ALIAS=first\nALIAS=Deep\n")
     _conf("105", "ALIAS=dEEP\n")
 
@@ -130,12 +136,13 @@ class CatalogTest(unittest.TestCase):
             Row(8, "701", "Golf", "", "scene", "waiting", False),
             Row(9, "hand_made", "Hotel", "", "web", "download", False),
         ])
-        self.assertEqual(unsafe, 1)
+        self.assertEqual(unsafe, 3)
 
     def test_trash_rows_with_and_without_a_download_folder(self) -> None:
         self.assertEqual(catalog.trash_rows(), [
             Row(1, "601", "601", "", "", "trashed", False),
             Row(2, "104", "Trashed One", "", "scene", "trashed", True),
+            Row(3, "hand_gone", "Zulu Hand", "", "scene", "trashed", True),
         ])
 
     def test_render_dir(self) -> None:
@@ -148,6 +155,15 @@ class CatalogTest(unittest.TestCase):
 
     def test_alias_index_takes_the_last_assignment_and_ignores_case(self) -> None:
         self.assertEqual(catalog.alias_index(), {"deep": ["101", "105"]})
+
+    def test_a_rows_alias_is_read_from_the_raw_lines_as_the_store_reads_them(self) -> None:
+        conf = paths.wp_file("701")
+        conf.write_bytes(b"SPEED=1\rALIAS=foo\n")
+        self.addCleanup(conf.unlink)
+        rows, _unsafe = catalog.wallpaper_rows()
+        self.assertEqual([r.alias for r in rows if r.id == "701"], [""])
+        self.assertNotIn("foo", alias.claims())
+        self.assertNotIn("ALIAS", wp.load_set("701"))
 
     def test_the_catalog_writes_nothing(self) -> None:
         before = _tree(_ROOT)
