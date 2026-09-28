@@ -11,6 +11,7 @@ import sys
 from dataclasses import dataclass
 from typing import TextIO
 
+from .. import version
 from ..storage.lock import StoreBusy
 from . import registry
 
@@ -53,6 +54,14 @@ def main(argv: list[str], *, sender_stamp: str | None = None, cwd_entered: bool 
         if verb is None:
             ctx.error(f"{words[0]} is not a command", f"lwe: {words[0]} is not a command")
             return USAGE
+        if verb.name != "help":
+            try:
+                refusal = version.sender_refusal(ctx.sender_stamp, version.panel_stamp())
+            except version.StampError as exc:
+                refusal = str(exc)
+            if refusal is not None:
+                ctx.error(refusal)
+                return REFUSED
         return verb.run(ctx, words[1:])
     except StoreBusy as exc:
         ctx.error(str(exc))

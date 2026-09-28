@@ -23,6 +23,8 @@ import unittest
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parent.parent / "src"
+FIRST_LINE = (SRC.parent.parent / "VERSION").read_bytes().decode("utf-8").split("\n", 1)[0]
+STAMP = FIRST_LINE.removeprefix("\ufeff").strip(" \t\n\v\f\r")
 
 PROBE = '''
 import os
@@ -186,13 +188,13 @@ class CliEntryTest(unittest.TestCase):
         self.assertEqual(r.stderr.splitlines(), ['{"error":"caf\u00e9 is not a command"}'])
 
     def test_a_verb_module_on_the_verbs_path_is_run_and_its_code_returned(self) -> None:
-        r = self._with_verbs("--lwe", "1.2.0", str(self.root / "there"), "-j", "where", "one", "--json")
+        r = self._with_verbs("--lwe", STAMP, str(self.root / "there"), "-j", "where", "one", "--json")
         self.assertEqual(r.returncode, 7, r.stderr)
-        self.assertEqual(r.stdout.strip().split("|")[2:], ["1.2.0", "True", "one"])
+        self.assertEqual(r.stdout.strip().split("|")[2:], [STAMP, "True", "one"])
         for flags, line in (([], "Store busy: another writer holds settings.lock"),
                             (["-j"], '{"error":"Store busy: another writer holds settings.lock"}')):
             with self.subTest(flags=flags):
-                busy = self._with_verbs("--lwe", "1.2.0", str(self.root / "there"), "busy", *flags)
+                busy = self._with_verbs("--lwe", STAMP, str(self.root / "there"), "busy", *flags)
                 self.assertEqual(busy.returncode, 1, busy.stderr)
                 self.assertEqual(busy.stderr.splitlines(), [line])
 
@@ -227,7 +229,7 @@ class CliEntryTest(unittest.TestCase):
             cases.append((str(locked), start, "False"))
         for folder, cwd, entered in cases:
             with self.subTest(folder=folder):
-                r = self._with_verbs("--lwe", "1.2.0", folder, "where")
+                r = self._with_verbs("--lwe", STAMP, folder, "where")
                 self.assertEqual(r.returncode, 7, r.stderr)
                 self.assertEqual(r.stdout.split("|")[:2], [cwd, entered])
 
@@ -243,7 +245,7 @@ class CliEntryTest(unittest.TestCase):
         self.assertEqual(r.stderr.splitlines(), ["lwe: --tray is not a command"])
 
     def test_json_flags_are_exact_tokens(self) -> None:
-        r = self._with_verbs("--lwe", "v", str(self.root / "there"), "where", "-jx", "--jsonx")
+        r = self._with_verbs("--lwe", STAMP, str(self.root / "there"), "where", "-jx", "--jsonx")
         self.assertEqual(r.returncode, 7, r.stderr)
         self.assertEqual(r.stdout.strip().split("|")[3:], ["False", "-jx --jsonx"])
 
@@ -277,7 +279,7 @@ class CliEntryTest(unittest.TestCase):
         for flags, folder, verb, line in cases:
             with self.subTest(flags=flags, folder=folder):
                 r = self._run([sys.executable, "-c", RUN_WITH_VERBS, str(self.root / folder),
-                               "--lwe", "v", str(self.root / "there"), verb, *flags])
+                               "--lwe", STAMP, str(self.root / "there"), verb, *flags])
                 self.assertEqual(r.returncode, 1, r.stderr)
                 self.assertEqual(r.stdout, "")
                 self.assertEqual(r.stderr.splitlines(), [line])

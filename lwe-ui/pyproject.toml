@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lwe-ui"
-version = "0.1.0"
+dynamic = ["version"]
 description = "PySide6 + QML control panel for linux-wallpaperengine."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,5 +31,8 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.dynamic]
+version = { file = "src/lwe_ui/VERSION" }
+
 [tool.setuptools.package-data]
-lwe_ui = ["qml/*.qml", "qml/qmldir"]
+lwe_ui = ["qml/*.qml", "qml/qmldir", "VERSION"]
