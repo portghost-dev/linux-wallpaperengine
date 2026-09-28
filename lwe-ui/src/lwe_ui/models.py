@@ -1050,6 +1050,8 @@ class Backend(QObject):
         enable/disable --now so the switch position survives a reboot; the unit
         is written WantedBy=graphical-session.target but never enabled at
         install time (daemon_unit.write_files never enables)."""
+        if _sandboxed():
+            return False
         args = ["enable", "--now"] if on else ["disable", "--now"]
         try:
             proc = subprocess.run(
