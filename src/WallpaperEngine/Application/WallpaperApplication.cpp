@@ -605,7 +605,7 @@ const std::vector<WallpaperApplication::WebLibraryEntry>& WallpaperApplication::
     return this->m_webLibrary;
 }
 
-std::vector<WallpaperApplication::WebLibraryEntry> WallpaperApplication::enumerateWebBackgrounds () const {
+std::vector<WallpaperApplication::WebLibraryEntry> WallpaperApplication::enumerateWebBackgrounds () {
     // same roots and precedence as resolveLibraryBackground: lwe library, then Steam
     std::vector<std::filesystem::path> roots;
 
@@ -640,7 +640,14 @@ std::vector<WallpaperApplication::WebLibraryEntry> WallpaperApplication::enumera
 	    }
 
 	    const std::string contents ((std::istreambuf_iterator<char> (file)), std::istreambuf_iterator<char> ());
-	    const auto json = WallpaperEngine::Data::JSON::parseLenient (contents);
+	    WallpaperEngine::Data::JSON::JSON json;
+
+	    try {
+		json = WallpaperEngine::Data::JSON::parseLenient (contents);
+	    } catch (const std::exception& e) {
+		sLog.error ("Skipping ", entry.path ().string (), ": its project.json does not parse: ", e.what ());
+		continue;
+	    }
 
 	    if (json.is_discarded () || !json.is_object ()) {
 		continue;

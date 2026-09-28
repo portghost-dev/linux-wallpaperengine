@@ -662,7 +662,8 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/PanelHandoff.cpp
         src/WallpaperEngine/Testing/Cases/RunPath.cpp
         src/WallpaperEngine/Testing/Cases/BootGuard.cpp
-        src/WallpaperEngine/Testing/Cases/WebAssetLocator.cpp)
+        src/WallpaperEngine/Testing/Cases/WebAssetLocator.cpp
+        src/WallpaperEngine/Testing/Cases/WebLibraryScan.cpp)
 endif()
 
 add_library(

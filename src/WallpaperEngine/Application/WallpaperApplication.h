@@ -129,9 +129,9 @@ public:
      * @param bg
      */
     AssetLocatorUniquePtr setupAssetLocator (const std::string& bg) const;
+    [[nodiscard]] static std::vector<WebLibraryEntry> enumerateWebBackgrounds ();
 
 private:
-    [[nodiscard]] std::vector<WebLibraryEntry> enumerateWebBackgrounds () const;
     /**
      * Initializes subsystems required for application operation
      */
