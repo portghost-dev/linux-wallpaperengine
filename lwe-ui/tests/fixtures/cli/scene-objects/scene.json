@@ -1,0 +1,13 @@
+{
+  "objects": [
+    {"id": 9, "name": "Drip", "particle": "particles/drip.json", "parent": 3},
+    {"id": 1, "name": "Harbor", "image": "models/harbor.json"},
+    {"id": 2, "name": "Boats", "image": "models/boats.json", "parent": 1},
+    {"id": 3, "name": "Light Rain", "particle": "particles/rain.json", "parent": 2},
+    {"id": 4, "name": "Lamp glow", "shape": "quad", "parent": 1},
+    {"id": 5, "name": "Watermark", "image": "models/watermark.json", "visible": false},
+    {"id": 6, "name": "Sparks", "particle": "particles/sparks.json", "parent": 5},
+    {"id": 7, "name": "Clock", "text": {"value": "12:00"}, "parent": 42},
+    {"id": 8, "name": "Rainfall sound", "sound": ["sounds/rain.mp3"]}
+  ]
+}
