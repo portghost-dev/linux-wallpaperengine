@@ -8,8 +8,9 @@ runs inside the sync hold.
 With sync held by another process a change returns pending, and the poll's drain returns at once.
 The service switch rebuilds engine-env, the unit and daemon-reload before systemctl, fails with the
 existing notice when that fails, and bundles once the engine answers; a restart takes only an engine
-whose pid is a new MainPID, keeps sync while its unit stops or starts, and window deliveries meanwhile
-end pending at once.
+whose pid is a new MainPID and keeps sync while its unit stops or starts, up to its cap, and meanwhile
+every other sync attempt in the window, one already waiting included, ends at once, pending or busy;
+every end of the hold gives later attempts their wait again.
 A manual switch while the engine is away with the schedule on writes nothing. A switch to a playlist
 being deleted, made by another writer while the delete reads, waits for the delete: the delete raises
 nothing and changes ACTIVE_PLAYLIST only in a change that carries the active row. A hand-broken store
@@ -216,18 +217,20 @@ class WindowSyncTest(unittest.TestCase):
             holder.join(10)
 
     @contextlib.contextmanager
-    def systemd(self, fake: FakeUnit, ready_s: float = 0.5):
+    def systemd(self, fake: FakeUnit, ready_s: float = 0.5, cap_s: float | None = 10.0):
         """The window's restart against `fake`: its readiness waits cut to `ready_s`, its hold capped at
-        10 s."""
+        `cap_s` (the real cap when None)."""
         real = push.wait_ready
 
         def short(old_pid=None, timeout_s=20.0):
             return real(old_pid=old_pid, timeout_s=min(timeout_s, ready_s))
-        with mock.patch.object(models, "_sandboxed", lambda: False), \
-                mock.patch.object(models.subprocess, "run", fake.run), \
-                mock.patch.object(daemon_unit, "_service_main_pid", fake.main_pid), \
-                mock.patch.object(push, "wait_ready", short), \
-                mock.patch.object(models, "_RESTART_CAP_S", 10.0, create=True):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(models, "_sandboxed", lambda: False))
+            stack.enter_context(mock.patch.object(models.subprocess, "run", fake.run))
+            stack.enter_context(mock.patch.object(daemon_unit, "_service_main_pid", fake.main_pid))
+            stack.enter_context(mock.patch.object(push, "wait_ready", short))
+            if cap_s is not None:
+                stack.enter_context(mock.patch.object(models, "_RESTART_CAP_S", cap_s, create=True))
             yield fake
 
     def _env(self) -> dict[str, str]:
@@ -554,6 +557,172 @@ class WindowSyncTest(unittest.TestCase):
                 with self.engine(status(pid=pid)), \
                         mock.patch.object(daemon_unit, "_service_main_pid", return_value=main):
                     self.assertEqual(push.wait_ready(old_pid=old, timeout_s=0.3) is not None, ready)
+
+    def test_engine_only_actions_and_a_second_restart_during_a_restart_are_refused_at_once(self) -> None:
+        parked, release = threading.Event(), threading.Event()
+        notices: list[str] = []
+        self.backend.notice.connect(notices.append)
+        fake = FakeUnit(4242)
+        took, results = {}, {}
+
+        def wait(old_pid=None, timeout_s=20.0):
+            parked.set()
+            release.wait(15)
+            rec.status_reply = status(pid=5000)
+            return status(pid=5000)
+
+        with self.engine(status(pid=4242)) as rec, self.systemd(fake), mock.patch.object(push, "wait_ready", wait):
+            self.assertTrue(self.backend.restartMaster())
+            first = self.backend._restart_thread
+            try:
+                self.assertTrue(parked.wait(10))
+                for name, action in (("showNow", lambda: self.backend.showNow("111")),
+                                     ("rotateNext", self.backend.rotateNext),
+                                     ("rotatePrev", self.backend.rotatePrev),
+                                     ("setEngineSpeed", lambda: self.backend.setEngineSpeed(2.0)),
+                                     ("setAnimationFrozen", lambda: self.backend.setAnimationFrozen(True)),
+                                     ("restartMaster", self.backend.restartMaster)):
+                    start = time.monotonic()
+                    results[name] = action()
+                    took[name] = time.monotonic() - start
+                sent = list(rec.verbs())
+            finally:
+                release.set()
+            first.join(30)
+            self._finish_restart()
+        self.assertTrue(all(seconds < 1.0 for seconds in took.values()), took)
+        self.assertEqual(results, {"showNow": False, "rotateNext": False, "rotatePrev": False,
+                                   "setEngineSpeed": -1.0, "setAnimationFrozen": -1.0, "restartMaster": False})
+        self.assertEqual(sent, [])
+        self.assertEqual(notices, [f"Store busy: another writer holds {paths.locks_dir() / 'sync.lock'}"])
+        self.assertEqual(sum("restart" in call for call in fake.calls), 1, "the second click launched nothing")
+        self.assertEqual((first.is_alive(), marker.read()["classes"]), (False, []))
+
+    def test_a_delivery_already_taking_sync_when_a_restart_hold_begins_does_not_wait_for_it(self) -> None:
+        go, held, release = threading.Event(), threading.Event(), threading.Event()
+        original = lock.held
+        errors, seen = [], []
+        main = threading.current_thread()
+
+        def restart_hold() -> None:
+            try:
+                if not go.wait(3):
+                    raise AssertionError("the delivery never reached sync")
+                with push.restart_hold():
+                    held.set()
+                    if not release.wait(5):
+                        raise AssertionError("the hold was never released")
+            except BaseException as exc:
+                errors.append(repr(exc))
+
+        @contextlib.contextmanager
+        def race(store, wait_s=None, **kwargs):
+            if store == "sync" and threading.current_thread() is main:
+                seen.append(wait_s)
+                go.set()
+                self.assertTrue(held.wait(3))
+            with original(store, wait_s=wait_s, **kwargs):
+                yield
+
+        with self.engine(status()):
+            ticket = push.save_change(("settings",), lambda: settings.update({"ENGINE_FPS": 45}),
+                                      [(push.SETTING_ROWS["ENGINE_FPS"], "ENGINE_FPS")])
+            holder = threading.Thread(target=restart_hold, daemon=True)
+            holder.start()
+            try:
+                with mock.patch.object(lock, "held", race):
+                    start = time.monotonic()
+                    outcome = push.deliver(ticket)
+                    took = time.monotonic() - start
+            finally:
+                release.set()
+                holder.join(5)
+        self.assertEqual((seen, errors, holder.is_alive()), ([2.0], [], False), "the wait was chosen before the hold")
+        self.assertEqual((outcome.kind, outcome.reason), ("pending", "busy"))
+        self.assertLess(took, 1.0)
+
+    def test_a_unit_stuck_stopping_ends_the_hold_at_the_cap_with_bundle_kept(self) -> None:
+        clock = Clock()
+        fake = FakeUnit(4242, on_restart="deactivating")
+        waits: list[float] = []
+
+        def wait(old_pid=None, timeout_s=20.0):
+            waits.append(timeout_s)
+            clock.now += timeout_s
+            if len(waits) > 200:
+                fake.state = "inactive"
+            return None
+
+        with self.engine(status(pid=4242)) as rec, self.systemd(fake, cap_s=None), \
+                mock.patch.object(push, "wait_ready", wait), mock.patch.object(models, "monotonic", clock):
+            self.assertTrue(self.backend.restartMaster())
+            self._finish_restart()
+        self.assertEqual((waits, clock.now - 1000.0), ([20.0] + [1.0] * 100, 120.0))
+        self.assertEqual((rec.verbs(), marker.read()["classes"]), ([], ["BUNDLE"]))
+
+    def test_a_restart_keeps_sync_while_its_unit_starts_so_no_drain_reaches_the_old_engine(self) -> None:
+        fake = FakeUnit(4242, on_restart="activating")
+        with self.engine(status(pid=4242)) as rec, self.systemd(fake):
+            self.assertTrue(self.backend.restartMaster())
+            held = fake.state_read.wait(3)
+            self.backend._restart_thread.join(0.5)
+            self.backend._drain()
+            during = (list(rec.verbs()), marker.read()["classes"])
+            rec.status_reply = status(pid=5000)
+            fake.main = 5000
+            self._finish_restart()
+        self.assertEqual((held, during), (True, ([], ["BUNDLE"])))
+        self.assertIn("lanes_set", rec.verbs())
+        self.assertEqual(marker.read()["classes"], [])
+
+    def test_every_end_of_a_restart_hold_gives_later_sync_attempts_their_wait_again(self) -> None:
+        crashes: list = []
+        ends = ("record fails", "record busy", "launch fails", "restart refused", "no new engine", "new engine",
+                "sync fails", "readiness raises", "sync held elsewhere")
+        for end in ends:
+            with self.subTest(end=end):
+                fake = FakeUnit(4242)
+                real_run = fake.run
+
+                def run(args, _end=end, **kwargs):
+                    if "restart" in args and _end == "launch fails":
+                        raise OSError("no systemctl")
+                    if "restart" in args and _end == "restart refused":
+                        fake.calls.append(list(args))
+                        return subprocess.CompletedProcess(args, 1, "", "Job failed")
+                    return real_run(args, **kwargs)
+
+                def ready(old_pid=None, timeout_s=20.0):
+                    rec.status_reply = status(pid=5000)
+                    return status(pid=5000)
+
+                with contextlib.ExitStack() as stack:
+                    rec = stack.enter_context(self.engine(status(pid=4242)))
+                    stack.enter_context(self.systemd(fake))
+                    stack.enter_context(mock.patch.object(models.subprocess, "run", run))
+                    stack.enter_context(mock.patch.object(threading, "excepthook", crashes.append))
+                    if end in ("record fails", "record busy"):
+                        failure = OSError("marker disk full") if end == "record fails" else lock.StoreBusy("busy")
+                        stack.enter_context(mock.patch.object(marker, "ensure", side_effect=failure))
+                    if end in ("new engine", "sync fails"):
+                        stack.enter_context(mock.patch.object(push, "wait_ready", ready))
+                    if end == "sync fails":
+                        stack.enter_context(mock.patch.object(push, "sync_all", side_effect=OSError("socket gone")))
+                    if end == "readiness raises":
+                        stack.enter_context(mock.patch.object(push, "wait_ready", side_effect=RuntimeError("broke")))
+                    if end == "sync held elsewhere":
+                        stack.enter_context(mock.patch.object(lock, "LOCK_WAIT_S", 0.2))
+                        stack.enter_context(self.held_elsewhere("sync"))
+                    self.backend.restartMaster()
+                    self._finish_restart()
+                self.assertEqual((push._restart_holding.is_set(), "sync" in lock._long_held), (False, False))
+        self.assertEqual([type(crash.exc_value).__name__ for crash in crashes], ["RuntimeError"])
+        with self.engine(status()), mock.patch.object(lock, "LOCK_WAIT_S", 0.3), self.held_elsewhere("sync"):
+            start = time.monotonic()
+            outcome = self.backend.save_setting("ENGINE_FPS", 45)
+            took = time.monotonic() - start
+        self.assertEqual((outcome.kind, outcome.reason), ("pending", "busy"))
+        self.assertGreaterEqual(took, 0.25, "the delivery waited for the plain holder again")
 
     def test_the_service_switch_rebuilds_first_and_bundles_once_the_engine_answers(self) -> None:
         events: list = []

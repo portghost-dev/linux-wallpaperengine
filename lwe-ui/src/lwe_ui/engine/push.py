@@ -277,18 +277,19 @@ def derived_active(status: dict[str, Any] | None) -> tuple[str | None, str]:
 
 
 def engine_only() -> contextlib.AbstractContextManager[None]:
-    """The sync hold an engine-only action sends under, with the 2.0 s wait; its StoreBusy refuses
-    the action as busy."""
+    """The sync hold an engine-only action sends under, with the 2.0 s wait, none while this
+    process's restart_hold is held; its StoreBusy refuses the action as busy."""
     return lock.held("sync")
 
 
 @contextlib.contextmanager
 def restart_hold() -> Iterator[None]:
     """The window restart's sync hold, which lasts through the wait for the new engine and its sync.
-    While it is held, every run through _synced tries sync once, so a delivery from another thread
-    of this process ends pending(busy) at once instead of waiting for a hold it cannot outwait; the
-    holder's own runs take the lock again at once, as the lock is re-entrant per thread."""
-    with lock.held("sync"):
+    It is a long hold (lock.held), so another thread of this process that asks for sync meanwhile,
+    or is already waiting for it, gets StoreBusy at once: a delivery ends pending(busy), and an
+    engine-only action or a second restart is refused as busy. The holder's own runs take the lock
+    again at once, as the lock is re-entrant per thread."""
+    with lock.held("sync", long_hold=True):
         _restart_holding.set()
         try:
             yield

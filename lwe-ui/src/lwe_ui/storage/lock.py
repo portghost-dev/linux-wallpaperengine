@@ -5,8 +5,10 @@ command, never interleave a store's read, change and write.
 A lock file is opened "a+" and never truncated, replaced or deleted, since a writer that
 locked a replaced file would hold a lock no other writer sees. The kernel releases a lock
 when its holder exits, however it exits. A thread that holds a store takes it again without
-blocking; other threads and processes wait up to LOCK_WAIT_S, then get StoreBusy. Stores are
-locked in rank order: taking a store while holding one ranked after it raises RuntimeError.
+blocking; other threads and processes wait up to LOCK_WAIT_S, then get StoreBusy, except that
+while a thread of this process holds a store as a long hold, other threads of this process get
+StoreBusy at once. Stores are locked in rank order: taking a store while holding one ranked after
+it raises RuntimeError.
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ LOCK_WAIT_S = 2.0
 _POLL_S = 0.001
 
 _local = threading.local()
+_long_held: set[str] = set()
 
 
 class StoreBusy(OSError):
@@ -38,9 +41,11 @@ def _holding() -> set[str]:
 
 
 @contextmanager
-def held(store: str, wait_s: float | None = None) -> Iterator[None]:
+def held(store: str, wait_s: float | None = None, long_hold: bool = False) -> Iterator[None]:
     """Hold `store`'s lock for the body of the with statement, waiting up to `wait_s`
-    seconds (LOCK_WAIT_S when not given; 0 tries once)."""
+    seconds (LOCK_WAIT_S when not given; 0 tries once). A long hold (`long_hold`) is one no wait
+    outlasts: while it is held, another thread of this process that asks for the store gets
+    StoreBusy at once, and one already waiting stops waiting, since each try checks for it."""
     rank = _ORDER.index(store)
     holding = _holding()
     if store in holding:
@@ -58,12 +63,16 @@ def held(store: str, wait_s: float | None = None) -> Iterator[None]:
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
             except BlockingIOError:
-                if time.monotonic() >= deadline:
+                if store in _long_held or time.monotonic() >= deadline:
                     raise StoreBusy(f"Store busy: another writer holds {path}") from None
                 time.sleep(_POLL_S)
         holding.add(store)
+        if long_hold:
+            _long_held.add(store)
         try:
             yield
         finally:
+            if long_hold:
+                _long_held.discard(store)
             holding.discard(store)
             fcntl.flock(f, fcntl.LOCK_UN)
