@@ -36,7 +36,8 @@ class Context:
         """Print a refusal or usage error on err: in text mode the line (the message when no line
         is given), under -j {"error":message} on one line."""
         if self.json:
-            print(json.dumps({"error": message}, separators=(",", ":")), file=self.err)
+            print(json.dumps({"error": message}, ensure_ascii=False, separators=(",", ":")),
+                  file=self.err)
         else:
             print(message if line is None else line, file=self.err)
 
@@ -47,12 +48,16 @@ def main(argv: list[str], *, sender_stamp: str | None = None, cwd_entered: bool 
     if not words:
         ctx.error("usage: lwe [-j] <command> [value ...]")
         return USAGE
-    verb = registry.discover().get(words[0])
-    if verb is None:
-        ctx.error(f"{words[0]} is not a command", f"lwe: {words[0]} is not a command")
-        return USAGE
     try:
+        verb = registry.discover().get(words[0])
+        if verb is None:
+            ctx.error(f"{words[0]} is not a command", f"lwe: {words[0]} is not a command")
+            return USAGE
         return verb.run(ctx, words[1:])
     except StoreBusy as exc:
         ctx.error(str(exc))
+        return REFUSED
+    except Exception as exc:
+        one_line = " ".join(str(exc).splitlines())
+        ctx.error(f"internal error: {type(exc).__name__}: {one_line}")
         return REFUSED

@@ -1,4 +1,4 @@
-"""Module entry point: ``python -m lwe_ui`` runs the control panel."""
+"""Module entry point: ``python -m lwe_ui`` runs the control panel; a ``--lwe`` start runs a command."""
 from __future__ import annotations
 
 from lwe_ui.launch import main
