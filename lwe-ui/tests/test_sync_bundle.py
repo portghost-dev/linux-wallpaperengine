@@ -7,8 +7,9 @@ schedule goes out disabled with no entries and the marker clears. While the engi
 the bundle leaves set-speed out, and a status with no speed gets it. A CURRENT re-show whose done
 never comes keeps CURRENT, and set-speed with the speed read inside sync follows the show either
 way. A failed particle rebuild is a refusal that keeps the marker. A window run stops at its budget
-between playlists and records what it sent, the next window run of that generation and engine pid
-skips it, another pid empties the list, a stale generation records nothing, a refused transfer is
+between playlists and records what it sent, the next window run of that generation and engine
+skips it, another pid empties the list, and so does an engine that reuses the pid with another start,
+which gets the playlists the old one took; a stale generation records nothing, a refused transfer is
 never recorded, a started transfer runs to its last part past the budget, and a command run
 ignores both. sync_all makes a marker with a fresh generation when none exists, and a failed run
 keeps it; a writer that raises the generation during a run that ends all ok keeps the marker too.
@@ -28,9 +29,13 @@ sends its own and clears braked, and two quick restarts of a healthy engine get 
 The start is taken once per status on the engine's clock, so after a suspend or a wall-clock step the
 same engine gets nothing more, a bundle that takes 6 s serves its engine once, and after a braked one
 an explicit show starts the rotation; a status without uptime_s is never named served. An owed re-show
-that never ran, or was refused, is kept for the next bundle, the delivery that re-shows a deferred
-CURRENT takes it, so nothing re-shows again, and a bundling delivery whose marker cannot be read still
-runs.
+that never ran, or was refused, is kept for the next bundle, and so is one whose set-tuning or set-speed
+ended refused or uncertain, directly or in the delivery that completes a deferred re-show, so the retry
+shows again; the delivery that re-shows a deferred CURRENT takes it, so nothing re-shows again, also when
+the deferred run ended uncertain before its re-show and when an import runs during a due delivery of a
+ticket that found a marker, and a bundling delivery whose marker cannot be read still runs. An owed
+CURRENT kept past a writer's change is taken back by the next whole re-show, so a persistent refusal
+reloads once, not on every change, and a slow refused run takes back the CURRENT its engine owed.
 The engine is an api_client recorder with a scripted status unless a test names the socket server; its
 clock is frozen at 10000 and its status reports uptime_s 100 unless a test says otherwise.
 
@@ -254,7 +259,8 @@ class SyncBundleTest(unittest.TestCase):
             self.assertEqual(first, push.Outcome("pending", reason="budget", recorded=2))
             self.assertEqual(rec.playlists(), ["main", "night"])
             self.assertEqual(len(logs.records), 1)
-            self.assertEqual(marker.read()["sent"], {"pid": 4242, "playlists": ["main", "night"]})
+            self.assertEqual(marker.read()["sent"], {"pid": 4242, "boot": marker.boot_id(), "start": 9900.0,
+                                                     "playlists": ["main", "night"]})
             with self.engine(status()) as rec:
                 rec.hooks["playlist_set"] = lambda: clock.sleep(5)
                 second = push.sync_all("window")
@@ -284,7 +290,8 @@ class SyncBundleTest(unittest.TestCase):
                 outcome = push.sync_all("window")
             self.assertEqual(rec.playlists(), ["main", "night"])
             self.assertEqual(outcome.recorded, 2)
-            self.assertEqual(marker.read()["sent"], {"pid": 5151, "playlists": ["main", "night"]})
+            self.assertEqual(marker.read()["sent"], {"pid": 5151, "boot": marker.boot_id(), "start": 9900.0,
+                                                     "playlists": ["main", "night"]})
 
             def raise_generation() -> None:
                 clock.sleep(5)
@@ -296,13 +303,28 @@ class SyncBundleTest(unittest.TestCase):
             self.assertEqual(outcome, push.Outcome("pending", reason="budget", recorded=0))
             self.assertEqual(marker.read()["sent"], {"pid": None, "playlists": []})
 
+    def test_an_engine_that_reuses_the_pid_gets_the_playlists_the_old_one_took(self) -> None:
+        clock = Clock()
+        with mock.patch.object(push, "time", clock):
+            with self.engine(status(pid=5000, uptime_s=9100)) as rec, self.assertLogs("lwe_ui.engine.push", "WARNING"):
+                slow = [9]
+                rec.hooks["playlist_set"] = lambda: clock.sleep(slow.pop() if slow else 0)
+                first = push.sync_all("window")
+                kept = marker.read()["sent"]["playlists"]
+            with self.engine(status(pid=5000, uptime_s=8992)) as rec:
+                second = push.sync_all("window")
+        self.assertEqual(((first.kind, first.reason), kept), (("pending", "budget"), ["main"]))
+        self.assertEqual((second.kind, rec.playlists(), marker.served_record()["start"]),
+                         ("applied", ["main", "night"], 1008.0))
+
     def test_a_refused_transfer_is_never_recorded_as_sent(self) -> None:
         refusal = {"id": 1, "ok": False, "error": "unknown member"}
         with self.engine(status()) as rec:
             rec.answer("playlist_set", OK, refusal)
             outcome = push.sync_all("window")
         self.assertEqual(outcome, push.Outcome("refused", message="unknown member"))
-        self.assertEqual(marker.read()["sent"], {"pid": 4242, "playlists": ["main"]})
+        self.assertEqual(marker.read()["sent"], {"pid": 4242, "boot": marker.boot_id(), "start": 9900.0,
+                                                 "playlists": ["main"]})
         with self.engine(status()) as rec:
             outcome = push.sync_all("window")
         self.assertEqual(outcome, push.Outcome("applied"))
@@ -612,6 +634,103 @@ class SyncBundleTest(unittest.TestCase):
             second = push.sync_all("command").kind
         self.assertEqual((first, kept, second), ("refused", ["BUNDLE", "CURRENT"], "applied"))
         self.assertEqual((rec.verbs().count("show"), marker.served()), (2, 5000))
+
+    def test_an_owed_reshow_whose_tail_fails_is_kept_and_the_retry_shows_again(self) -> None:
+        refused = {"id": 1, "ok": False, "error": "no"}
+        got = []
+        for verb, steps in (("set_speed", (refused,)), ("set_speed", ("uncertain",)), ("set_tuning", (OK, refused))):
+            marker._file().unlink(missing_ok=True)
+            marker.record_served(4242, 9900.0)
+            with self.engine(status(pid=5000, speed=0)) as rec:
+                rec.answer(verb, *steps)
+                first = push.sync_all("command").kind
+                kept = (marker.read()["classes"], marker.served())
+                second = push.sync_all("command").kind
+            got.append((verb, first, *kept, second, rec.verbs().count("show"), marker.served()))
+        self.assertEqual(got, [("set_speed", "refused", ["BUNDLE", "CURRENT"], 4242, "applied", 2, 5000),
+                               ("set_speed", "uncertain", ["BUNDLE", "CURRENT"], 4242, "applied", 2, 5000),
+                               ("set_tuning", "refused", ["BUNDLE", "CURRENT"], 4242, "applied", 2, 5000)])
+
+    def test_a_deferred_reshow_whose_set_speed_fails_keeps_current_for_the_retry(self) -> None:
+        got = []
+        for tail in ({"id": 1, "ok": False, "error": "no"}, "uncertain"):
+            marker._file().unlink(missing_ok=True)
+            marker.record_served(4242, 9900.0)
+            with self.engine(status(pid=5000, speed=0)) as rec:
+                ticket = push.save_change(("overrides",), lambda: wp.update_set("333", {"SCALING": "fill"}),
+                                          [("wp_build", "SCALING")], wid="333")
+                push.sync_all("window", defer_current=True)
+                rec.answer("set_speed", tail)
+                delivered = push.deliver(ticket).kind
+                left = (marker.read()["classes"], marker.served())
+                retry = push.sync_all("command").kind
+            got.append(("set_speed", delivered, *left, retry, rec.verbs().count("show")))
+        self.assertEqual(got, [("set_speed", "refused", ["CURRENT"], 4242, "applied", 2),
+                               ("set_speed", "uncertain", ["CURRENT"], 4242, "applied", 2)])
+
+    def test_an_owed_current_kept_past_a_writer_is_taken_back_by_the_next_whole_reshow(self) -> None:
+        refused = {"id": 1, "ok": False, "error": "no"}
+        steps = []
+        with self.engine(status(pid=5000)) as rec:
+            rec.answer("playlist_set", "uncertain")
+            first = push.sync_all("command").kind
+            steps.append(("first bundle", first, marker.read()["classes"], rec.verbs().count("show")))
+            for fps in (40, 41, 42):
+                rec.answer("set_particles", refused)
+                before = rec.verbs().count("show")
+                outcome = push.run_change(("settings",), lambda fps=fps: settings.update({"ENGINE_FPS": fps}),
+                                          [("verb", "ENGINE_FPS")], run="command")
+                steps.append((f"change fps {fps}", outcome.kind, marker.read()["classes"],
+                              rec.verbs().count("show") - before))
+        self.assertEqual(steps, [("first bundle", "uncertain", ["BUNDLE", "CURRENT"], 0),
+                                 ("change fps 40", "refused", ["BUNDLE"], 1),
+                                 ("change fps 41", "refused", ["BUNDLE"], 0),
+                                 ("change fps 42", "refused", ["BUNDLE"], 0)])
+
+    def test_an_uncertain_deferred_first_sight_and_the_build_delivery_show_once(self) -> None:
+        with self.engine(status(pid=5000)) as rec:
+            ticket = push.save_change(("overrides",), lambda: wp.update_set("333", {"SCALING": "fill"}),
+                                      [("wp_build", "SCALING")], wid="333")
+            rec.answer("set_particles", "uncertain")
+            deferred = push.sync_all("window", defer_current=True)
+            first = (deferred.kind, rec.verbs().count("show"), marker.read()["classes"])
+            delivered = push.deliver(ticket)
+            second = (delivered.kind, rec.verbs().count("show"), marker.read()["classes"], marker.served())
+            drained = push.sync_all("window", wait_s=0)
+            third = (drained.kind, rec.verbs().count("show"), marker.read()["classes"])
+        self.assertEqual((first, second, third), (("uncertain", 0, ["BUNDLE", "CURRENT"]),
+                                                  ("applied", 1, [], 5000), ("applied", 1, [])))
+
+    def test_an_import_during_a_due_delivery_of_an_existed_ticket_shows_once(self) -> None:
+        with self.engine(status()) as rec:
+            marker.ensure(("BUNDLE",))
+            ticket = push.save_change(("settings",), lambda: settings.update({"ENGINE_FPS": 40}),
+                                      [("verb", "ENGINE_FPS")])
+            push.sync_all("window", ("BUNDLE", "CURRENT"), defer_current=True)
+            delivered = push.deliver(ticket).kind
+            after = (rec.verbs().count("show"), marker.read()["classes"])
+            if marker.read()["classes"]:
+                push.sync_all("window", wait_s=0)
+        self.assertEqual((ticket.existed, delivered, after, rec.verbs().count("show")), (True, "applied", (1, []), 1))
+
+    def test_a_slow_refused_run_takes_back_the_current_its_engine_owed(self) -> None:
+        clock = {"engine": 1000.0}
+        refused = {"id": 1, "ok": False, "error": "no"}
+        with mock.patch.object(push, "_monotonic", lambda: clock["engine"]):
+            with self.engine(status(pid=5000)) as rec:
+                read = rec.status
+
+                def live(sock=None):
+                    rec.status_reply["uptime_s"] = int(clock["engine"] - 900.0)
+                    return read(sock)
+                rec.status = live
+                slow = [6.0]
+                rec.hooks["set_particles"] = lambda: clock.update(engine=clock["engine"] + (slow.pop() if slow else 0))
+                rec.answer("set_particles", refused, refused)
+                first = push.sync_all("command").kind
+                shown = rec.verbs().count("show")
+                push.sync_all("command")
+        self.assertEqual((first, shown, rec.verbs().count("show") - shown), ("refused", 1, 0))
 
     def test_the_delivery_that_reshows_a_deferred_current_takes_it_so_no_poll_reshows_again(self) -> None:
         with self.engine(status(pid=5000)) as rec:

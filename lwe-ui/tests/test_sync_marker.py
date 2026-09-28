@@ -9,13 +9,16 @@ for a class it did not hold, and makes a new one after a clear; a clear with a s
 changes nothing, and a clear whose directory fsync fails puts the record back and raises. Every
 marker write syncs the file, replaces it, then syncs the directory. A malformed file, one with
 another version and an empty one read as BUNDLE and CURRENT and are rewritten. A window run
-records a sent playlist only for its generation and pid, and another pid empties the list at a
-run's start. The served pid is written without raising the generation, survives a clear, a writer's
-step, ensure and a sent record, and a file without it reads as none. The served record names one engine of
-this boot, its start within 5 s either way, and one that still carries "short" without boot and start reads
-without error and names none; an unknown start names no record. owe ensures CURRENT and records the engine
-it is owed to, which every other write keeps; drop_owed takes back only the CURRENT owe added, while the
-generation is the one it recorded. Every child process gets an environment built from scratch.
+records a sent playlist only for its generation and its engine, named by pid, boot and start as served
+and owed are, and another engine, the same pid with another start included, empties the list at a run's
+start; an unknown start records nothing. The served pid is written without raising the generation,
+survives a clear, a writer's step, ensure and a sent record, and a file without it reads as none. The
+served record names one engine of this boot, its start within 5 s either way, and one that still carries
+"short" without boot and start reads without error and names none; an unknown start names no record. owe
+ensures CURRENT and records the engine it is owed to, which every other write keeps; drop_owed takes back
+only the CURRENT owe added, whatever generation a writer raised meanwhile, and never a CURRENT a writer
+added, and an obligation still standing passes to the next engine owed. Every child process gets an
+environment built from scratch.
 
 Run: PYTHONPATH=src python3 tests/test_sync_marker.py
 """
@@ -151,7 +154,7 @@ class SyncMarkerTest(unittest.TestCase):
             self.assertEqual(marker.read(), {"generation": first, "classes": ["BUNDLE"], "sent": EMPTY})
         self.assertGreaterEqual(first, before)
         self.assertFalse(existed)
-        self.assertTrue(marker.record_sent(first, 4242, "main"))
+        self.assertTrue(marker.record_sent(first, 4242, 1000.0, "main"))
         with marker.writing(("CURRENT",)) as (second, existed):
             pass
         self.assertEqual(second, first + 1)
@@ -161,10 +164,11 @@ class SyncMarkerTest(unittest.TestCase):
 
     def test_ensure_keeps_the_generation_for_held_classes_and_raises_it_for_a_new_one(self) -> None:
         kept = marker.ensure(("BUNDLE",))
-        self.assertTrue(marker.record_sent(kept, 4242, "main"))
+        self.assertTrue(marker.record_sent(kept, 4242, 1000.0, "main"))
         self.assertEqual(marker.ensure(("BUNDLE",)), kept)
         self.assertEqual(marker.read(), {"generation": kept, "classes": ["BUNDLE"],
-                                         "sent": {"pid": 4242, "playlists": ["main"]}})
+                                         "sent": {"pid": 4242, "boot": marker.boot_id(), "start": 1000.0,
+                                                  "playlists": ["main"]}})
         raised = marker.ensure(("CURRENT",))
         self.assertEqual(raised, kept + 1)
         self.assertEqual(marker.read(), {"generation": raised, "classes": ["BUNDLE", "CURRENT"], "sent": EMPTY})
@@ -193,7 +197,7 @@ class SyncMarkerTest(unittest.TestCase):
 
     def test_a_clear_whose_directory_fsync_fails_puts_the_record_back_and_raises(self) -> None:
         generation = marker.ensure(("BUNDLE", "CURRENT"))
-        self.assertTrue(marker.record_sent(generation, 4242, "main"))
+        self.assertTrue(marker.record_sent(generation, 4242, 1000.0, "main"))
         before = marker.read()
         fsync = os.fsync
 
@@ -231,8 +235,8 @@ class SyncMarkerTest(unittest.TestCase):
         marker.record_served(4242)
         self.assertEqual((marker.served(), marker.generation(), marker.read()["classes"]),
                          (4242, generation, ["BUNDLE"]))
-        self.assertTrue(marker.record_sent(generation, 4242, "main"))
-        marker.start_sent(generation, 5151)
+        self.assertTrue(marker.record_sent(generation, 4242, 1000.0, "main"))
+        marker.start_sent(generation, 5151, 2000.0)
         self.assertTrue(marker.clear(generation))
         raised = marker.ensure(("BUNDLE", "CURRENT"))
         with marker.writing(("BUNDLE",)):
@@ -267,50 +271,86 @@ class SyncMarkerTest(unittest.TestCase):
                          [True, True, False, False])
         marker.record_served(5000, None)
         self.assertFalse(marker.names(marker.served_record(), 5000, None), "an unknown start cannot be verified")
+        self.assertFalse(marker.names(marker.served_record(), 5000, 900.0), "a record with no start names no engine")
 
     def test_owe_records_its_engine_every_write_keeps_it_and_drop_owed_takes_back_only_its_current(self) -> None:
         generation = marker.owe(5000, 900.0)
         owed = {"pid": 5000, "boot": marker.boot_id(), "start": 900.0, "current": generation}
         self.assertEqual((marker.read()["classes"], marker.owed_record()), (["BUNDLE", "CURRENT"], owed))
-        self.assertTrue(marker.record_sent(generation, 5000, "main"))
-        marker.start_sent(generation, 5000)
+        self.assertTrue(marker.record_sent(generation, 5000, 900.0, "main"))
+        marker.start_sent(generation, 5000, 900.0)
         marker.record_served(4242)
         marker.drop_owed(5001, 900.0)
         self.assertEqual((marker.read()["classes"], marker.owed_record()), (["BUNDLE", "CURRENT"], owed))
         marker.drop_owed(5000, 900.0)
         self.assertEqual((marker.read(), marker.owed_record()),
-                         ({"generation": generation, "classes": ["BUNDLE"], "sent": {"pid": 5000, "playlists": ["main"]}},
+                         ({"generation": generation, "classes": ["BUNDLE"],
+                           "sent": {"pid": 5000, "boot": marker.boot_id(), "start": 900.0, "playlists": ["main"]}},
                           {**owed, "current": None}))
         raised = marker.owe(5000, 900.0)
         with marker.writing(("BUNDLE",)):
             pass
         marker.drop_owed(5000, 900.0)
-        self.assertEqual((raised, marker.read()["classes"]), (generation + 1, ["BUNDLE", "CURRENT"]))
+        self.assertEqual((raised, marker.read()["classes"]), (generation + 1, ["BUNDLE"]),
+                         "a writer's BUNDLE leaves the owed CURRENT to be taken back")
+        marker.owe(5000, 900.0)
+        with marker.writing(("BUNDLE", "CURRENT")):
+            pass
+        marker.drop_owed(5000, 900.0)
+        self.assertEqual((marker.read()["classes"], marker.owed_record()["current"]), (["BUNDLE", "CURRENT"], None),
+                         "a writer's CURRENT is never taken back")
         self.assertTrue(marker.clear(marker.generation()))
         self.assertEqual(marker.owed_record()["pid"], 5000)
 
-    def test_record_sent_refuses_a_stale_generation_and_another_pid(self) -> None:
-        stale = marker.ensure(("BUNDLE",))
-        self.assertTrue(marker.record_sent(stale, 4242, "main"))
-        self.assertFalse(marker.record_sent(stale, 5151, "night"))
-        self.assertEqual(marker.read()["sent"], {"pid": 4242, "playlists": ["main"]})
+    def test_an_owed_obligation_passes_to_the_next_engine_whatever_the_generation(self) -> None:
+        marker.owe(5000, 900.0)
         with marker.writing(("BUNDLE",)):
             pass
-        self.assertFalse(marker.record_sent(stale, 4242, "night"))
+        marker.owe(5001, 950.0)
+        self.assertIsNotNone(marker.owed_record()["current"], "the CURRENT owe added is still owed")
+        marker.drop_owed(5001, 950.0)
+        self.assertEqual(marker.read()["classes"], ["BUNDLE"])
+
+    def test_record_sent_refuses_a_stale_generation_and_another_pid(self) -> None:
+        stale = marker.ensure(("BUNDLE",))
+        self.assertTrue(marker.record_sent(stale, 4242, 1000.0, "main"))
+        self.assertFalse(marker.record_sent(stale, 5151, 2000.0, "night"))
+        self.assertEqual(marker.read()["sent"], {"pid": 4242, "boot": marker.boot_id(), "start": 1000.0,
+                                                 "playlists": ["main"]})
+        with marker.writing(("BUNDLE",)):
+            pass
+        self.assertFalse(marker.record_sent(stale, 4242, 1000.0, "night"))
         self.assertEqual(marker.read()["sent"], EMPTY)
 
     def test_start_sent_empties_the_list_for_another_pid_only_in_its_generation(self) -> None:
         stale = marker.ensure(("BUNDLE",))
         self.assertTrue(marker.clear(stale))
         current = marker.ensure(("BUNDLE",))
-        self.assertTrue(marker.record_sent(current, 4242, "main"))
-        marker.start_sent(stale, 5151)
-        marker.start_sent(current, 4242)
-        self.assertEqual(marker.sent_for(current, 4242), ["main"])
-        marker.start_sent(current, 5151)
+        self.assertTrue(marker.record_sent(current, 4242, 1000.0, "main"))
+        marker.start_sent(stale, 5151, 2000.0)
+        marker.start_sent(current, 4242, 1000.0)
+        self.assertEqual(marker.sent_for(current, 4242, 1000.0), ["main"])
+        marker.start_sent(current, 5151, 2000.0)
         self.assertEqual(marker.read()["sent"], EMPTY)
-        self.assertTrue(marker.record_sent(current, 5151, "night"))
-        self.assertEqual(marker.sent_for(current, 5151), ["night"])
+        self.assertTrue(marker.record_sent(current, 5151, 2000.0, "night"))
+        self.assertEqual(marker.sent_for(current, 5151, 2000.0), ["night"])
+
+    def test_sent_names_its_engine_by_pid_boot_and_start_and_another_engine_empties_it(self) -> None:
+        generation = marker.ensure(("BUNDLE",))
+        self.assertTrue(marker.record_sent(generation, 4242, 1000.0, "main"))
+        self.assertEqual(marker.read()["sent"], {"pid": 4242, "boot": marker.boot_id(), "start": 1000.0,
+                                                 "playlists": ["main"]})
+        self.assertEqual([marker.sent_for(generation, 4242, start) for start in (1004.0, 1010.0)], [["main"], []])
+        self.assertFalse(marker.record_sent(generation, 4242, 1010.0, "night"), "another engine records nothing")
+        with mock.patch.object(marker, "boot_id", return_value="another boot"):
+            self.assertEqual(marker.sent_for(generation, 4242, 1000.0), [])
+        marker.start_sent(generation, 4242, 1003.0)
+        self.assertEqual(marker.sent_for(generation, 4242, 1000.0), ["main"], "the same engine keeps its list")
+        marker.start_sent(generation, 4242, 1010.0)
+        self.assertEqual(marker.read()["sent"], EMPTY)
+        self.assertFalse(marker.record_sent(generation, 4242, None, "night"), "an unknown start records nothing")
+        self.assertTrue(marker.record_sent(generation, 4242, 1010.0, "night"))
+        self.assertEqual(marker.sent_for(generation, 4242, 1010.0), ["night"])
 
     def test_a_restart_record_is_an_ordinary_bundle_with_no_pid_tie(self) -> None:
         with self.assertRaises(TypeError):

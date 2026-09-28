@@ -1011,10 +1011,12 @@ class Backend(QObject):
         just read is not the served one (push._unserved). Failed drains of one generation and one
         engine, its pid and its start (push._same_engine), are retried after 5 s, 15 s and 45 s, and
         when the retry after the 45 s wait fails, none follows until a writer raises the generation or
-        another engine answers; the generation a drain's own run leaves is not a writer's. A run that
-        found sync busy, an unresponsive status or another build's engine counts nothing; an away one
-        counts, as the poll has just read status, and so does an applied one after which that engine
-        is still not the served one, as an engine whose status gives no uptime_s stays."""
+        another engine answers. The failures count against the generation the drain's own run worked
+        from (the outcome's), its ensure and owed bundle included, so a writer's generation that lands
+        during that run still gets retries of its own. A run that found sync busy, an unresponsive
+        status or another build's engine counts nothing; an away one counts, as the poll has just read
+        status, and so does an applied one after which that engine is still not the served one, as an
+        engine whose status gives no uptime_s stays."""
         if self._ready_timer.isActive() or self.delivery_due():
             return
         engine = push._engine(status) if isinstance(status, dict) else None
@@ -1036,10 +1038,8 @@ class Backend(QObject):
         except OSError:
             return
         self._note(outcome, schedule=True)
-        try:
-            self._drain_generation = marker.generation()
-        except OSError:
-            pass
+        if outcome.generation is not None:
+            self._drain_generation = outcome.generation
         if outcome.kind in ("refused", "uncertain") or outcome.reason == "away" \
                 or (outcome.reason == "budget" and not outcome.recorded) \
                 or (outcome.kind == "applied" and push._unserved(engine)):

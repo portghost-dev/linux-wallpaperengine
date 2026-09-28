@@ -21,7 +21,12 @@ sight sends no show and no lanes-set that enables rotation, and an explicit show
 or the tray, then sends the rotation lanes-set. After a suspend the polls send the same engine nothing,
 a bundle that takes 6 s serves its engine once, an engine whose status gives no uptime stays unserved but
 gets only the bounded retries, and a deferred first sight followed by a build edit of another wallpaper
-shows once.
+shows once. An engine that reuses the pid of one whose window bundle stopped at its budget gets the
+playlists the old one took, so it is served even when it refuses a lanes-set naming a playlist it never
+received, and a writer during the last failed drain gets retries of its own, a served engine's as well,
+while a drain that finds sync busy keeps the generation its own ensure gave. After an uncertain first
+sight, one change under a persistent refusal reloads once and no poll reloads again, and an uncertain
+deferred first sight followed by a build edit of another wallpaper shows once.
 A manual switch while the engine is away with the schedule on writes nothing. A switch to a playlist
 being deleted, made by another writer while the delete reads, waits for the delete: the delete raises
 nothing and changes ACTIVE_PLAYLIST only in a change that carries the active row. A hand-broken store
@@ -750,6 +755,155 @@ class WindowSyncTest(unittest.TestCase):
             self.backend.status()
             shows.append(rec.verbs().count("show"))
         self.assertEqual((shows, marker.read()["classes"]), ([0, 1, 1], []))
+
+    def test_an_engine_that_reuses_the_pid_and_refuses_unknown_playlists_is_served_by_the_polls(self) -> None:
+        settings.update({"SCHEDULE": "07:00=main;20:00=night"})
+        self.backend._engine_pid_seen = 4242
+        clock, engine_time = Clock(), [0.0]
+        with mock.patch.object(models, "monotonic", clock), \
+                mock.patch.object(push, "time", types.SimpleNamespace(monotonic=lambda: engine_time[0],
+                                                                      sleep=lambda seconds: None)):
+            with self.engine(status(pid=5000, uptime_s=9100)) as rec, self.assertLogs("lwe_ui.engine.push", "WARNING"):
+                slow = [9.0]
+
+                def transfer() -> None:
+                    engine_time[0] += slow.pop() if slow else 0
+                rec.hooks["playlist_set"] = transfer
+                self.backend.status()
+                kept = marker.read()["sent"]["playlists"]
+            received: set[str] = set()
+            with self.engine(status(pid=5000, uptime_s=8992)) as rec:
+                rec.hooks["playlist_set"] = lambda: received.add(rec.calls[-1][1][0])
+
+                def lanes() -> None:
+                    if any(lane["playlist"] not in received for lane in rec.calls[-1][1][0] if "playlist" in lane):
+                        rec.answer("lanes_set", REFUSED)
+                rec.hooks["lanes_set"] = lanes
+                for _ in range(6):
+                    clock.now += 100.0
+                    self.backend.status()
+        self.assertEqual(kept, ["main"])
+        self.assertEqual((sorted(received), marker.served(), marker.served_record()["start"], marker.read()["classes"]),
+                         (["main", "night"], 5000, 1008.0, []))
+
+    def test_a_writer_during_the_last_failed_drain_gets_retries_of_its_own(self) -> None:
+        self.backend._engine_pid_seen = 4242
+        clock = Clock()
+        writes, errors, particles = [], [], []
+
+        def writer() -> None:
+            try:
+                writes.append(push.save_change(("settings",), lambda: settings.update({"ENGINE_FPS": 77}),
+                                               [("verb", "ENGINE_FPS")]))
+            except Exception as exc:
+                errors.append(exc)
+
+        def fourth_request() -> None:
+            particles.append(1)
+            if len(particles) == 4:
+                thread = threading.Thread(target=writer, daemon=True)
+                thread.start()
+                thread.join(2.0)
+        with mock.patch.object(models, "monotonic", clock):
+            with self.engine(status(pid=5000)) as rec:
+                rec.answer("set_particles", REFUSED, REFUSED, REFUSED, REFUSED)
+                rec.hooks["set_particles"] = fourth_request
+                for step in range(4):
+                    clock.now = 1000.0 + 100.0 * step
+                    self.backend.status()
+                failures = self.backend._drain_failures
+                adopted = bool(writes) and self.backend._drain_generation == writes[0].generation
+                healthy = []
+                for _ in range(3):
+                    clock.now += 100.0
+                    sent = len(rec.calls)
+                    self.backend.status()
+                    healthy.append("lanes_set" in [verb for verb, _a, _k in rec.calls[sent:]])
+        self.assertEqual((len(writes), errors, failures), (1, [], 4))
+        self.assertEqual((adopted, healthy, marker.served(), marker.read()["classes"]),
+                         (False, [True, False, False], 5000, []))
+
+    def test_a_writer_during_the_fourth_failed_drain_of_a_served_engine_is_drained_again(self) -> None:
+        marker.ensure(("BUNDLE",))
+        self.backend._engine_pid_seen = 4242
+        clock = Clock()
+        tickets = []
+
+        def other_process_writer() -> None:
+            thread = threading.Thread(target=lambda: tickets.append(push.save_change(
+                ("settings",), lambda: settings.update({"ENGINE_FPS": 33}), [("verb", "ENGINE_FPS")], run="command",
+                status=("ok", status(pid=4242)))), daemon=True)
+            thread.start()
+            thread.join(10)
+        with mock.patch.object(models, "monotonic", clock):
+            with self.engine(status(pid=4242)) as rec:
+                for step in range(4):
+                    clock.now = 1000.0 + 100.0 * step
+                    rec.answer("set_particles", REFUSED)
+                    if step == 3:
+                        rec.hooks["set_particles"] = lambda: None if tickets else other_process_writer()
+                    self.backend.status()
+                rec.hooks.clear()
+                failures = self.backend._drain_failures
+                after = []
+                for _ in range(3):
+                    clock.now += 100.0
+                    sent = len(rec.calls)
+                    self.backend.status()
+                    after.append("set_fps" in [verb for verb, _a, _k in rec.calls[sent:]])
+        self.assertEqual((failures, len(tickets), after, marker.read()["classes"], settings.load()["ENGINE_FPS"]),
+                         (4, 1, [True, False, False], [], 33))
+
+    def test_an_uncertain_first_sight_then_a_change_under_a_persistent_refusal_reloads_once(self) -> None:
+        clock = Clock()
+        shows = []
+        with mock.patch.object(models, "monotonic", clock):
+            with self.engine(status(pid=5000)) as rec:
+                rec.answer("playlist_set", "uncertain")
+                self.backend.status()
+                shows.append(("first sight", rec.verbs().count("show")))
+                rec.answer("set_particles", *[REFUSED] * 8)
+                before = rec.verbs().count("show")
+                push.run_change(("settings",), lambda: settings.update({"ENGINE_FPS": 41}), [("verb", "ENGINE_FPS")])
+                shows.append(("window change", rec.verbs().count("show") - before))
+                for at in (1, 7, 23, 70, 200):
+                    clock.now = 1000.0 + at
+                    before = rec.verbs().count("show")
+                    self.backend.status()
+                    shows.append((f"poll +{at}s", rec.verbs().count("show") - before))
+        self.assertEqual((shows, marker.read()["classes"]),
+                         ([("first sight", 0), ("window change", 1), ("poll +1s", 0), ("poll +7s", 0), ("poll +23s", 0),
+                           ("poll +70s", 0), ("poll +200s", 0)], ["BUNDLE"]))
+
+    def test_an_uncertain_deferred_first_sight_and_a_build_edit_of_another_wallpaper_show_once(self) -> None:
+        owner = object()
+        with self.engine(status(pid=5000)) as rec:
+            ticket = push.save_change(("overrides",), lambda: wp.update_set("333", {"SCALING": "fill"}),
+                                      [("wp_build", "SCALING")], wid="333")
+            rec.answer("set_particles", "uncertain")
+            self.backend.hold_delivery(owner, True)
+            self.backend.status()
+            shows = [rec.verbs().count("show")]
+            push.deliver(ticket)
+            shows.append(rec.verbs().count("show"))
+            self.backend.hold_delivery(owner, False)
+            self.backend.status()
+            shows.append(rec.verbs().count("show"))
+        self.assertEqual((shows, marker.read()["classes"]), ([0, 1, 1], []))
+
+    def test_a_drain_that_finds_sync_busy_keeps_the_generation_its_own_ensure_gave(self) -> None:
+        marker.ensure(("CURRENT",))
+        self.backend._engine_pid_seen = 4242
+        real = lock.held
+
+        def busy(store, *args, **kwargs):
+            if store == "sync":
+                raise lock.StoreBusy("Store busy: another writer holds sync.lock")
+            return real(store, *args, **kwargs)
+        with self.engine(status()), mock.patch.object(lock, "held", busy):
+            self.backend.status()
+        self.assertEqual((self.backend._drain_generation, marker.read()["classes"]),
+                         (marker.generation(), ["BUNDLE", "CURRENT"]))
 
     def test_a_new_window_sends_no_show_and_starts_no_rotation_while_the_engine_refused_its_restore(self) -> None:
         with self.engine(status(pid=300, restore_refused=True)) as rec:
