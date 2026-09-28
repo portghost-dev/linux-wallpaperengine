@@ -242,12 +242,15 @@ def _test_released_halts_are_actually_built() -> None:
         (engine, "Wayland layer", ["Background", "Overlay"]),
         (engine, "Video decode", ["Software", "Hardware when available"]),
         (engine, "Texture detail", ["Automatic", "Full"]),
-        (engine, "Clamp resolution", ["Full clamping", "Full res effects", "All full res"]),
+        (engine, "Resolution clamp", []),
+        (engine, "Effect clamp", []),
         (library, "Detect new items", ["On launch", "On a timer"]),
     ):
         assert f'label: "{label}"' in text, f"{label} row must be built"
         for entry in entries:
             assert f'"{entry}"' in text, f"{label} menu missing {entry!r}"
+    for gone in ("Full clamping", "Full res effects", "All full res"):
+        assert f'"{gone}"' not in engine, f"{gone!r} must be gone from SettingsEngine.qml"
 
     assert 'prompt: "Reset all settings?"' in general and 'verb: "Reset"' in general
     assert "enabled: false" not in general, "the Reset verb must no longer be inert"
@@ -262,21 +265,22 @@ def _test_released_halts_are_actually_built() -> None:
 
 
 def _test_every_restart_row_carries_the_verb() -> None:
-    """The five restart-class rows on the Engine page each pair their control with a
+    """The six restart-class rows on the Engine page each pair their control with a
     RestartVerb in one Row; the restart and its settle window live in the bridge."""
     engine = _code("SettingsEngine.qml")
     assert (_QML_SRC_DIR / "RestartVerb.qml").exists()
-    for key in ("ENGINE_LAYER", "ENGINE_HWDEC", "TEXTURE_DETAIL", "RENDER_RESOLUTION",
+    for key in ("ENGINE_LAYER", "ENGINE_HWDEC", "TEXTURE_DETAIL", "SSFACTOR", "CLAMPCOMPOSITES",
                 "ENGINE_TEXCOMP"):
         assert f'settingKey: "{key}"' in engine, f"{key} row has no restart verb"
-    assert engine.count("RestartVerb {") == 5
+    assert 'settingKey: "RENDER_RESOLUTION"' not in engine, "the word has no row"
+    assert engine.count("RestartVerb {") == 6
     verb = _code("RestartVerb.qml")
     assert "settingsBridge.takeRestart()" in verb and "settingsBridge.restartBusy" in verb, \
         "the restart and its settle window belong to the bridge, which outlives the page"
     assert "takeRestart" not in engine and "restartBusy" not in engine and "Timer" not in engine.split("PSection")[0][-600:], \
         "no page-owned restart window: the page is a Loader source and dies on a tab switch"
     assert "ENGINE_LAYER" in engine
-    print("OK the five restart-class rows carry the verb; the bridge owns the one restart")
+    print("OK the six restart-class rows carry the verb; the bridge owns the one restart")
 
 
 def _test_no_raw_enum_reaches_the_user() -> None:
@@ -702,6 +706,36 @@ Window { width: 1400; height: 620; visible: true
         assert shown == ("120", "120"), f"the volume chip must read the store: {shown}"
         assert vol_slider.property("value") == 100, vol_slider.property("value")
         print("OK volume chip: a stored 120 reads 120 while the 0 to 100 slider sits at its end")
+
+        from unittest import mock
+        from lwe_ui.engine import daemon_unit
+        ran = []
+
+        def run(args, *a, **k):
+            ran.append(args)
+            return subprocess.CompletedProcess(args, 1, "", "")
+        with mock.patch.object(daemon_unit, "enumerate_outputs", lambda: ["DP-1"]), \
+                mock.patch.object(daemon_unit.subprocess, "run", run):
+            for key, name in (("SSFACTOR", "settingsSsfactorCombo"),
+                              ("CLAMPCOMPOSITES", "settingsClampCompositesCombo")):
+                combo = next(i for i in walk(engine_page) if i.property("objectName") == name)
+                for stored, text, index in ((0, "0", 0), (1, "1", 1), (1.5, "1.5", -1)):
+                    assert sb.commit(key, stored) is True
+                    QTest.qWait(120)
+                    shown = (combo.property("displayText"), combo.property("entryText"),
+                             combo.property("currentIndex"))
+                    assert shown == (text, text, index), f"{key} stored {stored}: {shown}"
+                assert sb.commit(key, 1) is True
+                QMetaObject.invokeMethod(combo, "entered", Qt.ConnectionType.DirectConnection,
+                                         Q_ARG("QString", "1.5"))
+                QTest.qWait(120)
+                assert settings.load()[key] == 1.5, settings.load()[key]
+                QMetaObject.invokeMethod(combo, "entered", Qt.ConnectionType.DirectConnection,
+                                         Q_ARG("QString", "5"))
+                QTest.qWait(50)
+                assert (settings.load()[key], combo.property("failed")) == (1.5, True)
+        assert ran == [], f"the clamp rows ran a subprocess: {ran}"
+        print("OK clamp rows: 0, 1 and 1.5 read back from the store; a typed 1.5 saves, 5 is refused")
     finally:
         for k, v in orig.items():
             if v is None:

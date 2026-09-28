@@ -447,7 +447,8 @@ RESTART_ENV_KEYS: dict[str, tuple[str | tuple[str, str], ...]] = {
     "ENGINE_LAYER": (("LWE_ENGINE_ARGS", "--layer"),),
     "ENGINE_HWDEC": ("LWE_HWDEC",),
     "TEXTURE_DETAIL": ("LWE_TEXDETAIL",),
-    "RENDER_RESOLUTION": ("LWE_SSFACTOR", "LWE_CLAMPCOMPOSITES"),
+    "SSFACTOR": ("LWE_SSFACTOR",),
+    "CLAMPCOMPOSITES": ("LWE_CLAMPCOMPOSITES",),
     "ENGINE_TEXCOMP": ("LWE_TEXCOMP",),
 }
 

@@ -574,28 +574,59 @@ Column {
     }
 
     SettingsRow {
-        label: "Clamp resolution"
-        caption: "Clamping content to screen resolution saves video memory at the cost of some sharpness"
+        label: "Resolution clamp"
+        caption: "1 is your screen size; 0 is no cap"
         Row {
             spacing: Theme.spacingSm
             RestartVerb {
-                settingKey: "RENDER_RESOLUTION"
+                settingKey: "SSFACTOR"
                 rev: page.rev
                 restartRev: page.restartRev
                 anchors.verticalCenter: parent.verticalCenter
             }
             SettingsCombo {
-                id: renderResCombo
-                anchors.verticalCenter: parent.verticalCenter
-                // the clamp's three states: everything at the screen's size, effect layers at
-                // their authored size, or nothing clamped
-                readonly property var vals: ["screen", "sharpfx", "wallpaper"]
-                failed: page.isFailed("RENDER_RESOLUTION")
-                model: ["Full clamping", "Full res effects", "All full res"]
-                currentIndex: Math.max(0, vals.indexOf(String(page.val("RENDER_RESOLUTION") || "screen")))
-                onActivated: function(i) {
-                    settingsBridge.commit("RENDER_RESOLUTION", renderResCombo.vals[i]);
+                objectName: "settingsSsfactorCombo"
+                compact: true
+                freeEntry: true
+                failed: page.isFailed("SSFACTOR")
+                model: ["0", "1", "2"]
+                displayText: {
+                    var v = page.val("SSFACTOR");
+                    return v === undefined || v === null ? "" : String(v);
                 }
+                entryText: displayText
+                currentIndex: model.indexOf(displayText)
+                onActivated: function(i) { settingsBridge.commit("SSFACTOR", model[i]); }
+                onEntered: function(t) { settingsBridge.commit("SSFACTOR", t); }
+            }
+        }
+    }
+
+    SettingsRow {
+        label: "Effect clamp"
+        caption: "1 is your screen size; 0 is no cap"
+        Row {
+            spacing: Theme.spacingSm
+            RestartVerb {
+                settingKey: "CLAMPCOMPOSITES"
+                rev: page.rev
+                restartRev: page.restartRev
+                anchors.verticalCenter: parent.verticalCenter
+            }
+            SettingsCombo {
+                objectName: "settingsClampCompositesCombo"
+                compact: true
+                freeEntry: true
+                failed: page.isFailed("CLAMPCOMPOSITES")
+                model: ["0", "1", "2"]
+                displayText: {
+                    var v = page.val("CLAMPCOMPOSITES");
+                    return v === undefined || v === null ? "" : String(v);
+                }
+                entryText: displayText
+                currentIndex: model.indexOf(displayText)
+                onActivated: function(i) { settingsBridge.commit("CLAMPCOMPOSITES", model[i]); }
+                onEntered: function(t) { settingsBridge.commit("CLAMPCOMPOSITES", t); }
             }
         }
     }

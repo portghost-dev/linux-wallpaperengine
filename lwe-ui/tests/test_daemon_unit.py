@@ -356,9 +356,9 @@ class DaemonUnitTest(unittest.TestCase):
         self.assertIn("WantedBy=graphical-session.target", unit)
 
     def test_restart_pending_compares_only_the_settings_own_keys(self) -> None:
-        """The clamp reaches the engine only at service start, so the row's restart verb
-        shows exactly while the running engine's status and the file disagree on the clamp
-        keys and on nothing else: another knob status reports must not hold it open."""
+        """The clamp reaches the engine only at service start, so each clamp row's restart verb
+        shows exactly while the running engine's status and the file disagree on that row's key
+        and on nothing else: another knob status reports must not hold it open."""
         self.enterContext(mock.patch.object(daemon_unit, "_service_main_pid", lambda: PID))
         status_default = engine_status(LWE_DEADMAN=(60, "env"))
         file_default = "# GENERATED\nLWE_TEXCOMP=1\n"
@@ -367,17 +367,22 @@ class DaemonUnitTest(unittest.TestCase):
 
         def pending(key: str, status: dict | None, text: str, live: dict | None = None) -> bool:
             return daemon_unit.restart_pending(key, live or {}, text, status=status)
-        self.assertFalse(pending("RENDER_RESOLUTION", status_default, file_default))
-        self.assertTrue(pending("RENDER_RESOLUTION", status_default, file_sharpfx))
-        self.assertTrue(pending("RENDER_RESOLUTION", status_default, file_wallpaper))
+        self.assertFalse(pending("SSFACTOR", status_default, file_default))
+        self.assertFalse(pending("CLAMPCOMPOSITES", status_default, file_default))
+        self.assertEqual((pending("SSFACTOR", status_default, file_sharpfx),
+                          pending("CLAMPCOMPOSITES", status_default, file_sharpfx)), (False, True),
+                         "a line on LWE_CLAMPCOMPOSITES lights CLAMPCOMPOSITES only")
+        self.assertEqual((pending("SSFACTOR", status_default, file_wallpaper),
+                          pending("CLAMPCOMPOSITES", status_default, file_wallpaper)), (True, False),
+                         "a line on LWE_SSFACTOR lights SSFACTOR only")
         status_sharpfx = engine_status(LWE_CLAMPCOMPOSITES=(0.0, "env"))
-        self.assertFalse(pending("RENDER_RESOLUTION", status_sharpfx, file_sharpfx))
-        self.assertTrue(pending("RENDER_RESOLUTION", status_sharpfx, file_default),
+        self.assertFalse(pending("CLAMPCOMPOSITES", status_sharpfx, file_sharpfx))
+        self.assertTrue(pending("CLAMPCOMPOSITES", status_sharpfx, file_default),
                         "back to the default clears the line, and that is a change too")
         self.assertFalse(pending("ENGINE_LAYER", status_default, file_sharpfx),
                          "a setting with no env keys registered never pends")
         # the sandbox reports no running engine: nothing pends, the next start reads the file
-        self.assertFalse(pending("RENDER_RESOLUTION", None, file_sharpfx))
+        self.assertFalse(pending("CLAMPCOMPOSITES", None, file_sharpfx))
         # the other rows: one env line each
         same = "LWE_HWDEC=no\nLWE_TEXCOMP=1\nLWE_TEXDETAIL=auto\n"
         self.assertFalse(pending("ENGINE_HWDEC", status_default, same))
@@ -409,7 +414,7 @@ class DaemonUnitTest(unittest.TestCase):
         observed, pend = daemon_unit.restart_state({}, same, status=status_default)
         self.assertTrue(observed)
         self.assertEqual(set(daemon_unit.RESTART_ENV_KEYS),
-                         {"ENGINE_LAYER", "ENGINE_HWDEC", "TEXTURE_DETAIL", "RENDER_RESOLUTION",
+                         {"ENGINE_LAYER", "ENGINE_HWDEC", "TEXTURE_DETAIL", "SSFACTOR", "CLAMPCOMPOSITES",
                           "ENGINE_TEXCOMP"})
 
     def test_parse_env_skips_comments_and_malformed_lines(self) -> None:
@@ -643,7 +648,7 @@ class RestartStatusTest(unittest.TestCase):
         self.assertEqual(self.pends("LWE_SSFACTOR=1.3\n", LWE_SSFACTOR=(1.2999999523162842, "env")), set())
 
     def test_a_differing_value_pends(self) -> None:
-        self.assertEqual(self.pends("LWE_SSFACTOR=1.3\n", LWE_SSFACTOR=(1.5, "env")), {"RENDER_RESOLUTION"})
+        self.assertEqual(self.pends("LWE_SSFACTOR=1.3\n", LWE_SSFACTOR=(1.5, "env")), {"SSFACTOR"})
         self.assertEqual(self.pends("LWE_HWDEC=auto\n"), {"ENGINE_HWDEC"})
         self.assertEqual(self.pends("LWE_TEXCOMP=0\n"), {"ENGINE_TEXCOMP"})
         self.assertEqual(self.pends("LWE_TEXDETAIL=full\n"), {"TEXTURE_DETAIL"})

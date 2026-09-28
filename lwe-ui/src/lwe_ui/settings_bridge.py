@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -113,6 +114,11 @@ class SettingsBridge(QObject):
                 return True, n, ""
             if t == "float":
                 f = float(str(value).strip())
+                if key in C.CLAMP_KEYS:
+                    if not math.isfinite(f):
+                        return False, None, "That is not a number."
+                    if f <= 0.0:
+                        f = 0.0
                 lo, hi = spec.get("min"), spec.get("max")
                 if lo is not None and f < lo:
                     return False, None, "That value is outside the allowed range."

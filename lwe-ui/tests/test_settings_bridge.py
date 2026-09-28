@@ -261,6 +261,30 @@ def _test_service_restart_keys_regenerate_the_env_file(sb) -> None:
     print("OK SERVICE-RESTART keys regenerate the env file, dials intact (sequencing law)")
 
 
+def _test_a_clamp_number_saves_through_write_env_or_is_refused(sb) -> None:
+    """A clamp number saves and rebuilds engine-env through write_env alone; a number at or
+    below 0 saves 0; above 4, nan and inf are refused with nothing written."""
+    env_path = paths.config_dir() / "engine-env"
+    calls = []
+    real_env, real_files = daemon_unit.write_env, daemon_unit.write_files
+    daemon_unit.write_env = lambda *a, **k: calls.append("write_env") or real_env(*a, **k)
+    daemon_unit.write_files = lambda *a, **k: calls.append("write_files") or real_files(*a, **k)
+    try:
+        assert sb.commit("SSFACTOR", "1.5") is True
+        assert settings.load()["SSFACTOR"] == 1.5
+        assert "LWE_SSFACTOR=1.5" in env_path.read_text(encoding="utf-8").splitlines()
+        assert sb.commit("SSFACTOR", -1) is True
+        assert settings.load()["SSFACTOR"] == 0.0
+        before = (paths.settings_file().read_bytes(), env_path.read_bytes())
+        for bad in (5, "nan", "inf"):
+            assert sb.commit("SSFACTOR", bad) is False, bad
+        assert (paths.settings_file().read_bytes(), env_path.read_bytes()) == before
+    finally:
+        daemon_unit.write_env, daemon_unit.write_files = real_env, real_files
+    assert "write_env" in calls and "write_files" not in calls, calls
+    print("OK a clamp number saves through write_env alone; 0 or below saves 0; 5, nan and inf are refused")
+
+
 def _engine_status(hwdec: str) -> dict:
     """A status from the service's engine (pid 4242): the five restart knobs at their defaults,
     LWE_HWDEC at `hwdec`."""
@@ -270,23 +294,24 @@ def _engine_status(hwdec: str) -> dict:
 
 
 def _test_restart_pending_and_restart_read_the_machine_never_the_sandbox(sb, b) -> None:
-    """The Clamp resolution row's restart verb asks the running engine's status; under the
-    sandbox none answers, so nothing pends and a restart is refused rather than taken."""
-    assert sb.restartPending("RENDER_RESOLUTION") is False
+    """The clamp rows' restart verbs ask the running engine's status; under the sandbox none
+    answers, so nothing pends and a restart is refused rather than taken."""
+    assert sb.restartPending("SSFACTOR") is False
+    assert sb.restartPending("CLAMPCOMPOSITES") is False
     assert sb.restartPending("no-such-key") is False
     assert b.restartMaster() is False, "the sandbox must never restart the machine's engine"
     # the answer is cached until a restart-class commit or an explicit invalidate
-    sb._pending = {"RENDER_RESOLUTION": True}
-    assert sb.restartPending("RENDER_RESOLUTION") is True
+    sb._pending = {"SSFACTOR": True}
+    assert sb.restartPending("SSFACTOR") is True
     assert sb.commit("ENGINE_VOLUME", 40) is True
-    assert sb.restartPending("RENDER_RESOLUTION") is True, "a live commit must not re-read"
-    assert sb.commit("RENDER_RESOLUTION", "sharpfx") is True
-    assert sb.restartPending("RENDER_RESOLUTION") is False, "a restart-class commit re-reads"
-    sb._pending = {"RENDER_RESOLUTION": True}
+    assert sb.restartPending("SSFACTOR") is True, "a live commit must not re-read"
+    assert sb.commit("CLAMPCOMPOSITES", 0) is True
+    assert sb.restartPending("SSFACTOR") is False, "a restart-class commit re-reads"
+    sb._pending = {"CLAMPCOMPOSITES": True}
     sb.invalidateRestart()
-    assert sb.restartPending("RENDER_RESOLUTION") is False
+    assert sb.restartPending("CLAMPCOMPOSITES") is False
     assert set(sb.restartKeys()) == {"ENGINE_LAYER", "ENGINE_HWDEC", "TEXTURE_DETAIL",
-                                     "RENDER_RESOLUTION", "ENGINE_TEXCOMP"}
+                                     "SSFACTOR", "CLAMPCOMPOSITES", "ENGINE_TEXCOMP"}
     # a refused restart opens no settle window; the sandbox refuses every restart
     assert sb.restartBusy is False
     assert sb.takeRestart() is False
@@ -329,7 +354,7 @@ def _test_restart_pending_and_restart_read_the_machine_never_the_sandbox(sb, b) 
          daemon_unit.live_engine_env, daemon_unit._read_env_file) = saved
         sb._settle.stop(); sb._settling = False
     # a restore that rewrites the env file forgets the cache like a commit does
-    sb._pending = {"RENDER_RESOLUTION": True}
+    sb._pending = {"SSFACTOR": True}
     sb._regenerate()
     assert sb._pending is None
     print("OK restart verb: sandbox sees no engine and refuses to restart; the answer is "
@@ -492,6 +517,7 @@ def main() -> None:
     _test_reach_is_derived_not_prose(sb, b)
     _test_save_first_and_a_refused_verb_says_so(sb)
     _test_service_restart_keys_regenerate_the_env_file(sb)
+    _test_a_clamp_number_saves_through_write_env_or_is_refused(sb)
     _test_restart_pending_and_restart_read_the_machine_never_the_sandbox(sb, b)
     _test_dial_seeding_ladder(sb)
     _test_exceptions_editor_uses_the_existing_blacklist(sb)
