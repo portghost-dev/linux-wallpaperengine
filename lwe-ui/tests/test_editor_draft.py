@@ -35,6 +35,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _SRC = str(Path(__file__).resolve().parent.parent / "src")
 if _SRC not in sys.path:
@@ -47,22 +48,34 @@ _OTHER = "701"
 
 
 class _ApiRecorder:
-    """Stand-in for api_client: records every verb instead of reaching a socket."""
+    """Stand-in for api_client: records every verb instead of reaching a socket. With on_screen
+    set, status reports that wallpaper on this build's engine; otherwise the engine is away."""
 
     def __init__(self, available: bool = True) -> None:
         self._available = available
         self.calls: list[tuple[str, object]] = []
+        self.on_screen: str | None = None
+        self.refused: set[str] = set()
 
     def available(self) -> bool:
         return self._available
 
     def status(self):
-        return None
+        if self.on_screen is None:
+            return None
+        from lwe_ui import version
+        return {"api": 1, "version": version.panel_stamp(), "pid": 1,
+                "current": {"id": self.on_screen, "ui_id": self.on_screen}}
+
+    def last_class(self):
+        return "away"
 
     def _verb(self, name):
         def fn(arg=None, **kw):
             self.calls.append((name, kw if kw else arg))
-            return {"ok": True, "result": {}}
+            if name in self.refused:
+                return {"ok": False, "error": "no"}
+            return {"ok": True, "status": "done", "result": {}}
         return fn
 
     def __getattr__(self, name):
@@ -173,45 +186,67 @@ class TestEditorLiveCommit(unittest.TestCase):
         e.setProp("glow", 0.25)
         self.assertEqual({p["name"]: p["value"] for p in popup.sceneProperties()}["glow"], "0.25")
 
-    def test_T10_idle_wallpaper_sends_no_verb(self) -> None:
-        """Editing a wallpaper that is not playing writes the conf and sends NOTHING."""
+    def _recorder(self, on_screen: str | None) -> _ApiRecorder:
+        """The recorder as the change runner's engine too, reporting `on_screen` as shown (None:
+        the engine is away)."""
+        from lwe_ui.engine import push
         rec = _ApiRecorder()
+        rec.on_screen = on_screen
         self.editor_mod.api_client = rec
+        patcher = mock.patch.object(push, "api_client", rec)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return rec
+
+    def test_T10_idle_wallpaper_sends_no_verb(self) -> None:
+        """Editing a wallpaper that is not on screen writes the conf and sends no live verb."""
+        rec = self._recorder(on_screen=_OTHER)
         e = self.editor
         e.open(_WID)
-        e.syncCurrent(_OTHER)
 
         e.setVolumeValue(40)
         self.assertEqual(self._live("VOLUME"), "40", "the conf is still written")
         self.assertEqual(rec.calls, [], "no engine verb may be sent for an idle wallpaper")
 
-        e.syncCurrent(_WID)
+        rec.on_screen = _WID
         e.setVolumeValue(55)
         self.assertTrue(any(name == "set_volume" for name, _ in rec.calls),
                         f"a live-class commit on the playing wid must push: {rec.calls}")
 
     def test_T10b_relaunch_class_never_shows_an_idle_wallpaper(self) -> None:
-        """A relaunch-class key on an idle wallpaper must not queue a show of it."""
+        """A relaunch-class key on an idle wallpaper is delivered with its burst, which never
+        shows it."""
+        rec = self._recorder(on_screen=_OTHER)
+        seen: list[list] = []
         e = self.editor
+        e.commitFailed.connect(lambda keys: seen.append(list(keys)))
         e.open(_WID)
-        e.syncCurrent(_OTHER)
         e.setScalingValue("fit")
-        self.assertFalse(e._reshow.isActive(), "no re-show may be queued for an idle wallpaper")
+        self.assertTrue(e._reshow.isActive(), "the build key waits for its burst")
+        e._reshow.stop()
+        e._fire_reshow()
+        self.assertEqual((rec.calls, seen), ([], []), "no show may be sent for an idle wallpaper")
         self.assertEqual(e._pending, set())
 
-    def test_T21_dead_socket_raises_the_failure_grammar(self) -> None:
-        """A dead engine socket on a live-class key is a banner event, never silence."""
-        rec = _ApiRecorder(available=False)
-        self.editor_mod.api_client = rec
+    def test_T21_a_refused_push_raises_the_failure_grammar(self) -> None:
+        """A refused push on a live-class key is a banner event, never silence. A dead engine
+        socket leaves the commit saved and pending, which is not a failure."""
+        from lwe_ui.engine import marker
+        rec = self._recorder(on_screen=None)
         e = self.editor
         e.open(_WID)
-        e.syncCurrent(_WID)
 
         seen: list[list] = []
         e.commitFailed.connect(lambda keys: seen.append(list(keys)))
         e.setVolumeValue(30)
-
         self.assertEqual(self._live("VOLUME"), "30", "the conf commit still stands")
+        self.assertEqual(seen, [], "a pending commit is saved, not a failure")
+
+        marker.clear(marker.read()["generation"])
+        rec.on_screen = _WID
+        rec.refused.add("set_volume")
+        e.setVolumeValue(31)
+        self.assertEqual(self._live("VOLUME"), "31", "a refused push leaves the conf saved")
         self.assertTrue(seen, "a refused push must raise commitFailed, not pass silently")
         self.assertIn("VOLUME", seen[0])
 
@@ -373,67 +408,72 @@ class TestEditorLiveCommit(unittest.TestCase):
         self.assertIn("NEVER a library-membership test", wp.exists.__doc__ or "")
 
     def _ordered_rig(self, ok: bool = True, available: bool = True):
-        """A shared timeline both legs write into, so the ORDER itself is observable."""
+        """A shared timeline the store write and the engine push both write into, so the ORDER
+        itself is observable. The backend is the real one, saving through the change runner."""
+        from lwe_ui import models
+        from lwe_ui.engine import push
+        from lwe_ui.storage import settings
         timeline: list[str] = []
 
         class _Api(_ApiRecorder):
             def __init__(self) -> None:
                 super().__init__(available=available)
                 self.log = timeline
+                self.on_screen = _WID
 
             def _verb(self, name):
                 def fn(arg=None, **kw):
                     self.log.append(f"push:{name}")
                     self.calls.append((name, kw if kw else arg))
-                    return {"ok": ok, "result": {}}
+                    return {"ok": True, "status": "done", "result": {}} if ok else {"ok": False, "error": "no"}
                 return fn
 
-        class _Backend:
-            def __init__(self) -> None:
-                self.log = timeline
+            def __getattr__(self, name):
+                if name in ("playlist_set", "lanes_set", "schedule_set", "show"):
+                    return lambda *a, **k: {"ok": True, "status": "done", "result": {}}
+                return super().__getattr__(name)
 
-            def setSetting(self, key, value):
-                from lwe_ui.storage import settings
-                self.log.append(f"persist:{key}")
-                s = settings.load()
-                s[key] = value
-                settings.save(s)
+        update = settings.update
 
+        def logged(changes, *args, **kwargs):
+            timeline.extend(f"persist:{key}" for key in changes)
+            return update(changes, *args, **kwargs)
         api = _Api()
         self.editor_mod.api_client = api
         self.popup_mod.api_client = api
-        return timeline, _Backend()
+        for target, name, value in ((push, "api_client", api), (settings, "update", logged)):
+            patcher = mock.patch.object(target, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return timeline, models.Backend()
 
-    def test_H5_globals_push_before_persist_like_the_popup(self) -> None:
-        """The capsule's global setters ship the popup's order: verb first, persist on the yes.
-
-        Ruled resolution of H-5: L6 (never display a value that did not commit) outranks P6's
-        persist-first endorsement for the live-class globals. A factor written to settings.conf
-        that the engine refused would leave the row reading a rate nothing is running.
-        """
+    def test_H5_globals_save_before_their_push_like_the_popup(self) -> None:
+        """The capsule's global setters ship the popup's order: save first, then the change
+        runner's push resolved from the store."""
         timeline, backend = self._ordered_rig()
         e = self.editor_mod.EditorBridge(backend)
         e.open(_WID)
         e.syncCurrent(_WID)
 
         self.assertTrue(e.setGlobalSpeed(2.0))
-        self.assertEqual(timeline, ["push:set_speed", "persist:ENGINE_TIMESCALE"])
+        self.assertEqual(timeline, ["persist:ENGINE_TIMESCALE", "push:set_speed"])
 
         timeline.clear()
         self.assertTrue(e.setGlobalVolume(40))
-        self.assertEqual(timeline, ["push:set_volume", "persist:ENGINE_VOLUME"])
+        self.assertEqual(timeline, ["persist:ENGINE_VOLUME", "push:set_volume"])
 
         timeline.clear()
         self.assertTrue(e.setGlobalFps("90"))
-        self.assertEqual(timeline, ["push:set_fps", "persist:ENGINE_FPS"])
+        self.assertEqual(timeline, ["persist:ENGINE_FPS", "push:set_fps"])
 
         # a blank is not a state: it is refused, and nothing is pushed or persisted
         timeline.clear()
         self.assertFalse(e.setGlobalFps(""))
         self.assertEqual(timeline, [])
 
-    def test_H5_a_refused_verb_persists_nothing(self) -> None:
-        """The engine's no stops the write: settings.conf must not hold a value it rejected."""
+    def test_H5_a_refused_verb_stays_saved_and_reports(self) -> None:
+        """The engine's no does not undo the save: settings.conf holds the value and each door
+        reports the refusal."""
         from lwe_ui.storage import settings
 
         timeline, backend = self._ordered_rig(ok=False)
@@ -448,11 +488,11 @@ class TestEditorLiveCommit(unittest.TestCase):
         self.assertFalse(e.setGlobalVolume(40))
         self.assertFalse(e.setGlobalFps("90"))
 
-        self.assertEqual([t for t in timeline if t.startswith("persist:")], [],
-                         f"a refused verb must persist nothing: {timeline}")
-        self.assertEqual(settings.load().get("ENGINE_TIMESCALE"), 1.0,
-                         "the stored factor must still be the one the engine is running")
-        self.assertEqual(len(seen), 3, "each refusal is one failure-grammar event (L6)")
+        stored = settings.load()
+        self.assertEqual((stored.get("ENGINE_TIMESCALE"), stored.get("ENGINE_VOLUME"), str(stored.get("ENGINE_FPS"))),
+                         (2.0, 40, "90"), f"a refused verb leaves the value saved: {timeline}")
+        self.assertEqual(seen, [["ENGINE_TIMESCALE"], ["ENGINE_VOLUME"], ["ENGINE_FPS"]],
+                         "each refusal is one failure-grammar event")
 
     def test_H5_editor_and_popup_write_the_same_sequence(self) -> None:
         """The two surfaces carrying the same three facts must not behave differently."""

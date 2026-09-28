@@ -63,6 +63,7 @@ class DeckPopupSessionTests(unittest.TestCase):
             setSetting=lambda key, value: True,
             _sync_engine=lambda: None,
             showNow=lambda wid: True,
+            hold_delivery=lambda owner, due: None,
         )
         self.popup = self.popup_mod.DeckPopupBridge(self.backend)
         self.failures: list[list] = []
@@ -150,12 +151,19 @@ class DeckPopupSessionTests(unittest.TestCase):
         self.assertFalse(self.popup.hasMarks())
 
     def test_fit_writes_go_live_through_the_wallpaper_layer_not_a_reshow(self) -> None:
+        from lwe_ui import version
         wid = "1000004"
         self.wp.update_set(wid, {"SCALING": "fill"})
         self.popup.syncCurrent(wid)
         pushes: list[dict] = []
-        self.popup_mod.api_client.available = lambda: True
-        self.popup_mod.api_client.set_fit = lambda **kw: (pushes.append(dict(kw)) or {"ok": True})
+        api = self.popup_mod.api_client
+        for name in ("status", "set_fit", "show", "set_tuning"):
+            self.addCleanup(setattr, api, name, getattr(api, name))
+        api.status = lambda *a, **k: {"api": 1, "version": version.panel_stamp(), "pid": 1,
+                                      "current": {"id": wid, "ui_id": wid}}
+        api.set_fit = lambda **kw: (pushes.append(dict(kw)) or {"ok": True, "status": "done"})
+        api.show = lambda *a, **k: {"ok": True, "status": "done"}
+        api.set_tuning = lambda **kw: {"ok": True, "status": "done"}
 
         self.assertTrue(self.popup.setFit("zoom", "1.5"))
         self.assertEqual(pushes, [{"layer": "wallpaper", "id": wid, "zoom": 1.5, "pan_x": 0.0, "pan_y": 0.0}])
@@ -163,14 +171,17 @@ class DeckPopupSessionTests(unittest.TestCase):
         self.assertFalse(self.popup._reshow.isActive())
         self.assertEqual(self.popup._pending, set())
 
-        # a build-class key beside it still queues the re-show, with the fit pushed as well
+        # a build-class key beside it queues the re-show, and the fit rides the burst's delivery
         self.assertTrue(self.popup._write_wp({"SCALING": "fit", "FIT_PAN_X": 0.25}))
-        self.assertEqual(pushes[-1], {"layer": "wallpaper", "id": wid, "zoom": 1.5, "pan_x": 0.25, "pan_y": 0.0})
+        self.assertEqual(len(pushes), 1)
         self.assertTrue(self.popup._reshow.isActive())
-        self.assertEqual(self.popup._pending, {"SCALING"})
+        self.assertEqual(self.popup._pending, {"SCALING", "FIT_PAN_X"})
+        self.popup._reshow.stop()
+        self.popup._fire_reshow()
+        self.assertEqual(pushes[-1], {"layer": "wallpaper", "id": wid, "zoom": 1.5, "pan_x": 0.25, "pan_y": 0.0})
 
         # a refused push is the failure grammar
-        self.popup_mod.api_client.set_fit = lambda **kw: {"ok": False, "error": "no"}
+        api.set_fit = lambda **kw: {"ok": False, "error": "no"}
         self.popup.setFit("pan_y", "0.5")
         self.assertIn(["FIT_PAN_Y"], self.failures)
 

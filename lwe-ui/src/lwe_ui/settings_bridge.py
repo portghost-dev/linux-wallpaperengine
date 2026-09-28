@@ -19,9 +19,9 @@ Three things this module exists to guarantee:
   makes illegal on this surface. The bridge validates BEFORE the write and reports a
   rejected value as a failure event, never as a silent clamp.
 
-Write order is VERB FIRST, PERSIST ON CONFIRMATION for every LIVE-class key: the store
-records what the engine accepted, and a rejected verb
-persists nothing.
+Write order is SAVE FIRST for every key: a commit saves through `Backend.save_setting`, the
+change runner, which then sends the key's push resolved from the store. A change the engine
+did not take stays saved and applies at the next opportunity.
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ from PySide6.QtCore import Property, QObject, QTimer, QUrl, Signal, Slot
 
 from . import api_client
 from . import constants as C
-from .engine import daemon_unit
+from .engine import daemon_unit, push
 from .storage import backup, paths, rules, settings, tags
 
 _REGENERATE_KEYS = C.REACH_SERVICE_RESTART
@@ -258,25 +258,24 @@ class SettingsBridge(QObject):
 
     @Slot(str, "QVariant", result=bool)
     def commit(self, key: str, value: Any) -> bool:
-        """Validate, apply, persist. Verb first and persist on confirmation for LIVE keys."""
+        """Validate, then save through the change runner, which sends the key's push resolved
+        from the store. A change the engine did not take stays saved."""
         key = str(key)
         ok, coerced, reason = self._validate(key, value)
         if not ok:
             return self._fail(key, reason)
 
-        if self.reach(key) == "LIVE" and not self._push_verb(key, coerced):
-            # G3: nothing is persisted, so the control re-reads the value still in force.
-            return self._fail(key, "The engine did not answer.")
-
         try:
-            self._backend.setSetting(key, coerced)
+            outcome = self._backend.save_setting(key, coerced)
         except Exception:
             return self._fail(key, "Settings could not be saved.")
 
-        if key in _REGENERATE_KEYS and not self._regenerate():
-            # G7: the settings write already landed, so this says the change did not REACH
-            # the engine - not that it failed.
+        if key in _REGENERATE_KEYS:
+            self._regenerate()
+        if outcome.env is not None and outcome.env not in ("written", "unchanged"):
             return self._fail(key, "Saved, but the engine file could not be written.")
+        if outcome.kind in ("refused", "uncertain"):
+            return self._fail(key, "The engine did not answer.")
 
         self.changed.emit()
         return True
@@ -291,62 +290,15 @@ class SettingsBridge(QObject):
             return self._fail(str(key), "That folder could not be read.")
         return self.commit(key, local)
 
-    def _push_verb(self, key: str, value: Any) -> bool:
-        """The live half of the write order. True when there is nothing to push, too.
-
-        A key with no verb of its own is pushed by Backend's own fan-out after the write;
-        this only leads with the verbs that answer, so a dead socket is caught BEFORE the
-        store records something the engine never accepted.
-        """
-        try:
-            if not api_client.available():
-                # No live engine to lie about: the write is the whole of the change.
-                return True
-        except Exception:
-            return True
-        try:
-            if key == "ENGINE_TIMESCALE":
-                # the engine holds the resolved rate, never the bare factor
-                return self._ok(api_client.set_speed(self._backend.effectiveSpeed(float(value))))
-            if key == "ENGINE_VOLUME":
-                return self._ok(api_client.set_volume(int(value)))
-            if key == "AUDIO_REACTIVE_DEFAULT":
-                return self._ok(api_client.set_audio(bool(value)))
-            if key == "MOUSE_DEFAULT":
-                return self._ok(api_client.set_mouse(bool(value)))
-            if key == "PARALLAX_DEFAULT":
-                return self._ok(api_client.set_parallax(bool(value)))
-            if key == "PARTICLES_DEFAULT":
-                return self._ok(api_client.set_particles(bool(value)))
-            if key == "ENGINE_FPS":
-                return self._ok(api_client.set_fps(int(value)))
-            if key == "APP_CONDITION_BEHAVIOR":
-                return self._ok(api_client.set_app_conditions(
-                    self._backend._app_condition_names(), str(value)))
-            if key in C.AUDIO_DIAL_ENV:
-                field = next(f for f, k in C.AUDIO_DIAL_KEYS.items() if k == key)
-                return self._ok(api_client.set_tuning(**{field: float(value)}))
-        except Exception:
-            return False
-        return True
-
     @staticmethod
     def _ok(reply: Any) -> bool:
         return bool(isinstance(reply, dict) and reply.get("ok"))
 
-    def _regenerate(self) -> bool:
-        """Rewrite the engine env file so a SERVICE-RESTART key means
-        something at all. The restart itself is NOT taken - deliberately left open, so the
-        change lands in the file and the user restarts. Safe only because U4 landed first.
-        Every rewrite of the file forgets the cached restart answers, whichever door it
-        came through (a commit, a restore).
-        """
+    def _regenerate(self) -> None:
+        """Forget the cached restart answers after a SERVICE-RESTART key's save, whose engine-env
+        write the change runner made. The restart itself is not taken: the change lands in the
+        file and the user restarts."""
         self._pending = None
-        try:
-            daemon_unit.write_files()
-            return True
-        except Exception:
-            return False
 
     @Slot(result="QVariantList")
     def audioDials(self) -> list:
@@ -389,8 +341,8 @@ class SettingsBridge(QObject):
 
     @Slot(str, float, result=bool)
     def setAudioDial(self, settings_key: str, engine_value: float) -> bool:
-        """Push one dial engine-native, then persist on confirmation. Same store as the
-        editor's identical row: one fact, two doors, one store."""
+        """Save one dial engine-native first; the change runner then sends set-tuning. Same store
+        as the editor's identical row: one fact, two doors, one store."""
         return self.commit(str(settings_key), float(engine_value))
 
     @Slot(result=bool)
@@ -490,11 +442,15 @@ class SettingsBridge(QObject):
             self._backend.settingsChanged.emit()
             self._backend.playlistsChanged.emit()
             self._backend.themeRefreshRequested.emit()
-            self._backend._sync_engine()
+            push.sync_all("window", ("BUNDLE", "CURRENT"))
         except Exception:
             pass
         if any(f["kind"] == "engine-restart" for f in r["followups"]):
-            self._regenerate()
+            try:
+                daemon_unit.write_env()
+            except Exception:
+                pass
+            self._pending = None
         self.changed.emit()
         self.truthRefreshed.emit()
         self.receiptChanged.emit()
@@ -573,14 +529,14 @@ class SettingsBridge(QObject):
     def _write_exceptions(self, change: Callable[[str], str]) -> bool:
         header = "# fullscreen app_ids exempt from pause, one per line; e.g. steam\n"
         try:
-            rules.modify("pause-blacklist.txt", lambda text: change(text or header))
+            outcome = push.run_change(
+                ("rules",), lambda: rules.modify("pause-blacklist.txt", lambda text: change(text or header)),
+                [("verb", "pause-blacklist.txt")])
         except OSError:
             return False
-        try:
-            if api_client.available():
-                api_client.set_fullscreen_ignore(self.exceptions())
-        except Exception:
-            pass
+        if outcome.kind != "applied":
+            logging.getLogger(__name__).warning("exceptions list not applied: %s %s", outcome.kind,
+                                                outcome.reason or outcome.message or "")
         self.truthRefreshed.emit()
         return True
 
@@ -619,16 +575,14 @@ class SettingsBridge(QObject):
     def _write_app_list(self, change: Callable[[str], str]) -> bool:
         header = "# processes that trigger the running-apps rule, one comm name per line\n"
         try:
-            rules.modify("app-condition.txt", lambda text: change(text or header))
+            outcome = push.run_change(
+                ("rules",), lambda: rules.modify("app-condition.txt", lambda text: change(text or header)),
+                [("verb", "app-condition.txt")])
         except OSError:
             return False
-        # the engine owns the poll now: a list edit must reach it live, not wait for
-        # the next reconnect push
-        try:
-            api_client.set_app_conditions(
-                self.appEntries(), str(self._load().get("APP_CONDITION_BEHAVIOR") or "off"))
-        except Exception:
-            pass
+        if outcome.kind != "applied":
+            logging.getLogger(__name__).warning("app list not applied: %s %s", outcome.kind,
+                                                outcome.reason or outcome.message or "")
         self.truthRefreshed.emit()
         return True
 

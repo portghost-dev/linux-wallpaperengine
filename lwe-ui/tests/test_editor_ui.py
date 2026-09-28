@@ -222,14 +222,22 @@ def main() -> None:
         # live class: when the edited wallpaper is the one on screen, a fit write pushes the
         # wallpaper layer through set-fit instead of queueing a re-show; otherwise nothing is sent
         from lwe_ui import editor as _editor_mod
+        from lwe_ui import version as _version
+        from lwe_ui.engine import marker as _marker
+        _marker.clear(_marker.read()["generation"])   # the commits above left their work pending
         pushes = []
+        on_screen = ["synthwp_fit"]
         _editor_mod.api_client.available = lambda: True
-        _editor_mod.api_client.set_fit = lambda **kw: (pushes.append(dict(kw)) or {"ok": True})
+        _editor_mod.api_client.status = lambda *a, **k: {
+            "api": 1, "version": _version.panel_stamp(), "pid": 1,
+            "current": {"id": on_screen[0], "ui_id": on_screen[0]}}
+        _editor_mod.api_client.set_fit = lambda **kw: (pushes.append(dict(kw)) or {"ok": True, "status": "done"})
         editor.syncCurrent("synthwp_fit")
         assert editor.setFit("pan_x", "0.25")
         assert pushes == [{"layer": "wallpaper", "id": "synthwp_fit", "zoom": 1.25, "pan_x": 0.25, "pan_y": 0.0}], pushes
         assert not editor._reshow.isActive(), "a fit write must not queue a re-show"
         editor.syncCurrent("")
+        on_screen[0] = "other"
         assert editor.setFit("pan_x", "0.5")
         assert len(pushes) == 1, "an editor open on a wallpaper not on screen sends nothing"
         # a slider mid-drag previews live through the same gate and never writes the store

@@ -6,16 +6,16 @@ playing and re-seats itself when that changes. It is deliberately not the editor
 it has no Save, and no editor state is read or written.
 
 Three scopes, three write paths:
-  * Global capsule (Pause animation, Speed, Volume, FPS) - settings.conf keys, ALL live via
-    an api_client verb. The verb runs FIRST and the store is written only when the engine
-    confirms, so a value that did not commit is never displayed. Pause animation is not
-    handled here at all: it is Backend.setAnimationFrozen, the deck pause button's own
-    mechanism, so the two doors share one fact and one state.
+  * Global capsule (Pause animation, Speed, Volume, FPS) - settings.conf keys, ALL live. Each
+    is saved FIRST through the change runner, which then sends its verb resolved for the
+    wallpaper on screen; a value the engine refused or did not answer stays saved and the
+    failure is shown. Pause animation is not handled here at all: it is
+    Backend.setAnimationFrozen, the deck pause button's own mechanism, so the two doors share
+    one fact and one state.
   * This-wallpaper Scaling and the scene author's PROP_ properties - wp/<id>.conf keys the
-    engine consumes while BUILDING a scene, so they are RE-SHOW class: write the conf, then
+    engine consumes while BUILDING a scene, so they are RE-SHOW class: save the conf, then
     re-show the current wallpaper with its full resolved args, debounced 600 ms trailing so
-    rapid edits coalesce into one show. A show carries per-wallpaper speed
-    args, so the live speed is captured before it and re-asserted after.
+    rapid edits coalesce into one show. The re-show keeps the live speed it reads first.
 
 Write model: ONE STORE. Every wallpaper-scoped commit lands in
 wp/<id>.conf and nowhere else. The write-through leg that also updated an open draft
@@ -36,6 +36,7 @@ playing.
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from typing import Any
 
 from PySide6.QtCore import (
@@ -49,7 +50,8 @@ from . import api_client
 from . import constants as C
 from .discovery import project as project_disc
 from .discovery import properties as properties_disc
-from .storage import meta, paths, settings, tier_a, wp
+from .engine import push
+from .storage import lock, meta, paths, settings, tier_a, wp
 from .models import resolve_fit
 from .wp_session import SESSION
 
@@ -64,6 +66,11 @@ SPEED_MAX = 10.0
 
 # Debounce for the re-show class: one trailing timer shared by every key.
 _RESHOW_MS = 600
+
+
+def _wp_row(key: str) -> str:
+    """The change runner's row for one wallpaper key; every PROP_<name> key is a build key."""
+    return push.WP_ROWS.get(key) or ("wp_build" if key.startswith(C.WP_PROP_PREFIX) else "none")
 
 
 def _wallpapers_dir() -> str:
@@ -111,6 +118,7 @@ class DeckPopupBridge(QObject):
         self._type: str = ""
         self._props: list[dict] = []
         self._pending: set[str] = set()
+        self._tickets: list[push.Ticket] = []
         # a slider mid-drag: its steps coalesce here and go to the engine one push per tick
         self._preview = QTimer(self)
         self._preview.setSingleShot(True)
@@ -136,6 +144,8 @@ class DeckPopupBridge(QObject):
         # a re-show still queued for the wallpaper leaving the screen would fight the swap
         self._reshow.stop()
         self._pending.clear()
+        self._tickets.clear()
+        self._hold_delivery(False)
         if self._wid:
             SESSION.clear_marks(self._wid)
         self._wid = wid
@@ -202,6 +212,21 @@ class DeckPopupBridge(QObject):
         except Exception:
             return False
 
+    def _save_global(self, key: str, value: Any) -> bool:
+        """Save one global through Backend.save_setting, the change runner. An applied or pending
+        change is success; a refused or uncertain one stays saved and reports failure, and a
+        refused store write saves nothing."""
+        try:
+            outcome = self._backend.save_setting(key, value)
+        except Exception:
+            self.commitFailed.emit([key])
+            return False
+        if outcome.kind in ("refused", "uncertain"):
+            self.commitFailed.emit([key])
+            return False
+        self.stateChanged.emit()
+        return True
+
     @staticmethod
     def _ok(reply: Any) -> bool:
         return bool(isinstance(reply, dict) and reply.get("ok"))
@@ -215,25 +240,16 @@ class DeckPopupBridge(QObject):
 
     @Slot(float, result=bool)
     def setGlobalSpeed(self, value: float) -> bool:
-        """Global timescale. Live via set-speed; the store follows only on the engine's yes.
-
-        The engine is told the EFFECTIVE rate (this wallpaper's conf SPEED times the global
-        factor), which is exactly what the next show would send - so the same write also
-        updates the rate Backend.setAnimationFrozen restores on resume. One fact, one number.
-        """
+        """Global timescale, saved first; the change runner then sends the rate resolved for the
+        wallpaper on screen, its conf SPEED times the global factor, the same number
+        Backend.setAnimationFrozen restores on resume. An applied or pending change returns True;
+        one the engine refused or did not answer stays saved and reports failure."""
         try:
             factor = max(SPEED_MIN, min(SPEED_MAX, float(value)))
         except (TypeError, ValueError):
             self.commitFailed.emit(["ENGINE_TIMESCALE"])
             return False
-        conf_speed = wp.set_speed(self._wid) if self._wid else None
-        if not self._push(api_client.set_speed, "ENGINE_TIMESCALE", C.resolve_speed(conf_speed, factor)):
-            return False
-        if not self._persist_setting("ENGINE_TIMESCALE", factor):
-            self.commitFailed.emit(["ENGINE_TIMESCALE"])
-            return False
-        self.stateChanged.emit()
-        return True
+        return self._save_global("ENGINE_TIMESCALE", factor)
 
     @Slot(result=int)
     def globalVolume(self) -> int:
@@ -244,21 +260,15 @@ class DeckPopupBridge(QObject):
 
     @Slot(int, result=bool)
     def setGlobalVolume(self, value: int) -> bool:
+        """Global volume, saved first; the change runner then sends the volume resolved for the
+        wallpaper on screen, its own VOLUME kept and mute giving 0. An applied or pending change
+        returns True; one the engine refused or did not answer stays saved and reports failure."""
         try:
             vol = max(0, min(100, int(value)))
         except (TypeError, ValueError):
             self.commitFailed.emit(["ENGINE_VOLUME"])
             return False
-        # sent as-is, not rescaled: every other volume path in this app hands the engine the
-        # stored number directly (models.resolve_show_args clamps conf VOLUME to 0..128 and
-        # sends it), so rescaling here alone would make one door disagree with the rest
-        if not self._push(api_client.set_volume, "ENGINE_VOLUME", vol):
-            return False
-        if not self._persist_setting("ENGINE_VOLUME", vol):
-            self.commitFailed.emit(["ENGINE_VOLUME"])
-            return False
-        self.stateChanged.emit()
-        return True
+        return self._save_global("ENGINE_VOLUME", vol)
 
     @Slot(result=str)
     def globalFps(self) -> str:
@@ -281,7 +291,8 @@ class DeckPopupBridge(QObject):
         """The text must parse as an integer in the engine's band; there is no empty state.
 
         A blank, a non-integer or an out-of-band number is failure grammar, never a
-        silent fall-back.
+        silent fall-back. A valid cap is saved first, then the change runner sends set-fps;
+        an applied or pending change returns True.
         """
         s = str(text or "").strip()
         try:
@@ -292,13 +303,7 @@ class DeckPopupBridge(QObject):
         if n < FPS_MIN or n > FPS_MAX:
             self.commitFailed.emit(["ENGINE_FPS"])
             return False
-        if not self._push(api_client.set_fps, "ENGINE_FPS", n):
-            return False
-        if not self._persist_setting("ENGINE_FPS", n):
-            self.commitFailed.emit(["ENGINE_FPS"])
-            return False
-        self.stateChanged.emit()
-        return True
+        return self._save_global("ENGINE_FPS", n)
 
     def _push(self, verb: Any, key: str, arg: Any) -> bool:
         """Run one live verb; a dead socket or a refusal is failure grammar, never silence."""
@@ -385,22 +390,23 @@ class DeckPopupBridge(QObject):
         if not pending:
             return
         try:
-            if not api_client.available():
-                return
-            conf: dict[str, Any] = {}
-            if self._wid:
-                try:
-                    conf = dict(wp.load(self._wid))
-                except Exception:
-                    conf = {}
-            if "speed" in pending:
-                factor = max(SPEED_MIN, min(SPEED_MAX, pending.pop("speed")))
-                api_client.set_speed(C.resolve_speed(wp.set_speed(self._wid) if self._wid else None, factor))
-            if "volume" in pending:
-                api_client.set_volume(max(0, min(100, int(round(pending.pop("volume"))))))
-            if pending and self._wid:
-                conf.update(pending)
-                api_client.set_fit(layer="wallpaper", id=self._wid, **resolve_fit(conf))
+            with lock.held("sync", wait_s=0):
+                if not api_client.available():
+                    return
+                conf: dict[str, Any] = {}
+                if self._wid:
+                    try:
+                        conf = dict(wp.load(self._wid))
+                    except Exception:
+                        conf = {}
+                if "speed" in pending:
+                    factor = max(SPEED_MIN, min(SPEED_MAX, pending.pop("speed")))
+                    api_client.set_speed(C.resolve_speed(wp.set_speed(self._wid) if self._wid else None, factor))
+                if "volume" in pending:
+                    api_client.set_volume(max(0, min(100, int(round(pending.pop("volume"))))))
+                if pending and self._wid:
+                    conf.update(pending)
+                    api_client.set_fit(layer="wallpaper", id=self._wid, **resolve_fit(conf))
         except Exception:
             pass
 
@@ -475,81 +481,61 @@ class DeckPopupBridge(QObject):
 
         The editor writes this same file with the same presence-preserving edit, so a popup
         commit is visible there immediately and vice versa. There is no draft buffer and no
-        second write to keep in step.
+        second write to keep in step. The write goes through the change runner: a commit without
+        a build key is saved and pushed at once; one with a build key is saved now and delivered
+        with its burst after the debounce.
         """
+        wid = self._wid
+        rows = [(_wp_row(key), key) for key in changes]
         try:
-            wp.update_set(self._wid, changes)
+            if any(row == "wp_build" for row, _key in rows):
+                self._tickets.append(push.save_change(("overrides",), lambda: wp.update_set(wid, changes),
+                                                      rows, wid=wid))
+                self._pending.update(key for row, key in rows if row != "none")
+                self._hold_delivery(True)
+                self._reshow.start()
+                return True
+            outcome = push.run_change(("overrides",), lambda: wp.update_set(wid, changes), rows, wid=wid)
         except Exception:
             self.commitFailed.emit(sorted(changes))
             return False
+        if outcome.kind in ("refused", "uncertain"):
+            self.commitFailed.emit(sorted(changes))
         return True
 
+    def _hold_delivery(self, due: bool) -> None:
+        if self._backend is not None:
+            self._backend.hold_delivery(self, due)
+
     def _write_wp(self, changes: dict[str, Any]) -> bool:
-        """Write wallpaper-scoped keys, mark them, and apply: fit live, the rest by re-show."""
+        """Write wallpaper-scoped keys and mark them; the write applies them."""
         if not self._wid:
             return False
         if not self._commit_conf(changes):
             return False
         SESSION.mark(self._wid, changes.keys())
-        self._apply_keys(changes.keys())
         self.stateChanged.emit()
         if any(k.startswith(C.WP_PROP_PREFIX) for k in changes):
             self.propsEdited.emit()
         return True
 
-    def _apply_keys(self, keys) -> None:
-        """Route committed keys: the fit window is live through set-fit's wallpaper layer (the
-        present pass recomputes, no rebuild); everything else queues the debounced re-show."""
-        keys = set(keys)
-        fit_keys = keys & set(C.FIT_FIELDS.values())
-        if fit_keys:
-            try:
-                conf = wp.load(self._wid)
-            except Exception:
-                conf = {}
-            wid = self._wid
-            self._push(lambda fit: api_client.set_fit(layer="wallpaper", id=wid, **fit),
-                       sorted(fit_keys)[0], resolve_fit(conf))
-        rest = keys - fit_keys
-        if rest:
-            self._pending.update(rest)
-            self._reshow.start()
-
     def _fire_reshow(self) -> None:
-        """Apply every coalesced wallpaper-scoped edit with one re-show of the current wallpaper."""
+        """Deliver the coalesced build-class edits as one burst: its entry refresh, then one
+        re-show of the current wallpaper, freeze kept. The burst carries every change's rows, its
+        first change's marker state and its last change's generation."""
         keys = sorted(self._pending)
         self._pending.clear()
-        wid = self._wid
-        if not wid:
+        tickets, self._tickets = self._tickets, []
+        self._hold_delivery(False)
+        if not tickets:
             return
-        # a show carries this wallpaper's own resolved speed args, which would clobber a
-        # session state the user set from another door (deck pause, deck speed nudge). Capture
-        # the live value first and re-assert it after the swap lands.
-        live_speed = None
+        rows = tuple(dict.fromkeys(row for t in tickets for row in t.rows))
         try:
-            snap = api_client.status()
-            if isinstance(snap, dict) and isinstance(snap.get("speed"), (int, float)):
-                live_speed = float(snap["speed"])
+            outcome = push.deliver(replace(tickets[-1], existed=tickets[0].existed, rows=rows))
         except Exception:
-            live_speed = None
-        try:
-            # rotation entries carry their own resolved copy of the conf, so the set has to be
-            # re-pushed or the next timed advance would restore the values just replaced
-            self._backend._sync_engine()
-        except Exception:
-            pass
-        try:
-            ok = bool(self._backend.showNow(wid))
-        except Exception:
-            ok = False
-        if not ok:
+            outcome = None
+        if outcome is None or outcome.kind in ("refused", "uncertain"):
             self.commitFailed.emit(keys)
-            return
-        if live_speed is not None:
-            try:
-                api_client.set_speed(live_speed)
-            except Exception:
-                pass
 
     @Slot(str, result=bool)
     def isMarked(self, key: str) -> bool:
@@ -579,7 +565,6 @@ class DeckPopupBridge(QObject):
         if not self._commit_conf(changes):
             return False
         SESSION.clear_marks(self._wid)
-        self._apply_keys(changes.keys())
         self.stateChanged.emit()
         if any(k.startswith(C.WP_PROP_PREFIX) for k in changes):
             self.propsEdited.emit()
@@ -594,7 +579,6 @@ class DeckPopupBridge(QObject):
         if not self._commit_conf(changes):
             return False
         SESSION.clear_marks(self._wid)
-        self._apply_keys(changes.keys())
         self.stateChanged.emit()
         self.propsEdited.emit()
         return True

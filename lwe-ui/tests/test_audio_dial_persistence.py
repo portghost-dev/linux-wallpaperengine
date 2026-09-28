@@ -4,7 +4,7 @@ Three parts, all required, and this file asserts all three plus the sequencing l
 
   1. real persisted keys in SETTINGS_SCHEMA, holding the ENGINE-NATIVE value
   2. the engine-env generator emits them (covered by test_daemon_unit.py)
-  3. EditorBridge.setAudioDial persists after a successful set-tuning
+  3. EditorBridge.setAudioDial persists first; the change runner then sends set-tuning
 
 Before this landed, dragging a dial pushed set-tuning and stored nothing, so a service
 restart reverted the engine to whatever survived in a hand-edited env file. The
@@ -70,62 +70,49 @@ class SchemaKeysTest(unittest.TestCase):
 
 
 class _StubBackend:
-    """Records what the editor bridge persists, without touching a real store."""
+    """Records what the editor bridge saves, without touching a real store; save_setting answers
+    with an outcome of the scripted kind."""
 
     def __init__(self) -> None:
         self.writes: list[tuple[str, object]] = []
+        self.kind = "applied"
 
-    def setSetting(self, key: str, value: object) -> None:
+    def save_setting(self, key: str, value: object):
+        from lwe_ui.engine import push
         self.writes.append((key, value))
+        return push.Outcome(self.kind)
 
 
 class SetAudioDialPersistsTest(unittest.TestCase):
-    """Part 3 - a successful set-tuning is followed by a store write; a failed one is not."""
+    """Part 3 - the dial is saved first, and the change runner then sends set-tuning. A refusal
+    leaves the value saved and reports failure; an engine that is away leaves it saved and
+    pending."""
 
     def setUp(self) -> None:
-        self._saved = (editor_mod.api_client.available, editor_mod.api_client.set_tuning)
         self.backend = _StubBackend()
         self.bridge = editor_mod.EditorBridge(backend=self.backend)
 
-    def tearDown(self) -> None:
-        editor_mod.api_client.available, editor_mod.api_client.set_tuning = self._saved
-
-    def _arm(self, ok: bool) -> list[dict]:
-        pushed: list[dict] = []
-        editor_mod.api_client.available = lambda: True
-
-        def _set_tuning(**kw):
-            pushed.append(dict(kw))
-            return {"ok": ok}
-
-        editor_mod.api_client.set_tuning = _set_tuning
-        return pushed
-
     def test_success_persists_the_engine_value(self) -> None:
-        pushed = self._arm(ok=True)
         self.assertTrue(self.bridge.setAudioDial("GLOW_RADIUS", 0.5))
-        self.assertEqual(len(pushed), 1, "exactly one partial set-tuning")
-        engine_value = pushed[0]["classic_exp"]
+        engine_value = editor_mod._quality_to_dial(editor_mod.AUDIO_DIALS["GLOW_RADIUS"], 0.5)
         self.assertEqual(self.backend.writes, [("ENGINE_CLASSIC_EXP", engine_value)],
                          "the persisted value is the ENGINE-native one, not the 0..1 quality")
 
     def test_every_dial_persists_to_its_own_key(self) -> None:
-        self._arm(ok=True)
         for dial_key, spec in editor_mod.AUDIO_DIALS.items():
             self.backend.writes.clear()
             self.assertTrue(self.bridge.setAudioDial(dial_key, 0.6))
             self.assertEqual(self.backend.writes[0][0], C.AUDIO_DIAL_KEYS[spec["field"]])
 
-    def test_rejected_push_persists_nothing(self) -> None:
-        """Verb first, persist on confirmation."""
-        self._arm(ok=False)
+    def test_a_refused_set_tuning_stays_saved_and_reports(self) -> None:
+        self.backend.kind = "refused"
         self.assertFalse(self.bridge.setAudioDial("RESPONSE_THRESHOLD", 0.6))
-        self.assertEqual(self.backend.writes, [], "a rejected verb must persist nothing")
+        self.assertEqual(len(self.backend.writes), 1, "the value stays saved")
 
-    def test_dead_socket_persists_nothing(self) -> None:
-        editor_mod.api_client.available = lambda: False
-        self.assertFalse(self.bridge.setAudioDial("RESPONSE_THRESHOLD", 0.6))
-        self.assertEqual(self.backend.writes, [])
+    def test_an_away_engine_leaves_the_value_saved_and_pending(self) -> None:
+        self.backend.kind = "pending"
+        self.assertTrue(self.bridge.setAudioDial("RESPONSE_THRESHOLD", 0.6))
+        self.assertEqual(len(self.backend.writes), 1)
 
 
 class SequencingLawTest(unittest.TestCase):

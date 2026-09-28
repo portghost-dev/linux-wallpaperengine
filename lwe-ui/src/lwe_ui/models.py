@@ -372,6 +372,7 @@ class Backend(QObject):
         self._ready_timer = QTimer(self)
         self._ready_timer.setInterval(250)
         self._ready_timer.timeout.connect(self._ready_tick)
+        self._delivery_owners: set[Any] = set()
         # (monotonic, frames, pid) baseline for the measured frame rate. The engine
         # reports a CUMULATIVE frame count, so a rate needs two samples; the pid is
         # part of the key because a fresh engine restarts the counter at zero.
@@ -905,13 +906,25 @@ class Backend(QObject):
         self._note(outcome, schedule=True)
         return outcome
 
+    def delivery_due(self) -> bool:
+        """True while a bridge holds a saved change whose delivery waits on its debounce."""
+        return bool(self._delivery_owners)
+
+    def hold_delivery(self, owner: Any, due: bool) -> None:
+        """Mark, or clear, that `owner` holds a saved change waiting for its delivery."""
+        if due:
+            self._delivery_owners.add(owner)
+        else:
+            self._delivery_owners.discard(owner)
+
     def _drain(self) -> None:
-        """The poll's drain: while the marker has classes and no readiness wait is due, the window's
-        bundle without waiting for sync. Failed drains of one generation are retried after 5 s,
-        15 s and 45 s, and when the retry after the 45 s wait fails, none follows until a writer
-        raises the generation. A run that found sync busy, an unresponsive status or another
-        build's engine counts nothing; an away one counts, as the poll has just read status."""
-        if self._ready_timer.isActive():
+        """The poll's drain: while the marker has classes and no readiness wait or bridge delivery
+        is due, the window's bundle without waiting for sync. Failed drains of one generation are
+        retried after 5 s, 15 s and 45 s, and when the retry after the 45 s wait fails, none follows
+        until a writer raises the generation. A run that found sync busy, an unresponsive status or
+        another build's engine counts nothing; an away one counts, as the poll has just read
+        status."""
+        if self._ready_timer.isActive() or self.delivery_due():
             return
         try:
             state = marker.read()

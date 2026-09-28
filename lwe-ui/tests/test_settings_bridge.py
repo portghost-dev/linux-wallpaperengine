@@ -211,24 +211,32 @@ def _test_reach_is_derived_not_prose(sb, b) -> None:
     print("OK reach() returns the sec 1.1 class and derives LIVE from the push tuple")
 
 
-def _test_verb_first_persist_on_confirmation(sb) -> None:
-    """T7 / sec 6.3 [L-22 H-5]: a LIVE key pushes its verb FIRST and persists only on
-    confirmation. A rejected verb writes NOTHING, so the control re-reads a value that is
-    still really in force rather than one the engine never accepted."""
+def _test_save_first_and_a_refused_verb_says_so(sb) -> None:
+    """T7: a commit saves first, then the change runner sends the key's push resolved
+    from the store. A refused verb leaves the value saved and reports that the engine did not
+    answer; an accepted one is success."""
+    from lwe_ui import version
+    from lwe_ui.engine import marker
     settings.save({**settings.load(), "ENGINE_VOLUME": 20})
-    saved = (api_client.available, api_client.set_volume)
+    marker.clear(marker.read()["generation"])   # the earlier commits here left their work pending
+    failures: list = []
+    sb.commitFailed.connect(lambda keys, reason: failures.append((list(keys), reason)))
+    saved = (api_client.status, api_client.playlist_set, api_client.set_volume)
     try:
-        api_client.available = lambda: True
-        api_client.set_volume = lambda v: {"ok": False}
+        api_client.status = lambda *a, **k: {"api": 1, "version": version.panel_stamp(), "pid": 1,
+                                              "current": {"id": "111", "ui_id": "111"}}
+        api_client.playlist_set = lambda *a, **k: {"ok": True, "status": "done"}
+        api_client.set_volume = lambda v: {"ok": False, "error": "no"}
         assert sb.commit("ENGINE_VOLUME", 55) is False
-        assert settings.load()["ENGINE_VOLUME"] == 20, "a rejected verb persists nothing"
+        assert settings.load()["ENGINE_VOLUME"] == 55, "a refused verb leaves the value saved"
+        assert failures == [(["ENGINE_VOLUME"], "The engine did not answer.")], failures
 
-        api_client.set_volume = lambda v: {"ok": True}
-        assert sb.commit("ENGINE_VOLUME", 55) is True
-        assert settings.load()["ENGINE_VOLUME"] == 55
+        api_client.set_volume = lambda v: {"ok": True, "status": "done"}
+        assert sb.commit("ENGINE_VOLUME", 60) is True
+        assert settings.load()["ENGINE_VOLUME"] == 60
     finally:
-        api_client.available, api_client.set_volume = saved
-    print("OK verb first, persist on confirmation; a rejected verb persists nothing")
+        api_client.status, api_client.playlist_set, api_client.set_volume = saved
+    print("OK save first; a refused verb leaves the value saved and says the engine did not answer")
 
 
 def _test_service_restart_keys_regenerate_the_env_file(sb) -> None:
@@ -464,7 +472,7 @@ def main() -> None:
     _test_bridge_validates_instead_of_clamping(sb)
     _test_schedule_packing_is_validated(sb)
     _test_reach_is_derived_not_prose(sb, b)
-    _test_verb_first_persist_on_confirmation(sb)
+    _test_save_first_and_a_refused_verb_says_so(sb)
     _test_service_restart_keys_regenerate_the_env_file(sb)
     _test_restart_pending_and_restart_read_the_machine_never_the_sandbox(sb, b)
     _test_dial_seeding_ladder(sb)
