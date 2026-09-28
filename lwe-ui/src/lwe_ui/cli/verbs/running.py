@@ -20,6 +20,7 @@ from ..registry import Verb
 from ..values import UsageError, parse_switch
 
 EMPTY_HINT = "The service has no playlist loaded; lwe reload sends yours."
+UNCERTAIN = "the engine did not answer in time, so it may have applied"
 STATIC = "the playlist is static, so the timer is not running anyway"
 
 
@@ -40,6 +41,12 @@ def _countdown(seconds: int) -> str:
     if minutes:
         return f"{minutes}m {rest:02d}s"
     return f"{rest}s"
+
+
+def _unfinished(acked: bool) -> str:
+    """A request with no final ok or refusal: accepted but not finished once the engine's ack arrived,
+    else the engine may have run it without answering."""
+    return "accepted but not finished" if acked else UNCERTAIN
 
 
 def _step(ctx: Context, name: str, args: list[str]) -> int:
@@ -63,13 +70,13 @@ def _step(ctx: Context, name: str, args: list[str]) -> int:
     try:
         with push.engine_only():
             reply = send(wait_done=True)
-            nothing_ran = api_client.last_class() == "away"
+            nothing_ran, acked = api_client.last_class() == "away", api_client.acked()
     except StoreBusy:
         return _refuse(ctx, "the service is busy", REFUSED)
     if not isinstance(reply, dict):
         if nothing_ran:
             return _refuse(ctx, "the service is not running", ENGINE_DOWN)
-        return _refuse(ctx, "accepted but not finished", REFUSED)
+        return _refuse(ctx, _unfinished(acked), REFUSED)
     cls = api_client.reply_class(reply)
     if cls == "refused":
         reason = str(reply.get("error") or "")
@@ -78,7 +85,7 @@ def _step(ctx: Context, name: str, args: list[str]) -> int:
             print(EMPTY_HINT, file=ctx.err)
         return REFUSED
     if cls != "ok":
-        return _refuse(ctx, "accepted but not finished", REFUSED)
+        return _refuse(ctx, _unfinished(acked), REFUSED)
     after = api_client.status()
     current = after.get("current") if isinstance(after, dict) else None
     if not isinstance(current, dict):
@@ -201,18 +208,18 @@ def _show(ctx: Context, args: list[str]) -> int:
     try:
         with push.engine_only():
             reply = push.show_final(pick.ui_id)
-            nothing_ran = api_client.last_class() == "away"
+            nothing_ran, acked = api_client.last_class() == "away", api_client.acked()
     except StoreBusy:
         return refused("the service is busy", REFUSED)
     if not isinstance(reply, dict):
         if nothing_ran:
             return refused("the service is not running", ENGINE_DOWN)
-        return refused("accepted but not finished", REFUSED)
+        return refused(_unfinished(acked), REFUSED)
     cls = api_client.reply_class(reply)
     if cls == "refused":
         return refused(str(reply.get("error") or ""), REFUSED)
     if cls != "ok":
-        return refused("accepted but not finished", REFUSED)
+        return refused(_unfinished(acked), REFUSED)
     if ctx.json:
         _print_json(ctx, {"number": pick.number, "id": pick.ui_id, "title": pick.title,
                           "screens_back_on": released})

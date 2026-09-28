@@ -30,7 +30,7 @@ from unittest import mock
 
 import _cli_env
 import _fake_engine
-from _fake_engine import done, fail
+from _fake_engine import done, fail, silent
 
 ROOT = Path(tempfile.mkdtemp(prefix="lwe-cli-show-"))
 HOME = _cli_env.scratch_home(ROOT / "inproc")
@@ -149,6 +149,14 @@ class ShowTest(unittest.TestCase):
         engine.script("show", done(accepted=True, delay=5.0))
         with mock.patch.object(self.api_client, "_DONE_TIMEOUT", 0.3):
             self.assertEqual(self.lwe("show", "2"), (1, LINE + "\n", "accepted but not finished\n"))
+        self.assertEqual([cmd for cmd, _args in self.requests(engine)], ["show"])
+
+    def test_nothing_after_sending_is_uncertain_not_accepted(self) -> None:
+        engine = self.engine()
+        engine.script("show", silent())
+        with mock.patch.object(self.api_client, "_TIMEOUT", 0.3):
+            self.assertEqual(self.lwe("show", "2"), (1, LINE + "\n", "the engine did not answer in time, so it may "
+                                                                      "have applied\n"))
         self.assertEqual([cmd for cmd, _args in self.requests(engine)], ["show"])
 
     def test_engine_absent_or_from_another_build_or_busy_sends_no_show(self) -> None:

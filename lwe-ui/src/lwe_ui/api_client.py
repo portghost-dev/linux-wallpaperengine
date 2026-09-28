@@ -58,6 +58,12 @@ def last_class() -> str | None:
     return getattr(_reply, "cls", None)
 
 
+def acked() -> bool:
+    """Whether this thread's last request() read an accepted reply while it waited for the final one:
+    the engine took the command, whatever came after."""
+    return bool(getattr(_reply, "acked", False))
+
+
 def reply_class(reply: dict[str, Any]) -> str:
     """The class of one reply object: "ok" only for a done reply with ok true,
     "refused" for ok false, and "uncertain" for anything else, such as an accepted show whose
@@ -129,6 +135,7 @@ def request(cmd: str, args: dict | None = None, wait_done: bool = True,
     if args:
         req["args"] = args
     _reply.cls = "away"
+    _reply.acked = False
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(_TIMEOUT)
@@ -145,6 +152,7 @@ def request(cmd: str, args: dict | None = None, wait_done: bool = True,
             reply = _read_reply(s, buf)
             if reply is not None and wait_done:
                 while reply is not None and reply.get("status") == "accepted":
+                    _reply.acked = True
                     s.settimeout(_DONE_TIMEOUT)
                     reply = _read_reply(s, buf)
             if reply is not None:

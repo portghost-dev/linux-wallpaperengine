@@ -205,6 +205,13 @@ class NextPrevTest(RunningCase):
         with mock.patch.object(self.api_client, "_DONE_TIMEOUT", 0.3):
             self.assertEqual(self.lwe("next"), (1, "", "accepted but not finished\n"))
 
+    def test_nothing_after_sending_is_uncertain_not_accepted(self) -> None:
+        engine = self.engine()
+        engine.script("next", silent())
+        with mock.patch.object(self.api_client, "_TIMEOUT", 0.3):
+            self.assertEqual(self.lwe("next"), (1, "", "the engine did not answer in time, so it may have applied\n"))
+        self.assertEqual(self.requests(engine), [("next", {})])
+
     def test_a_status_read_without_an_answer_exits_1(self) -> None:
         engine = self.engine()
         engine.script("status", silent())
