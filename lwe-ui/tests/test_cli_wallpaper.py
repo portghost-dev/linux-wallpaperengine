@@ -156,14 +156,30 @@ class WallpaperTest(unittest.TestCase):
         self.assertEqual(_conf(GRADED), {"CC": "1.2 1.5 0.8 0", "CC_MODE": "custom"})
         self.assertNotIn(wallpaper.COLOR_REMOVED, out)
 
-    def test_unsetting_the_last_channel_off_neutral_removes_cc_and_cc_mode(self) -> None:
-        paths.wp_file(GRADED).write_text("CC=1.2 1 1 0.5\nCC_MODE=custom\n", encoding="utf-8")
+    def test_unsetting_the_last_channel_off_the_authored_look_removes_cc_and_cc_mode(self) -> None:
+        paths.wp_file(GRADED).write_text("CC=1.2 1.5 0.8 0.5\nCC_MODE=custom\n", encoding="utf-8")
         self.assertEqual(_run(GRADED, "unset", "hue")[0], 0)
-        self.assertEqual(_conf(GRADED), {"CC": "1.2 1 1 0", "CC_MODE": "custom"})
-        code, out, _err = _run(GRADED, "unset", "brightness")
+        self.assertEqual(_conf(GRADED), {"CC": "1.2 1.5 0.8 0", "CC_MODE": "custom"})
+        code, out, _err = _run(GRADED, "unset", "saturation")
         self.assertEqual(code, 0)
         self.assertEqual(_conf(GRADED), {})
         self.assertIn(wallpaper.COLOR_REMOVED, out)
+
+    def test_unset_brightness_keeps_the_contrast_set_over_an_authored_grade(self) -> None:
+        paths.wp_file(GRADED).write_text("CC=1.2 1 1 0\nCC_MODE=custom\n", encoding="utf-8")
+        code, out, _err = _run(GRADED, "unset", "brightness")
+        self.assertEqual(code, 0)
+        self.assertEqual(_conf(GRADED), {"CC": "1 1 1 0", "CC_MODE": "custom"})
+        self.assertEqual(_run(GRADED, "contrast")[1], _pick(GRADED) + "1\n")
+        self.assertNotIn(wallpaper.COLOR_REMOVED, out)
+
+    def test_unset_on_a_conf_the_editor_saved_as_none_changes_nothing(self) -> None:
+        body = "CC=1.2 1.5 1 0\nCC_MODE=none\n"
+        paths.wp_file(GRADED).write_text(body, encoding="utf-8")
+        code, out, _err = _run(GRADED, "unset", "hue")
+        self.assertEqual(code, 0)
+        self.assertEqual(paths.wp_file(GRADED).read_text(encoding="utf-8"), body)
+        self.assertIn("\nhue 0: unchanged", out)
 
     def test_fullscreen_inherit_deletes_the_key(self) -> None:
         code, _out, _err = _run(PLAIN, "fullscreen", "inherit")

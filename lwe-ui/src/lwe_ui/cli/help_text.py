@@ -20,7 +20,7 @@ MAIN = (
     "  mouse <on|off|toggle>             off stops every wallpaper following the pointer\n"
     "  parallax <on|off|toggle>          off stops the depth shift everywhere\n"
     "  audioreactive <on|off|toggle>     off stops every wallpaper reacting to sound\n"
-    "  speed <0-10>                      animation speed; 0 freezes it, speed load brings it back\n"
+    "  speed <0.1-10|0>                  animation speed; 0 freezes, not saved; speed load brings it back\n"
     "  order <shuffle|sequential|static> how the playlist moves on\n"
     "  interval <20m|30s|1h>             how long each wallpaper stays up\n"
     "  fps <1-480>                       frames per second\n"

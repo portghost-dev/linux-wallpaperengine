@@ -15,7 +15,7 @@ Settings  (a name alone shows how to use it)
   mouse <on|off|toggle>             off stops every wallpaper following the pointer
   parallax <on|off|toggle>          off stops the depth shift everywhere
   audioreactive <on|off|toggle>     off stops every wallpaper reacting to sound
-  speed <0-10>                      animation speed; 0 freezes it, speed load brings it back
+  speed <0.1-10|0>                  animation speed; 0 freezes, not saved; speed load brings it back
   order <shuffle|sequential|static> how the playlist moves on
   interval <20m|30s|1h>             how long each wallpaper stays up
   fps <1-480>                       frames per second

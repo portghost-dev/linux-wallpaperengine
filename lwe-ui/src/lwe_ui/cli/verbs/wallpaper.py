@@ -242,17 +242,17 @@ def _unset(ctx: Context, pick, name: str) -> int:
 
         def fn(raw: dict[str, str]) -> dict[str, Any]:
             if name in COLOR_WORDS:
-                chans = _channels(str(raw.get("CC") or ""))
+                cc = str(raw.get("CC") or "")
+                if not cc:
+                    return {k: None for k in ("CC", "CC_MODE") if k in raw}
+                if raw.get("CC_MODE") in ("none", "preset"):
+                    return {}
+                chans = _channels(cc)
                 chans[row.field] = _NEUTRAL[row.field]
-                if not str(raw.get("CC") or "") or tuple(chans) == _NEUTRAL:
+                if chans == _channels(_authored_cc(wid)):
                     return {k: None for k in ("CC", "CC_MODE") if k in raw}
                 new = " ".join(values.format_number(c) for c in chans)
-                changes: dict[str, Any] = {}
-                if raw.get("CC") != new:
-                    changes["CC"] = new
-                if raw.get("CC_MODE") != "custom":
-                    changes["CC_MODE"] = "custom"
-                return changes
+                return {} if cc == new else {"CC": new}
             if name in CLAMP_WORDS:
                 changes = wp.clamp_unset_changes(wp.load_set(wid), row.key)
                 if changes[row.key] is None:
