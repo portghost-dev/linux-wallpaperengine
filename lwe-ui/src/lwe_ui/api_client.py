@@ -321,14 +321,16 @@ def schedule_set(enabled: bool, entries: list[dict[str, str]]) -> dict[str, Any]
     return request("schedule-set", {"enabled": bool(enabled), "entries": list(entries)})
 
 
-def next_wallpaper() -> dict[str, Any] | None:
-    """Advance the engine's rotation NOW (deck transport). Ack-only, like show."""
-    return request("next", wait_done=False)
+def next_wallpaper(wait_done: bool = False) -> dict[str, Any] | None:
+    """Advance the engine's rotation NOW (deck transport). Ack-only by default, like show;
+    wait_done=True returns the final reply."""
+    return request("next", wait_done=wait_done)
 
 
-def prev_wallpaper() -> dict[str, Any] | None:
-    """Step back through the engine's show history. Ack-only, like show."""
-    return request("prev", wait_done=False)
+def prev_wallpaper(wait_done: bool = False) -> dict[str, Any] | None:
+    """Step back through the engine's show history. Ack-only by default, like show;
+    wait_done=True returns the final reply."""
+    return request("prev", wait_done=wait_done)
 
 
 def ping() -> dict[str, Any] | None:
