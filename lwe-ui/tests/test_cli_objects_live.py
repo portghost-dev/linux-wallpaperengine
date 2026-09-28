@@ -165,6 +165,14 @@ class HideTest(unittest.TestCase):
         self.assertEqual(_run("hide", SCENE, "3")[0], 0)
         self.assertTrue(self.conf.read_bytes().endswith(b" 1254 3\"\n"))
 
+    def test_a_token_of_5000_digits_stays_through_hide_and_unhide(self) -> None:
+        huge = "9" * 5000
+        self.conf.write_bytes(f'SKIP="{huge} 3"\n'.encode())
+        self.assertEqual(_run("hide", SCENE, "4")[::2], (0, ""))
+        self.assertEqual(self.conf.read_bytes(), f'SKIP="{huge} 3 4"\n'.encode())
+        self.assertEqual(_run("unhide", SCENE, "3")[::2], (0, ""))
+        self.assertEqual(self.conf.read_bytes(), f'SKIP="{huge} 4"\n'.encode())
+
     def test_an_emptied_skip_deletes_the_key(self) -> None:
         self.conf.write_bytes(b"VOLUME=40\nSKIP=3\n")
         self.assertEqual(_run("unhide", SCENE, "3"),

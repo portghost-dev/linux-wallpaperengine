@@ -2,6 +2,7 @@
 import then rebuilds the engine from the store the way a reload does, and rebuilds engine-env."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 
@@ -111,7 +112,12 @@ def _import(ctx: Context, path: str) -> int:
             ctx.error(refusal)
             return REFUSED
     paths.ensure_dirs()
-    with backup.restoring():
+    with contextlib.ExitStack() as held:
+        try:
+            held.enter_context(backup.restoring())
+        except OSError as exc:
+            ctx.error(f"That backup could not be restored: {exc}")
+            return REFUSED
         r = backup.apply(backup.preflight(path))
         r.pop("plan", None)
         if r.get("refused"):

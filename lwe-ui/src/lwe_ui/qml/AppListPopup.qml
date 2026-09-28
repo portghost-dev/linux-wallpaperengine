@@ -58,16 +58,16 @@ Popup {
         }
         var ok = pop.forApps ? settingsBridge.addAppEntry(name)
                              : settingsBridge.addException(name);
-        if (ok) {
+        if (ok)
             addField.text = "";
-            pop.refresh();
-        }
+        pop.refresh();
     }
     function removeEntry(name) {
-        var ok = pop.forApps ? settingsBridge.removeAppEntry(name)
-                             : settingsBridge.removeException(name);
-        if (ok)
-            pop.refresh();
+        if (pop.forApps)
+            settingsBridge.removeAppEntry(name);
+        else
+            settingsBridge.removeException(name);
+        pop.refresh();
     }
     Timer { id: dupPulse; interval: 2500 }
 

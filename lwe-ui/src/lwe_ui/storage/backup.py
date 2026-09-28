@@ -26,7 +26,9 @@ import fcntl
 import io
 import json
 import os
+import re
 import socket
+import sys
 import threading
 import zipfile
 from collections.abc import Iterator
@@ -41,6 +43,8 @@ EXTENSION = ".lwebackup"
 MANIFEST = "manifest.json"
 #: pre-restore snapshots kept under state_dir()/"backups"; the oldest beyond this are deleted
 SNAPSHOTS_KEPT = 5
+#: the name snapshot() gives a pre-restore snapshot: its time, and a counter when that name is taken
+_SNAPSHOT_NAME = re.compile(r"pre-restore-[0-9]{8}-[0-9]{6}(?:-[1-9][0-9]*)?" + re.escape(EXTENSION))
 #: beside the snapshots: names the snapshot an import that failed left as the way back (settle)
 RECOVERY = "recovery.json"
 
@@ -230,7 +234,8 @@ def restoring() -> Iterator[bool]:
 
 def _recovery() -> tuple[Path, str | None] | None:
     """recovery.json's path and the snapshot file name it keeps, or None when there is no
-    recovery.json; the name is None when the file cannot be read or names no snapshot file."""
+    recovery.json; the name is None when the file cannot be read or names anything but a file of
+    the backups folder named as snapshot() names its pre-restore snapshots (_SNAPSHOT_NAME)."""
     rec = paths.state_dir() / "backups" / RECOVERY
     if not os.path.lexists(rec):
         return None
@@ -238,7 +243,7 @@ def _recovery() -> tuple[Path, str | None] | None:
         name = json.loads(rec.read_text(encoding="utf-8")).get("snapshot")
     except (OSError, ValueError, AttributeError):
         return rec, None
-    if not isinstance(name, str) or name in ("", ".", "..") or Path(name).name != name:
+    if not isinstance(name, str) or not _SNAPSHOT_NAME.fullmatch(name):
         return rec, None
     return rec, name
 
@@ -248,11 +253,13 @@ def settle(r: dict[str, Any], failed: bool) -> None:
     the door's verdict: an import that failed after taking its pre-restore snapshot makes that
     snapshot the recovery snapshot, named with the time in recovery.json, written atomically; one
     that failed without taking a snapshot leaves recovery.json as it is; one that succeeded removes
-    it. A recovery.json that cannot be written is added to the receipt's errors."""
+    it. A recovery.json that cannot be written or removed is added to the receipt's errors."""
     rec = paths.state_dir() / "backups" / RECOVERY
     if not failed:
-        with contextlib.suppress(OSError):
+        try:
             rec.unlink(missing_ok=True)
+        except OSError as exc:
+            r.setdefault("errors", []).append({"file": RECOVERY, "reason": f"could not be removed: {exc}"})
         return
     taken = next((n.get("path") for n in r.get("notes") or [] if n.get("kind") == "snapshot"), None)
     if not taken:
@@ -448,7 +455,12 @@ def main(argv: list[str] | None = None) -> int:
         r = preflight(args.file)
         r.pop("plan", None)
         return _print_receipt(r)
-    with restoring():
+    with contextlib.ExitStack() as held:
+        try:
+            held.enter_context(restoring())
+        except OSError as exc:
+            print(f"That backup could not be restored: {exc}", file=sys.stderr)
+            return 1
         r = import_from(args.file)
         settle(r, bool(r.get("errors")))
     return _print_receipt(r)

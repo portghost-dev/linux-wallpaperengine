@@ -107,15 +107,13 @@ def part(render_dir: str, objid: int) -> dict | None:
 
 def _typed(kind: str, value: object, authored: object) -> object:
     """A knob's value with one type per kind: a slider a number (an int when the author's value is an int
-    and the text a whole number, else a float), a bool true or false, anything else a string; a text that
-    does not read as its kind stays a string."""
+    and the text a whole number, else a float), a bool true or false, anything else a string; a slider text
+    that does not read as a number stays a string. A bool text is true only when it is exactly "true" or
+    "1", as the engine reads it (Property.h, PropertyBoolean::update)."""
     if value is None or kind not in ("slider", "bool"):
         return value if value is None or isinstance(value, str) else json.dumps(value)
     if kind == "bool":
-        if isinstance(value, bool):
-            return value
-        word = str(value).strip().lower()
-        return True if word in ("true", "1") else False if word in ("false", "0") else str(value)
+        return value if isinstance(value, bool) else str(value) in ("true", "1")
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return value
     text = str(value).strip()
@@ -126,10 +124,11 @@ def _typed(kind: str, value: object, authored: object) -> object:
     return str(value)
 
 
-def knobs(wid: str) -> list[dict]:
+def knobs(wid: str, typed: bool = True) -> list[dict]:
     """The properties of the wallpaper's render folder's project.json, each as {name, label, kind,
     value, yours, options, min, max, step}: value is the wallpaper's own PROP_<name> when its conf
-    carries one (yours true), else the author's value, typed by _typed. Conditions are not evaluated."""
+    carries one (yours true), else the author's value, typed by _typed when typed, else as stored.
+    Conditions are not evaluated."""
     folder = catalog.render_dir(wid)
     if not folder:
         return []
@@ -138,11 +137,12 @@ def knobs(wid: str) -> list[dict]:
     for entry in properties.normalize_all(project.read(folder)["properties"]):
         name = entry["name"]
         yours = name in own
+        value = own[name] if yours else entry["value"]
         rows.append({
             "name": name,
             "label": entry["label"],
             "kind": entry["kind"],
-            "value": _typed(entry["kind"], own[name] if yours else entry["value"], entry["value"]),
+            "value": _typed(entry["kind"], value, entry["value"]) if typed else value,
             "yours": yours,
             "options": entry.get("options"),
             "min": entry.get("min"),

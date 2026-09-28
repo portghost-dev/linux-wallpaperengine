@@ -61,7 +61,7 @@ def _properties(ctx, pick, args: list[str]) -> int:
 
     if not catalog.render_dir(pick.ui_id):
         return _files_missing(ctx, pick)
-    knobs = scene.knobs(pick.ui_id)
+    knobs = scene.knobs(pick.ui_id, typed=ctx.json)
     if ctx.json:
         _print_json(ctx, knobs)
     elif not knobs:
@@ -140,10 +140,12 @@ def _stored_skip(pick) -> list[int]:
 
 def _skip_edit(objid: int, hide: bool):
     """wp.modify_set's fn: the SKIP line with objid appended, or with every token naming it
-    removed; an emptied SKIP deletes the key."""
+    (storage/wp.py::skip_id) removed; an emptied SKIP deletes the key."""
+    from ...storage import wp
+
     def edit(raw: dict) -> dict:
         tokens = str(raw.get("SKIP") or "").split()
-        kept = [tok for tok in tokens if not (_DIGITS.fullmatch(tok) and int(tok) == objid)]
+        kept = [tok for tok in tokens if wp.skip_id(tok) != objid]
         if hide:
             return {} if len(kept) < len(tokens) else {"SKIP": " ".join(tokens + [str(objid)])}
         return {} if len(kept) == len(tokens) else {"SKIP": " ".join(kept) or None}

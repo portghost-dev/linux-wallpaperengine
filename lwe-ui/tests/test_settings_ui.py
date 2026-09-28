@@ -625,6 +625,23 @@ Window { width: 1400; height: 620; visible: true
             f"popup must fit a compact window: h {le.property('height')} in 420")
         win.setProperty("height", 620)
         QTest.qWait(150)
+        from unittest import mock
+        from lwe_ui.engine import push
+
+        def refused(locks, write, rows, **kwargs):
+            write()
+            return push.Outcome("refused", message="refused by the engine")
+
+        def shown() -> list:
+            entries = le.property("entries")
+            return list(entries.toVariant() if hasattr(entries, "toVariant") else entries)
+        with mock.patch.object(push, "run_change", refused):
+            QMetaObject.invokeMethod(le, "tryAdd", Qt.ConnectionType.DirectConnection, Q_ARG("QVariant", "xclock"))
+            assert "xclock" in shown(), "a refused add is saved, and the popup shows it"
+            QMetaObject.invokeMethod(le, "removeEntry", Qt.ConnectionType.DirectConnection,
+                                     Q_ARG("QVariant", "xclock"))
+            assert "xclock" not in shown(), "a refused remove is saved, and the popup shows it gone"
+        print("OK the popup shows a list edit the engine refused")
         QMetaObject.invokeMethod(le, "close", Qt.ConnectionType.DirectConnection)
         QTest.qWait(100)
         print("OK A1 popup: bar in the card padding, centered, fits a compact window")

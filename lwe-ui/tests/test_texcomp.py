@@ -11,7 +11,8 @@ What is proven:
     mip0 bytes, .bc = concatenated per-mip blocks, .meta field set - atomically;
   * a level-0-only color texture grows the sRGB mip chain (8 levels for 128px);
   * re-scan sees the cache (todo drops to 0) and a second encode is a no-op;
-  * cancellation between textures stops the run.
+  * cancellation between textures stops the run;
+  * a package or exempt.txt that is a link is not read, and the log names it.
 """
 from __future__ import annotations
 
@@ -23,6 +24,7 @@ import shutil
 import struct
 import sys
 import tempfile
+import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
@@ -125,8 +127,31 @@ def main() -> None:
     r3 = texcomp.encode_scene(str(scene2), "200", cancelled=lambda: True)
     assert r3["encoded"] == 0, "a pre-tripped cancel encodes nothing"
 
+    outside = Path(_TMP) / "outside"
+    outside.mkdir()
+    foreign = bytes((i * 3) % 256 for i in range(128 * 128 * 4))
+    (outside / "foreign.pkg").write_bytes(_pkg({"materials/foreign.tex": _tex(0, 128, 128, foreign)}))
+    (outside / "exempt.txt").write_text("keep.tex\n", encoding="utf-8")
+    linked = Path(_TMP) / "wp" / "300"
+    linked.mkdir(parents=True)
+    (linked / "scene.pkg").symlink_to(outside / "foreign.pkg")
+    exempt_linked = Path(_TMP) / "wp" / "400"
+    exempt_linked.mkdir(parents=True)
+    (exempt_linked / "scene.pkg").write_bytes(_pkg({"materials/keep.tex": _tex(0, 128, 128, foreign[::-1])}))
+    (exempt_linked / "exempt.txt").symlink_to(outside / "exempt.txt")
+    with unittest.TestCase().assertLogs("lwe_ui.texcomp", "INFO") as logs:
+        s3 = texcomp.scan(str(linked))
+        s4 = texcomp.scan(str(exempt_linked))
+    assert (texcomp.links(str(linked)), s3["total"]) == (["scene.pkg"], 0), s3
+    assert (texcomp.links(str(exempt_linked)), s4["eligible"]) == (["exempt.txt"], 1), s4
+    assert logs.output == [f"INFO:lwe_ui.texcomp:compress {linked}: link not read: scene.pkg",
+                           f"INFO:lwe_ui.texcomp:compress {exempt_linked}: link not read: exempt.txt"], logs.output
+    assert texcomp.encode_scene(str(linked), "300")["total"] == 0
+    assert not (Path(texcomp.CACHE) / (hashlib.sha256(foreign).hexdigest() + ".bc")).exists(), \
+        "a texture from the link's target reached the cache"
+
     print("OK test_texcomp - scan eligibility + totals, cache contract (key/blob/meta/"
-          "atomic), mip-chain growth, cached no-op, cancel")
+          "atomic), mip-chain growth, cached no-op, cancel, links not read")
     shutil.rmtree(_TMP, ignore_errors=True)
 
 

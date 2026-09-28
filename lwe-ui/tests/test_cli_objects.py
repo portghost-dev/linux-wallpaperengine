@@ -39,6 +39,7 @@ FIXTURE = TESTS / "fixtures" / "cli" / "scene-objects"
 LIB = _ROOT / "lib"
 SCENE, PRESET, VIDEO, MISSING, LOOP = "1100000001", "1100000002", "1100000003", "1100000004", "1100000005"
 KNOBS, KNOBS_PRESET, KNOBS_ODD, SKIPS = "1100000006", "1100000007", "1100000008", "1100000009"
+KNOBS_TEXT, KNOBS_EXP = "1100000010", "1100000011"
 
 TREE = [
     "1  image  Harbor",
@@ -91,6 +92,10 @@ def setUpModule() -> None:
     tags.set_state(KNOBS_PRESET, "Knobs Preset", "good")
     paths.wp_file(KNOBS_ODD).write_text(f"BG={KNOBS}\nPROP_speedx=fast\nPROP_flag=maybe\n", encoding="utf-8")
     tags.set_state(KNOBS_ODD, "Knobs Odd", "good")
+    paths.wp_file(KNOBS_TEXT).write_text(f"BG={KNOBS}\nPROP_speedx=+5\nPROP_flag=True\n", encoding="utf-8")
+    tags.set_state(KNOBS_TEXT, "Knobs Text", "good")
+    paths.wp_file(KNOBS_EXP).write_text(f"BG={KNOBS}\nPROP_speedx=1e2\n", encoding="utf-8")
+    tags.set_state(KNOBS_EXP, "Knobs Exp", "good")
 
 
 def _run(word: str, wid: str, *args: str, as_json: bool = False) -> tuple[int, str, str]:
@@ -204,9 +209,22 @@ class PropertiesTest(unittest.TestCase):
         self.assertEqual(values(KNOBS), [("speedx", 1, False), ("flag", False, False), ("tint", "2", False)])
         self.assertEqual(values(KNOBS_PRESET), [("speedx", 5, True), ("flag", True, True), ("tint", "1", True)])
         self.assertEqual(values(KNOBS_ODD),
-                         [("speedx", "fast", True), ("flag", "maybe", True), ("tint", "2", False)])
+                         [("speedx", "fast", True), ("flag", False, True), ("tint", "2", False)])
         self.assertEqual(_run("properties", KNOBS_PRESET)[1].splitlines()[0],
                          "speedx  Speed: 5 (yours)  range 0 to 10, step 1")
+
+    def test_a_bool_is_on_only_when_its_text_is_true_or_1_as_the_engine_reads_it(self) -> None:
+        code, out, err = _run("properties", KNOBS_TEXT, as_json=True)
+        self.assertEqual((code, err, json.loads(out)[1]["value"]), (0, "", False))
+        self.assertEqual(_run("properties", KNOBS_TEXT)[1].splitlines()[1], "flag  Flag: True (yours)")
+
+    def test_the_text_line_shows_the_value_as_written_and_json_the_typed_value(self) -> None:
+        for wid, text, typed in ((KNOBS_TEXT, "+5", 5), (KNOBS_EXP, "1e2", 100.0)):
+            with self.subTest(text=text):
+                self.assertEqual(_run("properties", wid)[1].splitlines()[0],
+                                 f"speedx  Speed: {text} (yours)  range 0 to 10, step 1")
+                value = json.loads(_run("properties", wid, as_json=True)[1])[0]["value"]
+                self.assertEqual((value, type(value)), (typed, type(typed)))
 
     def test_no_properties_and_refusals(self) -> None:
         self.assertEqual(_run("properties", VIDEO), (0, "no properties\n", ""))
@@ -221,7 +239,8 @@ class ReadsOnlyTest(unittest.TestCase):
         from lwe_ui.engine import resolve
         from lwe_ui.storage import wp
         huge = "1" + "0" * 4999
-        for text, ids in (("+5 \u0663 1_0 05 7", [5, 7]), ("-3", []), (huge, []), ("1000000 1000001", [1000000])):
+        for text, ids in (("+5 \u0663 1_0 05 7", [5, 7]), ("-3", []), (huge, []), ("1000000 1000001", [1000000]),
+                          ("00000005", [5])):
             with self.subTest(text=text[:24]):
                 self.assertEqual(scene.skip_ids(text), ids)
                 wp.update_set(SKIPS, {"SKIP": text})

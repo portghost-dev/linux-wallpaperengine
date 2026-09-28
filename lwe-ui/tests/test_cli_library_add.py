@@ -158,6 +158,13 @@ def _stores() -> None:
     _scene(WORKSHOP / "1400000036", "Nine Bytes", None)
     for folder in (WORKSHOP / "1400000032", LIB / "1400000033", WORKSHOP / "1400000036"):
         (folder / "scene.pkg").write_bytes(NINE_BYTES)
+    _scene(WORKSHOP / "1400000037", "Linked", None)
+    (_ROOT / "outside").mkdir()
+    pixels = bytes((i * 7 + 37) % 256 for i in range(128 * 128 * 4))
+    (_ROOT / "outside" / "foreign.pkg").write_bytes(_pkg({"materials/t.tex": _tex(0, 128, 128, pixels)}))
+    (_ROOT / "outside" / "loose.tex").write_bytes(_tex(0, 128, 128, pixels))
+    (WORKSHOP / "1400000037" / "scene.pkg").symlink_to(_ROOT / "outside" / "foreign.pkg")
+    (WORKSHOP / "1400000037" / "extra.tex").symlink_to(_ROOT / "outside" / "loose.tex")
 
 
 def setUpModule() -> None:
@@ -210,6 +217,9 @@ def _commands() -> None:
     _run("download", ["-j", "add", "1400000002"])
     _FACTS["download"] = {"tag": _tag("1400000002"), "events": _events("1400000002"),
                           "copied": (LIB / "1400000002" / "scene.pkg").is_file(), "owners": _owners()}
+    _run("linked", ["add", "1400000037"])
+    _FACTS["linked"] = {"tag": _tag("1400000037"), "copied": sorted(p.name for p in (LIB / "1400000037").iterdir()),
+                        "owners": _owners()}
     _run("clean-title", ["add", "1400000023"])
     _FACTS["clean-title"] = {(r["state"], r["title"]) for r in tags.load() if r["id"] == "1400000023"}
     _run("waiting", ["add", "1400000003"])
@@ -317,6 +327,15 @@ class AddTest(unittest.TestCase):
         self.assertEqual(facts["events"], [("approved", "workshop", "human")])
         self.assertTrue(facts["copied"])
         self.assertIn("1400000002", facts["owners"])
+
+    def test_a_download_whose_package_is_a_link_compresses_nothing_from_the_link(self) -> None:
+        r = _RUNS["linked"]
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, _line(
+            "Linked (1400000037)", "imported into the pool; scene, nothing to compress; link not read: scene.pkg")
+            + "\n", ""))
+        facts = _FACTS["linked"]
+        self.assertEqual((facts["tag"], facts["copied"]), ("good", ["project.json"]))
+        self.assertNotIn("1400000037", facts["owners"], "a texture from the link's target reached the cache")
 
     def test_approve_writes_the_title_the_importer_cleaned(self) -> None:
         self.assertEqual(_RUNS["clean-title"].returncode, 0, _RUNS["clean-title"].stderr)

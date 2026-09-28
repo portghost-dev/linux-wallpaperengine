@@ -308,6 +308,30 @@ class BackupHandoffTest(unittest.TestCase):
                                                "block.\n", ""))
         self.assertEqual(self.written(), before)
 
+    def test_a_record_that_names_no_pre_restore_snapshot_refuses_the_import_as_unreadable(self) -> None:
+        self.settings("ENGINE_FPS=45\n")
+        archive = self.root / "a.lwebackup"
+        self.assertEqual(self.lwe("backup", "export", str(archive))[0], 0)
+        self.settings("ENGINE_FPS=30\n")
+        (self.backups() / "sub").mkdir(parents=True)
+        shutil.copy(archive, self.backups() / "sub" / "pre-restore-20200101-000000.lwebackup")
+        rec = self.backups() / "recovery.json"
+        for name in ("recovery.json", "sub/pre-restore-20200101-000000.lwebackup"):
+            with self.subTest(name=name):
+                rec.write_text(json.dumps({"snapshot": name, "since": "2020-01-01T00:00:00"}), encoding="utf-8")
+                before = self.written()
+                code, out, err = self.lwe("backup", "import", str(archive))
+                self.assertEqual((code, out, err), (1, f"Refused {archive}\nerrors: file=recovery.json, reason=Nothing "
+                                                       f"was imported: {rec} cannot be read, so the snapshot it keeps "
+                                                       f"from before an earlier failed import cannot be found. Deleting "
+                                                       f"{rec} clears this block.\n", ""))
+                self.assertEqual(self.written(), before)
+        second = self.backups() / "pre-restore-20200101-000000-2.lwebackup"
+        shutil.copy(archive, second)
+        rec.write_text(json.dumps({"snapshot": second.name, "since": "2020-01-01T00:00:00"}), encoding="utf-8")
+        self.assertEqual(self.lwe("backup", "import", str(archive))[0], 0, "a snapshot's counter name is accepted")
+        self.assertIsNone(self.recovery())
+
     def test_refusals(self) -> None:
         not_a_backup = self.root / "notes.txt"
         not_a_backup.write_text("hello\n", encoding="utf-8")
@@ -475,6 +499,37 @@ class RestoreLockTest(unittest.TestCase):
         with stack, contextlib.redirect_stdout(io.StringIO()):
             codes = [self.door(clean)[0], self.backup.main(["restore", str(clean)])]
         self.assertEqual((codes, seen), ([0, 0], [1, 1]))
+
+    def test_a_restore_lock_that_cannot_be_opened_fails_cleanly_at_the_command_and_headless_doors(self) -> None:
+        clean, _failing = self.archives()
+        lock = self.paths.state_dir() / "restore.lock"
+        lock.mkdir()
+        refusal = f"That backup could not be restored: [Errno 21] Is a directory: '{lock}'\n"
+        self.assertEqual(self.door(clean), (1, refusal))
+        with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+            code = self.backup.main(["restore", str(clean)])
+        self.assertEqual((code, out.getvalue(), err.getvalue()), (1, "", refusal))
+        self.assertEqual((self.paths.config_dir() / "settings.conf").read_text(encoding="utf-8"),
+                         "ASSETS_DIR=\nENGINE_FPS=30\n", "nothing was restored")
+
+    def test_a_record_that_cannot_be_removed_after_a_successful_import_is_a_receipt_error(self) -> None:
+        clean, _failing = self.archives()
+        backups = self.rec.parent
+        backups.mkdir(parents=True, exist_ok=True)
+        named = backups / "pre-restore-20200101-000000.lwebackup"
+        shutil.copy(clean, named)
+        self.rec.write_text(json.dumps({"snapshot": named.name, "since": "2020-01-01T00:00:00"}), encoding="utf-8")
+        backups.chmod(0o500)
+        self.addCleanup(backups.chmod, 0o700)
+        error = f"errors: file=recovery.json, reason=could not be removed: [Errno 13] Permission denied: '{self.rec}'"
+        code, printed = self.door(clean)
+        self.assertEqual(code, 1, printed)
+        self.assertIn(error, printed.splitlines())
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            code = self.backup.main(["restore", str(clean)])
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertIn(error, out.getvalue().splitlines())
+        self.assertTrue(self.rec.exists())
 
     def test_a_nested_use_on_one_thread_takes_one_flock(self) -> None:
         clean, _failing = self.archives()

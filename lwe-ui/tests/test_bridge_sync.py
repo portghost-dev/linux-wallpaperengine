@@ -313,6 +313,48 @@ class BridgeSyncTest(unittest.TestCase):
         with self.engine(None, "away"):
             self.assertTrue(page.removeAppEntry("mpv"))
 
+    def test_a_list_edit_the_engine_refused_or_left_unanswered_is_saved_and_says_so(self) -> None:
+        page = settings_bridge.SettingsBridge(self.backend)
+        failures: list = []
+        page.commitFailed.connect(lambda keys, reason: failures.append((list(keys), reason)))
+        for kind in ("refused", "uncertain"):
+            def delivered(locks, write, rows, **kwargs):
+                write()
+                return push.Outcome(kind, message=f"{kind} by the engine")
+            with self.subTest(kind=kind), mock.patch.object(push, "run_change", delivered):
+                failures.clear()
+                self.assertFalse(page.addException(f"mpv-{kind}"))
+                self.assertFalse(page.addAppEntry(f"mpv-{kind}"))
+                self.assertEqual((f"mpv-{kind}" in page.exceptions(), f"mpv-{kind}" in page.appEntries()),
+                                 (True, True), "the entry is saved")
+                self.assertEqual(failures, [(["Exceptions"], "The engine did not answer."),
+                                            (["Apps"], "The engine did not answer.")])
+
+    def test_a_list_file_that_could_not_be_written_says_so(self) -> None:
+        page = settings_bridge.SettingsBridge(self.backend)
+        failures: list = []
+        page.commitFailed.connect(lambda keys, reason: failures.append((list(keys), reason)))
+        with mock.patch.object(settings_bridge.rules, "modify",
+                               mock.Mock(side_effect=PermissionError(13, "Permission denied"))):
+            self.assertFalse(page.addException("kitty"))
+            self.assertFalse(page.addAppEntry("kitty"))
+        self.assertEqual(("kitty" in page.exceptions(), "kitty" in page.appEntries()), (False, False))
+        self.assertEqual(failures, [(["Exceptions"], "The exceptions file could not be written."),
+                                    (["Apps"], "The app list file could not be written.")])
+
+    def test_an_import_whose_restore_lock_cannot_be_opened_fails_cleanly(self) -> None:
+        page = settings_bridge.SettingsBridge(self.backend)
+        failures: list = []
+        page.commitFailed.connect(lambda keys, reason: failures.append((list(keys), reason)))
+        settings.update({"ENGINE_FPS": 90})
+        archive = self.home / "fps-90.lwebackup"
+        self.assertEqual(backup.export_to(archive)["errors"], [])
+        settings.update({"ENGINE_FPS": 30})
+        (paths.state_dir() / "restore.lock").mkdir()
+        self.assertFalse(page.importBackup(str(archive)))
+        self.assertEqual(failures, [(["Configuration"], "That backup could not be restored.")])
+        self.assertEqual(settings.load()["ENGINE_FPS"], 30, "nothing was restored")
+
     def test_an_engine_file_that_could_not_be_written_says_so(self) -> None:
         page = settings_bridge.SettingsBridge(self.backend)
         failures: list = []

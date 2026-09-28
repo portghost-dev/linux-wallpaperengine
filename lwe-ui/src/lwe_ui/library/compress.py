@@ -18,29 +18,33 @@ class Result(NamedTuple):
     after: int
     failed: int
     disk: int
+    links: tuple[str, ...] = ()
 
 
 def compress_one(row: catalog.Row, *, folder: str | None = None) -> Result:
     """Encode the uncached textures in folder, by default the one the row renders from (a preset's
     base), owned by that folder. kind is "compressed", "already", "nothing", "missing",
     "unreadable" (the package could not be read, so nothing was written) or "failed" (no texture
-    was written while at least one failed)."""
+    was written while at least one failed). links names the packages and exempt.txt that are
+    symbolic links, which are not read (texcomp.links)."""
     d = catalog.render_dir(row.id) if folder is None else folder
     if not d:
         return Result("missing", 0, 0, 0, 0)
     if row.type in ("video", "web"):
         return Result("nothing", 0, 0, 0, 0)
     measure: dict[str, int] = {}
+    links = tuple(texcomp.links(d))
     try:
         done = texcomp.encode_scene(d, os.path.basename(d.rstrip("/")), measure=measure)
     except texcomp.PackageError:
-        return Result("unreadable", 0, 0, 0, 0)
+        return Result("unreadable", 0, 0, 0, 0, links)
     if measure["eligible"] == 0:
-        return Result("nothing", 0, 0, 0, 0)
+        return Result("nothing", 0, 0, 0, 0, links)
     if done["total"] == 0:
-        return Result("already", 0, 0, 0, 0)
+        return Result("already", 0, 0, 0, 0, links)
     kind = "failed" if done["encoded"] == 0 and done["failed"] > 0 else "compressed"
-    return Result(kind, measure["bytes_before"], measure["bytes_after"], done["failed"], measure["disk_bytes"])
+    return Result(kind, measure["bytes_before"], measure["bytes_after"], done["failed"], measure["disk_bytes"],
+                  links)
 
 
 def size(b: int) -> str:
@@ -69,6 +73,8 @@ def result_text(row: catalog.Row, result: Result) -> str:
         text = f"not compressed: {UNREADABLE}"
     else:
         text = "files missing, nothing to compress"
+    if result.links:
+        text += f"; {'link' if len(result.links) == 1 else 'links'} not read: {', '.join(result.links)}"
     return text
 
 

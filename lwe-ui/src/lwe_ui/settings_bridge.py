@@ -25,6 +25,7 @@ did not take stays saved and applies at the next opportunity.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -439,7 +440,11 @@ class SettingsBridge(QObject):
         local = self._local(url)
         if not local or not os.path.isfile(local):
             return self._fail("Configuration", "That file is not an LWE backup.")
-        with backup.restoring():
+        with contextlib.ExitStack() as held:
+            try:
+                held.enter_context(backup.restoring())
+            except OSError:
+                return self._fail("Configuration", "That backup could not be restored.")
             try:
                 r = backup.apply(backup.preflight(local))
             except Exception:
@@ -559,12 +564,14 @@ class SettingsBridge(QObject):
                 ("rules",), lambda: rules.modify("pause-blacklist.txt", lambda text: change(text or header)),
                 [("verb", "pause-blacklist.txt")], defer_current=self._backend.delivery_due())
         except OSError:
-            return False
+            return self._fail("Exceptions", "The exceptions file could not be written.")
         if outcome.kind != "applied":
             logging.getLogger(__name__).warning("exceptions list not applied: %s %s", outcome.kind,
                                                 outcome.reason or outcome.message or "")
         self.truthRefreshed.emit()
-        return outcome.kind not in ("refused", "uncertain")
+        if outcome.kind in ("refused", "uncertain"):
+            return self._fail("Exceptions", "The engine did not answer.")
+        return True
 
     @Slot(str, result=bool)
     def addException(self, app_id: str) -> bool:
@@ -573,16 +580,12 @@ class SettingsBridge(QObject):
             return self._fail("Exceptions", "That is not an app id.")
         if entry in self.exceptions():
             return True
-        if not self._write_exceptions(lambda text: rules.add_entry(text, entry)):
-            return self._fail("Exceptions", "The exceptions file could not be written.")
-        return True
+        return self._write_exceptions(lambda text: rules.add_entry(text, entry))
 
     @Slot(str, result=bool)
     def removeException(self, app_id: str) -> bool:
         entry = str(app_id).strip()
-        if not self._write_exceptions(lambda text: rules.remove_entry(text, entry, 128)):
-            return self._fail("Exceptions", "The exceptions file could not be written.")
-        return True
+        return self._write_exceptions(lambda text: rules.remove_entry(text, entry, 128))
 
     # ----------------------------------------------------------------------------------
     # Running-apps list (AMENDMENT-A1 sec 3, S-14) - the file behind the ENGINE's
@@ -605,12 +608,14 @@ class SettingsBridge(QObject):
                 ("rules",), lambda: rules.modify("app-condition.txt", lambda text: change(text or header)),
                 [("verb", "app-condition.txt")], defer_current=self._backend.delivery_due())
         except OSError:
-            return False
+            return self._fail("Apps", "The app list file could not be written.")
         if outcome.kind != "applied":
             logging.getLogger(__name__).warning("app list not applied: %s %s", outcome.kind,
                                                 outcome.reason or outcome.message or "")
         self.truthRefreshed.emit()
-        return outcome.kind not in ("refused", "uncertain")
+        if outcome.kind in ("refused", "uncertain"):
+            return self._fail("Apps", "The engine did not answer.")
+        return True
 
     @Slot(str, result=bool)
     def addAppEntry(self, name: str) -> bool:
@@ -623,16 +628,12 @@ class SettingsBridge(QObject):
             return self._fail("Apps", "That is not a process name.")
         if entry in self.appEntries():
             return True
-        if not self._write_app_list(lambda text: rules.add_entry(text, entry)):
-            return self._fail("Apps", "The app list file could not be written.")
-        return True
+        return self._write_app_list(lambda text: rules.add_entry(text, entry))
 
     @Slot(str, result=bool)
     def removeAppEntry(self, name: str) -> bool:
         entry = str(name).strip()
-        if not self._write_app_list(lambda text: rules.remove_entry(text, entry, 64)):
-            return self._fail("Apps", "The app list file could not be written.")
-        return True
+        return self._write_app_list(lambda text: rules.remove_entry(text, entry, 64))
 
     # ----------------------------------------------------------------------------------
     # Running-now picker source (AMENDMENT-A1 sec 3, H-A1 resolution [S-18]).

@@ -33,6 +33,7 @@ import ctypes
 import glob
 import hashlib
 import json
+import logging
 import os
 import re
 import struct
@@ -324,10 +325,20 @@ def scan(d: str) -> dict[str, Any]:
             "shim": shim_available()}
 
 
+def links(d: str) -> list[str]:
+    """The names of d's packages and exempt.txt that are symbolic links (lstat), sorted: the scan
+    and the encoder read none of them."""
+    names = {os.path.basename(p) for p in glob.glob(os.path.join(d, "*.pkg"))} | {"exempt.txt"}
+    return sorted(name for name in names if os.path.islink(os.path.join(d, name)))
+
+
 def _iter_scene_all(d: str):
     """Like _iter_eligible but ALSO yields ineligible textures (fmt=None) so the scan
-    can report an honest total for the card."""
-    pk = glob.glob(os.path.join(d, "*.pkg"))
+    can report an honest total for the card. A package or exempt.txt that is a link is not read."""
+    skipped = links(d)
+    for name in skipped:
+        logging.getLogger(__name__).info("compress %s: link not read: %s", d, name)
+    pk = [p for p in glob.glob(os.path.join(d, "*.pkg")) if os.path.basename(p) not in skipped]
     if not pk:
         return
     try:
@@ -336,7 +347,7 @@ def _iter_scene_all(d: str):
         raise PackageError(pk[0]) from exc
     exempt_extra: set[str] = set()
     ex_path = os.path.join(d, "exempt.txt")
-    if os.path.exists(ex_path):
+    if "exempt.txt" not in skipped and os.path.exists(ex_path):
         exempt_extra = {ln.strip() for ln in open(ex_path) if ln.strip()}
     for k in sorted(files):
         if not k.endswith(".tex"):

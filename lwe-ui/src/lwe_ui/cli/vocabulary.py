@@ -315,7 +315,7 @@ COMMANDS: tuple[dict[str, str], ...] = (
         "grp": "Settings",
         "name": "backup",
         "form": "backup export|import|preview <file>",
-        "what": "Saves, restores or previews a settings backup. An import that fails keeps the snapshot taken just before it, and later imports take no new snapshot until one succeeds. If that snapshot goes missing, imports refuse until you delete ~/.local/state/lwe/backups/recovery.json.",
+        "what": "Saves, restores or previews a settings backup. An import that fails keeps the snapshot taken just before it, and later imports take no new snapshot until one succeeds. If that snapshot goes missing, or recovery.json, the record that names it, cannot be read, imports refuse until you delete recovery.json from the backups folder.",
         "note": "",
     },
     {
