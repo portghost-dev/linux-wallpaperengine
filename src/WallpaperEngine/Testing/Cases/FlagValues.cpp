@@ -3,10 +3,13 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
 
+#include <cmath>
 #include <filesystem>
 #include <numbers>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include <glm/vec4.hpp>
 
@@ -269,4 +272,47 @@ TEST_CASE ("path takes any text that is not empty", "[flags]") {
     CHECK_THROWS_MATCHES (
 	FlagValues::path ("--socket", ""), std::runtime_error, Message ("--socket takes a path; got an empty value")
     );
+}
+
+TEST_CASE ("plainNumber takes plain decimal numbers only and gives zero as positive zero", "[flags]") {
+    const std::vector<std::pair<std::string, double>> accepted = {
+	{ "1", 1.0 },  { "+1", 1.0 },     { "-1", -1.0 },    { "1.5", 1.5 },     { ".5", 0.5 },
+	{ "5.", 5.0 }, { "1e3", 1000.0 }, { "1E3", 1000.0 }, { "1e+3", 1000.0 }, { "1.5e-3", 1.5e-3 },
+    };
+
+    for (const auto& [text, expected] : accepted) {
+	CAPTURE (text);
+	const auto value = FlagValues::plainNumber (text);
+	CHECK (value.has_value ());
+	CHECK (value.value_or (std::nan ("")) == expected);
+    }
+
+    for (const char* text : { "-0", "-0.0", "1e-999", "-1e-999" }) {
+	CAPTURE (text);
+	const auto value = FlagValues::plainNumber (text);
+	CHECK (value.has_value ());
+	CHECK (value.value_or (std::nan ("")) == 0.0);
+	CHECK_FALSE (std::signbit (value.value_or (-1.0)));
+    }
+
+    for (const char* text :
+	 { "0x10", "0x1p2", "1e", "e3", "--1", "1.2.3", "inf", "nan", "", " 1", "1 ", "1e999", "-1e999" }) {
+	CAPTURE (text);
+	CHECK_FALSE (FlagValues::plainNumber (text).has_value ());
+    }
+}
+
+TEST_CASE ("the number flags refuse hex and give -0 as positive zero", "[flags]") {
+    CHECK_THROWS_MATCHES (
+	FlagValues::decimalInRange ("--lightdimming", "0x10", 0.01, 1000.0), std::runtime_error,
+	Message ("--lightdimming takes a number from 0.01 to 1000; got 0x10")
+    );
+    CHECK_THROWS_MATCHES (
+	FlagValues::decimalInRange ("--speed", "0x1", 0.0, 10.0), std::runtime_error,
+	Message ("--speed takes a number from 0 to 10; got 0x1")
+    );
+
+    const float speed = FlagValues::decimalInRange ("--speed", "-0", 0.0, 10.0);
+    CHECK (speed == 0.0f);
+    CHECK_FALSE (std::signbit (speed));
 }

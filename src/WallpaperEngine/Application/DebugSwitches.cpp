@@ -1,13 +1,14 @@
 #include "DebugSwitches.h"
 
+#include "WallpaperEngine/Application/FlagValues.h"
+
 #include <algorithm>
-#include <cctype>
-#include <cstdlib>
 #include <stdexcept>
 
 namespace {
 using WallpaperEngine::Application::DebugSwitches::Row;
 using WallpaperEngine::Application::DebugSwitches::Rule;
+using WallpaperEngine::Application::FlagValues::plainNumber;
 
 std::optional<unsigned long long> whole (const std::string& text) {
     if (text.empty ()) {
@@ -36,14 +37,9 @@ bool isWhole (const std::string& text, const unsigned long long lo, const unsign
 }
 
 bool fraction (const std::string& text) {
-    if (text.empty () || std::isspace (static_cast<unsigned char> (text.front ()))) {
-	return false;
-    }
+    const auto value = plainNumber (text);
 
-    char* end = nullptr;
-    const double value = std::strtod (text.c_str (), &end);
-
-    return end == text.c_str () + text.size () && value >= 0.0 && value <= 1.0;
+    return value.has_value () && *value >= 0.0 && *value <= 1.0;
 }
 
 bool nameCharacter (const char c) {

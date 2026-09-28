@@ -1,6 +1,5 @@
 #include "FlagValues.h"
 
-#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <numbers>
@@ -9,27 +8,69 @@
 #include <stdexcept>
 #include <vector>
 
-namespace {
-std::optional<double> decimal (const std::string& text) {
-    if (text.empty () || std::isspace (static_cast<unsigned char> (text.front ()))
-	|| std::isspace (static_cast<unsigned char> (text.back ()))) {
-	return std::nullopt;
-    }
-
-    char* end = nullptr;
-    const double value = std::strtod (text.c_str (), &end);
-
-    if (end != text.c_str () + text.size () || !std::isfinite (value)) {
-	return std::nullopt;
-    }
-
-    return value;
-}
-} // namespace
-
 namespace WallpaperEngine::Application::FlagValues {
+std::optional<double> plainNumber (const std::string& text) {
+    const auto digitsFrom = [&text] (const std::string::size_type start) {
+	auto end = start;
+
+	while (end < text.size () && text[end] >= '0' && text[end] <= '9') {
+	    end++;
+	}
+
+	return end - start;
+    };
+
+    std::string::size_type at = 0;
+
+    if (at < text.size () && (text[at] == '+' || text[at] == '-')) {
+	at++;
+    }
+
+    const auto wholeDigits = digitsFrom (at);
+    at += wholeDigits;
+    std::string::size_type pointDigits = 0;
+
+    if (at < text.size () && text[at] == '.') {
+	at++;
+	pointDigits = digitsFrom (at);
+	at += pointDigits;
+    }
+
+    if (wholeDigits == 0 && pointDigits == 0) {
+	return std::nullopt;
+    }
+
+    if (at < text.size () && (text[at] == 'e' || text[at] == 'E')) {
+	at++;
+
+	if (at < text.size () && (text[at] == '+' || text[at] == '-')) {
+	    at++;
+	}
+
+	const auto exponentDigits = digitsFrom (at);
+
+	if (exponentDigits == 0) {
+	    return std::nullopt;
+	}
+
+	at += exponentDigits;
+    }
+
+    if (at != text.size ()) {
+	return std::nullopt;
+    }
+
+    const double value = std::strtod (text.c_str (), nullptr);
+
+    if (!std::isfinite (value)) {
+	return std::nullopt;
+    }
+
+    return value == 0.0 ? 0.0 : value;
+}
+
 float clampFactor (const std::string& flag, const std::string& text) {
-    const auto value = decimal (text);
+    const auto value = plainNumber (text);
 
     if (!value.has_value () || *value > 4.0) {
 	throw std::runtime_error (flag + " takes a number up to 4, where 0 or below is no cap; got " + text);
@@ -88,7 +129,7 @@ glm::vec4 color (const std::string& flag, const std::string& text) {
 
     while (start != std::string::npos) {
 	const auto space = text.find (' ', start);
-	const auto value = decimal (text.substr (start, space == std::string::npos ? space : space - start));
+	const auto value = plainNumber (text.substr (start, space == std::string::npos ? space : space - start));
 
 	if (!value.has_value ()) {
 	    throw refusal;
@@ -117,7 +158,7 @@ glm::vec4 color (const std::string& flag, const std::string& text) {
 }
 
 float decimalInRange (const std::string& flag, const std::string& text, const double lo, const double hi) {
-    const auto value = decimal (text);
+    const auto value = plainNumber (text);
 
     if (!value.has_value () || *value < lo || *value > hi) {
 	std::ostringstream message;
@@ -171,7 +212,7 @@ float milliseconds (const std::string& flag, const std::string& text) {
 	number.erase (number.size () - 2);
     }
 
-    const auto value = decimal (number);
+    const auto value = plainNumber (number);
 
     if (!value.has_value () || *value < 0.0 || *value > 500.0) {
 	throw std::runtime_error (flag + " takes milliseconds from 0 to 500; got " + text);

@@ -146,6 +146,7 @@ TEST_CASE ("resolve sets text and structured values as given once they fit their
     checkUnsets ("mouseposition=off", "LWE_MOUSE_POS");
     checkSets ("mouseposition=0,0", "LWE_MOUSE_POS", "0,0");
     checkRefused ("mouseposition", "-0.1,0");
+    checkRefused ("mouseposition", "0x0.1,0");
 
     checkSets ("objectpixels=0 0 10 10", "LWE_OBJPROBE", "0 0 10 10");
     checkSets ("objectpixels=0 0 10 10 2", "LWE_OBJPROBE", "0 0 10 10 2");

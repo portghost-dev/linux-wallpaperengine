@@ -1,11 +1,13 @@
 #pragma once
 
 #include <filesystem>
+#include <optional>
 #include <string>
 
 #include <glm/vec4.hpp>
 
 namespace WallpaperEngine::Application::FlagValues {
+std::optional<double> plainNumber (const std::string& text);
 float clampFactor (const std::string& flag, const std::string& text);
 bool onOff (const std::string& flag, const std::string& text);
 bool autoFull (const std::string& flag, const std::string& text);
