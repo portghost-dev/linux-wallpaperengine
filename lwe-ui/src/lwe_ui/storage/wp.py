@@ -17,7 +17,8 @@ from . import atomic, foreign, lock, migrate, paths, tier_a
 from .store import Store
 
 # Keys whose empty value means "unset / inherit" and must NOT be written.
-_OMIT_IF_EMPTY = ("FPS", "CLAMPING", "FULLSCREEN_PAUSE", "SKIP", "CC_MODE", "ALIAS")
+_OMIT_IF_EMPTY = ("FPS", "CLAMPING", "FULLSCREEN_PAUSE", "SKIP", "CC_MODE", "ALIAS", "SSFACTOR",
+                  "CLAMPCOMPOSITES")
 
 
 def _read_raw(path) -> str:
@@ -56,6 +57,14 @@ def _coerce(spec: dict, raw: str) -> Any:
             return float(str(raw).strip())
         except (ValueError, TypeError):
             return spec["default"]
+    if t == "float_or_empty":
+        s = str(raw).strip()
+        if s == "":
+            return ""
+        try:
+            return float(s)
+        except (ValueError, TypeError):
+            return ""
     # enum / enum_or_empty / str all carry through as strings.
     return str(raw)
 
@@ -136,6 +145,31 @@ def load_set_path(path) -> dict[str, Any]:
 def load_set(wid: str) -> dict[str, Any]:
     """Presence-aware read of wp/<wid>.conf. Only keys the file carries; props included."""
     return load_set_path(paths.wp_file(wid))
+
+
+def clamp_values(present: dict[str, Any] | None, wid: str) -> dict[str, tuple[float | None, str]]:
+    """{clamp key: (value, source)}: the file's own number ("own"), an empty value as ("inherit"),
+    or for an absent key the number its RENDER_RESOLUTION word stands for ("RENDER_RESOLUTION").
+    `present` is load_set's dict, or None to read it (raising on an unreadable file). Unclamped."""
+    if present is None:
+        present = load_set(wid)
+    numbers = C.resolution_word_numbers(present.get("RENDER_RESOLUTION"))
+    out: dict[str, tuple[float | None, str]] = {}
+    for i, key in enumerate(C.CLAMP_KEYS):
+        if key in present:
+            value = present[key]
+            out[key] = (None, "inherit") if value == "" else (float(value), "own")
+        elif numbers is not None:
+            out[key] = (numbers[i], "RENDER_RESOLUTION")
+        else:
+            out[key] = (None, "inherit")
+    return out
+
+
+def clamp_unset_changes(present: dict[str, Any], key: str) -> dict[str, Any]:
+    """The change that makes clamp `key` follow the global again: the `KEY=` marker while the
+    file's RENDER_RESOLUTION word would otherwise decide it, else a delete."""
+    return {key: "" if C.resolution_word_numbers(present.get("RENDER_RESOLUTION")) is not None else None}
 
 
 def update_set_path(path, changes: dict[str, Any]) -> None:
@@ -246,8 +280,9 @@ def sparsify_overrides() -> dict[str, list[str]]:
                 raw = tier_a.parse(text)
             except (OSError, ValueError):
                 continue
+            # an empty clamp value is an inherit marker, never a materialized default
             removed = [k for k, v in raw.items()
-                       if k in C.WP_SCHEMA and k not in IDENTITY_KEYS
+                       if k in C.WP_SCHEMA and k not in IDENTITY_KEYS and k not in C.CLAMP_KEYS
                        and _coerce(C.WP_SCHEMA[k], v) == C.WP_SCHEMA[k]["default"]
                        and not (k == "CC" and raw.get("CC_MODE") == "custom")]
             if not removed:

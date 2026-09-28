@@ -335,10 +335,11 @@ is to be the daemon API's reference client and the system's owner:
 
 - It **generates and manages** `~/.config/systemd/user/lwe-engine.service` and the
   engine's env file (`engine/daemon_unit.py`), reconciling drift at every start. The
-  restart-class engine settings live there, among them the resolution cap's three states
-  (`Clamp resolution` on Engine > Advanced), written as the engine's two numbers, each at most 4
-  with 0 or below off: everything clamped leaves both at 1, composites exempt sets the effect
-  factor to 0, and off sets both to 0.
+  restart-class engine settings live there, among them the resolution cap as two saved numbers,
+  `SSFACTOR` for the scene and `CLAMPCOMPOSITES` for the effect buffers, each at most 4 with 0 or
+  below off; a 1 writes no line, the engine's default. A settings file that lacks a number reads it
+  from its three-state `RENDER_RESOLUTION` word (`Clamp resolution` on Engine > Advanced):
+  everything clamped is 1 and 1, composites exempt 1 and 0, and off 0 and 0.
   The engine reads the file only at service start, so each restart-class row on Engine >
   Advanced carries a restart verb while the running engine's own environment differs from the file on that
   row's keys; one tap restarts the service in place for every row that is pending.

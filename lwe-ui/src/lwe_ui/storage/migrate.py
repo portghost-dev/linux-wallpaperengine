@@ -73,6 +73,18 @@ def coerce(spec: dict, raw: Any, dense: bool) -> tuple[str, Any, str]:
     t = spec["type"]
     s = str(raw).strip()
     lo, hi = spec.get("min"), spec.get("max")
+    if t == "float_or_empty":
+        if s == "":
+            return "ok", s, ""
+        try:
+            v = float(s)
+        except ValueError:
+            return "preserve", raw, "not a number"
+        if lo is not None and v < lo:
+            return "clamp", lo, ""
+        if hi is not None and v > hi:
+            return "clamp", hi, ""
+        return "ok", s, ""
     if t in ("int", "int_or_empty", "float"):
         if t == "int_or_empty" and s == "":
             return "ok", s, ""

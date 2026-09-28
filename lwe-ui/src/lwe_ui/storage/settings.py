@@ -106,7 +106,13 @@ def load() -> dict[str, Any]:
             out[key] = defaults.get(key, spec["default"])
     # the same clamp and enum snap a save applies, so a value edited by hand or written
     # by an older panel never reaches a consumer out of range
-    return _validate(out)
+    out = _validate(out)
+    # an absent clamp key reads the file's word here: whole-file saves write what load returns
+    numbers = C.resolution_word_numbers(out["RENDER_RESOLUTION"]) or (1.0, 1.0)
+    for key, number in zip(C.CLAMP_KEYS, numbers):
+        if key not in raw:
+            out[key] = number
+    return out
 
 
 def _validate(d: dict[str, Any], report: list | None = None) -> dict[str, Any]:
@@ -225,6 +231,13 @@ def replace(fn: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
         save(fn(load()))
 
 
+def clamp_unset_changes(current: dict[str, Any], key: str) -> dict[str, Any]:
+    """The change that puts clamp `key` back to 1 for settings.modify: an explicit 1 where the
+    file's RENDER_RESOLUTION maps this number away from 1, else a delete."""
+    numbers = C.resolution_word_numbers(current.get("RENDER_RESOLUTION")) or (1.0, 1.0)
+    return {key: 1.0 if numbers[C.CLAMP_KEYS.index(key)] != 1.0 else None}
+
+
 # --- backup ---------------------------------------------------------------------------
 MEMBER = "settings.conf"
 #: every path-typed setting names this machine: kept on import only when it resolves here
@@ -282,6 +295,10 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
     for a in report:
         r["adjusted"].append({"kind": a["kind"], "store": "settings", "id": MEMBER,
                               "key": a["key"], "from": a["from"], "to": a["to"]})
+    if "RENDER_RESOLUTION" in coerced:
+        numbers = C.resolution_word_numbers(coerced["RENDER_RESOLUTION"]) or (1.0, 1.0)
+        for key, number in zip(C.CLAMP_KEYS, numbers):
+            coerced.setdefault(key, number)
     for key in MACHINE_KEYS:
         if key not in coerced:
             continue

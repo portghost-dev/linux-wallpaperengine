@@ -14,6 +14,7 @@ units is models.setMaster's job, never this module's.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import shutil
@@ -313,13 +314,14 @@ def build_env_content(outputs: list[str] | None = None, existing: str | None = N
     detail = str(s.get("TEXTURE_DETAIL") or "auto").strip()
     lines.append(f"LWE_TEXDETAIL={detail if detail in C.TEXTURE_DETAILS else 'auto'}")
 
-    # the engine clamps everything by default; sharpfx turns the effect clamp off and wallpaper turns both off
-    res = str(s.get("RENDER_RESOLUTION") or "screen").strip()
-    if res == "sharpfx":
-        lines.append("LWE_CLAMPCOMPOSITES=0")
-    elif res == "wallpaper":
-        lines.append("LWE_SSFACTOR=0")
-        lines.append("LWE_CLAMPCOMPOSITES=0")
+    # 1 writes no line, the engine's default
+    for key, env_name in (("SSFACTOR", "LWE_SSFACTOR"), ("CLAMPCOMPOSITES", "LWE_CLAMPCOMPOSITES")):
+        value = float(s.get(key, 1.0))
+        if not math.isfinite(value):
+            continue
+        value = max(0.0, min(4.0, value))
+        if value != 1.0:
+            lines.append(f"{env_name}={_fmt_dial(value)}")
 
     for skey, env_name in C.AUDIO_DIAL_ENV.items():
         try:

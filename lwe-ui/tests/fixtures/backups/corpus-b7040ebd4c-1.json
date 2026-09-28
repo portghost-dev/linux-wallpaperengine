@@ -1,0 +1,334 @@
+{
+ "discovery": {
+  "acquireMethod": "steamcmd",
+  "apiKey": "KEY-1-corpus",
+  "steamcmdPath": "/tmp/lwe-corpus-k0k98y0q/steamcmd"
+ },
+ "generated": "2026-09-26T09:07:46",
+ "library_present": [
+  "corpus-dense",
+  "corpus-cover",
+  "corpus-sparse"
+ ],
+ "meta": {
+  "corpus-dense": {
+   "favorite": true,
+   "note": "kept, with a comma"
+  },
+  "corpus-held": {
+   "favorite": true
+  },
+  "corpus-sparse": {
+   "favorite": false
+  }
+ },
+ "overrides": {
+  "corpus-cover": {
+   "keys": {
+    "ALIAS": "corpus-cover.Alias_1",
+    "AUDIO_GAIN": "10.0",
+    "AUDIO_REACTIVE": "true",
+    "AUTOMUTE": "true",
+    "BG": "corpus-cover",
+    "CC": "0.8 1.2 1.1 0.25",
+    "CC_MODE": "preset",
+    "CLAMPCOMPOSITES": "4.0",
+    "CLAMPING": "border",
+    "CLASSIC_EXP": "9.6",
+    "CLASSIC_K": "7.7",
+    "FIT_PAN_X": "1.0",
+    "FIT_PAN_Y": "1.0",
+    "FIT_ZOOM": "2.0",
+    "FPS": "8",
+    "FULLSCREEN_PAUSE": "true",
+    "MOUSE": "true",
+    "PROP_hue": "0.35",
+    "PROP_label": "Ōsaka, night",
+    "RENDER_RESOLUTION": "sharpfx",
+    "SCALING": "stretch",
+    "SKIP": "obj-a obj-b",
+    "SPEED": "10.0",
+    "SSFACTOR": "4.0",
+    "TEXCOMP": "true",
+    "TEXTURE_DETAIL": "full",
+    "TYPE": "video",
+    "VOLUME": "7"
+   },
+   "kind": "cover"
+  },
+  "corpus-dense": {
+   "keys": {
+    "ALIAS": "corpus-dense.Alias_1",
+    "AUDIO_GAIN": "4.0",
+    "AUDIO_REACTIVE": "true",
+    "AUTOMUTE": "false",
+    "BG": "corpus-dense",
+    "CC": "0.8 1.2 1.1 0.25",
+    "CC_MODE": "none",
+    "CLAMPCOMPOSITES": "0.0",
+    "CLAMPING": "clamp",
+    "CLASSIC_EXP": "3.6",
+    "CLASSIC_K": "1.7",
+    "FIT_PAN_X": "-1.0",
+    "FIT_PAN_Y": "-1.0",
+    "FIT_ZOOM": "2.0",
+    "FPS": "2",
+    "FULLSCREEN_PAUSE": "false",
+    "MOUSE": "true",
+    "PROP_hue": "0.35",
+    "PROP_label": "Ōsaka, night",
+    "RENDER_RESOLUTION": "screen",
+    "SCALING": "stretch",
+    "SKIP": "obj-a obj-b",
+    "SPEED": "0.1",
+    "SSFACTOR": "0.0",
+    "TEXCOMP": "false",
+    "TEXTURE_DETAIL": "auto",
+    "TYPE": "video",
+    "VOLUME": "1"
+   },
+   "kind": "dense"
+  },
+  "corpus-held": {
+   "keys": {
+    "BG": "corpus-held",
+    "MOUSE": "true",
+    "VOLUME": "42"
+   },
+   "kind": "held"
+  },
+  "corpus-ref": {
+   "keys": {
+    "BG": "/tmp",
+    "SPEED": "1.5",
+    "TYPE": "video"
+   },
+   "kind": "reference"
+  },
+  "corpus-sparse": {
+   "keys": {
+    "BG": "corpus-sparse",
+    "SPEED": "2.5"
+   },
+   "kind": "sparse"
+  }
+ },
+ "playlists": {
+  "corpus-cover": {
+   "INTERVAL": 599940,
+   "MEMBERS": "corpus-dense corpus-cover corpus-sparse corpus-held",
+   "MODE": "sequential",
+   "NAME": "Rain, Ōsaka night",
+   "UNIT": "s"
+  },
+  "corpus-missing": {
+   "INTERVAL": 599940,
+   "MEMBERS": "corpus-dense corpus-absent",
+   "MODE": "sequential",
+   "NAME": "Missing member",
+   "UNIT": "s"
+  }
+ },
+ "rules": {
+  "app-condition.txt": [
+   "app-condition-plain.exe",
+   "tabbed\tline.exe"
+  ],
+  "pause-blacklist.txt": [
+   "pause-blacklist-plain.exe",
+   "tabbed\tline.exe"
+  ],
+  "pause-whitelist.txt": [
+   "pause-whitelist-plain.exe",
+   "tabbed\tline.exe"
+  ]
+ },
+ "schema_hash": "b7040ebd4c",
+ "schema_keys": {
+  "discovery": [
+   "apiKey",
+   "acquireMethod",
+   "steamcmdPath"
+  ],
+  "playlists": [
+   "NAME",
+   "MODE",
+   "INTERVAL",
+   "UNIT",
+   "MEMBERS"
+  ],
+  "settings": [
+   "ROTATION_ENABLED",
+   "ORDER",
+   "INTERVAL",
+   "SCHEDULE_ENABLED",
+   "SCHEDULE",
+   "ACTIVE_PLAYLIST",
+   "PAUSE_ON_LOCK",
+   "PAUSE_ON_FULLSCREEN",
+   "FULLSCREEN_BEHAVIOR",
+   "APP_CONDITION_BEHAVIOR",
+   "PAUSE_RECOVERY_CONDITION",
+   "PAUSE_RECOVERY_ACTION",
+   "ENGINE_FPS",
+   "ENGINE_VOLUME",
+   "ENGINE_SCALING",
+   "ENGINE_CLAMP",
+   "ENGINE_LAYER",
+   "ENGINE_HWDEC",
+   "ENGINE_TEXCOMP",
+   "TEXTURE_DETAIL",
+   "RENDER_RESOLUTION",
+   "SSFACTOR",
+   "CLAMPCOMPOSITES",
+   "ENGINE_TIMESCALE",
+   "ENGINE_AUDIO_GAIN",
+   "ENGINE_CLASSIC_K",
+   "ENGINE_CLASSIC_EXP",
+   "AUTOMUTE_DEFAULT",
+   "AUDIO_REACTIVE_DEFAULT",
+   "MOUSE_DEFAULT",
+   "PARALLAX_DEFAULT",
+   "PARTICLES_DEFAULT",
+   "CLOSE_TO_TRAY",
+   "INTERFACE_SCALE",
+   "DETECT_MODE",
+   "DETECT_INTERVAL_SEC",
+   "REVIEW_REQUIRED",
+   "STORAGE_POLICY",
+   "ENGINE_BIN",
+   "ASSETS_DIR",
+   "WALLPAPERS_DIR",
+   "WORKSHOP_DIR",
+   "STEAM_DIR",
+   "OVERRIDE_MUTE",
+   "OVERRIDE_AUDIO_OFF",
+   "OVERRIDE_PARALLAX_OFF",
+   "OVERRIDE_MOUSE_OFF"
+  ],
+  "tag_states": [
+   "good",
+   "bad",
+   "review"
+  ],
+  "theme": [
+   "active",
+   "overlays"
+  ],
+  "wp": [
+   "BG",
+   "TYPE",
+   "SCALING",
+   "FPS",
+   "SPEED",
+   "CC",
+   "CC_MODE",
+   "AUDIO_GAIN",
+   "CLASSIC_K",
+   "CLASSIC_EXP",
+   "VOLUME",
+   "CLAMPING",
+   "RENDER_RESOLUTION",
+   "SSFACTOR",
+   "CLAMPCOMPOSITES",
+   "TEXCOMP",
+   "TEXTURE_DETAIL",
+   "AUTOMUTE",
+   "AUDIO_REACTIVE",
+   "MOUSE",
+   "FULLSCREEN_PAUSE",
+   "FIT_ZOOM",
+   "FIT_PAN_X",
+   "FIT_PAN_Y",
+   "SKIP",
+   "ALIAS"
+  ]
+ },
+ "settings": {
+  "ACTIVE_PLAYLIST": "corpus-cover",
+  "APP_CONDITION_BEHAVIOR": "pause",
+  "ASSETS_DIR": "/tmp/lwe-corpus-k0k98y0q/assets",
+  "AUDIO_REACTIVE_DEFAULT": true,
+  "AUTOMUTE_DEFAULT": true,
+  "CLAMPCOMPOSITES": 4.0,
+  "CLOSE_TO_TRAY": true,
+  "DETECT_INTERVAL_SEC": 86400,
+  "DETECT_MODE": "launch",
+  "ENGINE_AUDIO_GAIN": 10.0,
+  "ENGINE_BIN": "/tmp/lwe-corpus-k0k98y0q/lwe-engine",
+  "ENGINE_CLAMP": "border",
+  "ENGINE_CLASSIC_EXP": 9.6,
+  "ENGINE_CLASSIC_K": 7.7,
+  "ENGINE_FPS": 480,
+  "ENGINE_HWDEC": "auto",
+  "ENGINE_LAYER": "bottom",
+  "ENGINE_SCALING": "stretch",
+  "ENGINE_TEXCOMP": true,
+  "ENGINE_TIMESCALE": 10.0,
+  "ENGINE_VOLUME": 100,
+  "FULLSCREEN_BEHAVIOR": "pause",
+  "INTERFACE_SCALE": 150,
+  "INTERVAL": 7200,
+  "MOUSE_DEFAULT": true,
+  "ORDER": "sequential",
+  "OVERRIDE_AUDIO_OFF": true,
+  "OVERRIDE_MOUSE_OFF": true,
+  "OVERRIDE_MUTE": true,
+  "OVERRIDE_PARALLAX_OFF": true,
+  "PARALLAX_DEFAULT": true,
+  "PARTICLES_DEFAULT": true,
+  "PAUSE_ON_FULLSCREEN": true,
+  "PAUSE_ON_LOCK": true,
+  "PAUSE_RECOVERY_ACTION": "close",
+  "PAUSE_RECOVERY_CONDITION": "fullscreen",
+  "RENDER_RESOLUTION": "sharpfx",
+  "REVIEW_REQUIRED": true,
+  "ROTATION_ENABLED": true,
+  "SCHEDULE": "06:00=corpus-cover;18:30=corpus-missing",
+  "SCHEDULE_ENABLED": true,
+  "SSFACTOR": 4.0,
+  "STEAM_DIR": "/tmp/lwe-corpus-k0k98y0q/steam",
+  "STORAGE_POLICY": "reference",
+  "TEXTURE_DETAIL": "full",
+  "WALLPAPERS_DIR": "/tmp/lwe-corpus-k0k98y0q/wallpapers",
+  "WORKSHOP_DIR": "/tmp/lwe-corpus-k0k98y0q/workshop"
+ },
+ "tags": [
+  {
+   "id": "corpus-dense",
+   "state": "good",
+   "title": "Rain, Ōsaka night"
+  },
+  {
+   "id": "corpus-cover",
+   "state": "review",
+   "title": "Cover"
+  },
+  {
+   "id": "corpus-sparse",
+   "state": "bad",
+   "title": "Sparse"
+  },
+  {
+   "id": "corpus-held",
+   "state": "bad",
+   "title": "Held, absent"
+  },
+  {
+   "id": "corpus-ref",
+   "state": "good",
+   "title": "Reference"
+  }
+ ],
+ "theme": {
+  "active": "custom1",
+  "overlays": {
+   "custom1": {
+    "accent": "#FF2E97",
+    "border": "#2C2E31"
+   }
+  }
+ },
+ "variant": 1,
+ "variants": 4
+}

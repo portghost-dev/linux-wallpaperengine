@@ -85,17 +85,17 @@ def ring(spec: dict) -> list | None:
         return [False, True]
     if t == "bool_or_empty":
         return [False, True, ""]
-    if t in ("int", "int_or_empty", "float"):
-        num = float if t == "float" else int
+    if t in ("int", "int_or_empty", "float", "float_or_empty"):
+        num = float if t in ("float", "float_or_empty") else int
         lo, hi = spec.get("min"), spec.get("max")
         if lo is not None and hi is not None:
-            mid = round((lo + hi) / 2, 3) if t == "float" else (lo + hi) // 2
+            mid = round((lo + hi) / 2, 3) if num is float else (lo + hi) // 2
             vals: list = [num(lo), num(hi), num(mid), num(mid)]
         else:
             d = spec.get("default")
             base = num(d) if isinstance(d, (int, float)) and not isinstance(d, bool) else num(1)
             vals = [base + num(1), base + num(7), base + num(42), base + num(13)]
-        if t == "int_or_empty":
+        if t in ("int_or_empty", "float_or_empty"):
             vals = vals[:3] + [""]   # empty is this type's "let the engine decide"
         return vals
     return None

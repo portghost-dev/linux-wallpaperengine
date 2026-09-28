@@ -339,7 +339,7 @@ SETTING_ROWS: dict[str, str] = {
 WP_ROWS: dict[str, str] = {
     **dict.fromkeys(_WP_VERBS, "wp_live"),
     **dict.fromkeys(("CC", "SCALING", "CLAMPING", "AUTOMUTE", "RENDER_RESOLUTION", "TEXCOMP",
-                     "TEXTURE_DETAIL"), "wp_build"),
+                     "TEXTURE_DETAIL", "SSFACTOR", "CLAMPCOMPOSITES"), "wp_build"),
 }
 
 

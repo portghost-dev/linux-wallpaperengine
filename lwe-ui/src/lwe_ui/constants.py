@@ -29,6 +29,7 @@ ACQUIRE_METHODS = ("client", "steamcmd")
 LAYERS = ("background", "bottom", "top", "overlay")  # wlr-layer-shell anchor (engine --layer)
 HWDECS = ("no", "auto")  # vendor-specific decoders cut (S-12.5): universal only                     # video decode path (LWE_HWDEC)
 RENDER_RESOLUTIONS = ("screen", "sharpfx", "wallpaper")  # resolution clamp: all, scene target only, none (LWE_SSFACTOR, LWE_CLAMPCOMPOSITES)
+CLAMP_KEYS = ("SSFACTOR", "CLAMPCOMPOSITES")
 TEXTURE_DETAILS = ("auto", "full")  # mip residency: display-matched resident chains vs authored     # (LWE_TEXDETAIL)
 UI_MODES = ("normal", "advanced")
 DETECT_MODES = ("manual", "launch", "interval", "watch")
@@ -85,6 +86,12 @@ def resolve_speed(conf_speed, factor) -> float:
     return max(ENGINE_SPEED_MIN, min(ENGINE_SPEED_MAX, speed))
 
 
+def resolution_word_numbers(word) -> tuple[float, float] | None:
+    """The scene and effect clamp numbers a RENDER_RESOLUTION word stands for: screen 1 and 1,
+    sharpfx 1 and 0, wallpaper 0 and 0; None for any other value."""
+    return {"screen": (1.0, 1.0), "sharpfx": (1.0, 0.0), "wallpaper": (0.0, 0.0)}.get(word)
+
+
 SETTINGS_SCHEMA: dict[str, dict] = {
     "ROTATION_ENABLED": {"type": "bool", "default": True},
     "ORDER": {"type": "enum", "default": "shuffle", "choices": ORDERS},
@@ -109,6 +116,8 @@ SETTINGS_SCHEMA: dict[str, dict] = {
     "ENGINE_TEXCOMP": {"type": "bool", "default": True},
     "TEXTURE_DETAIL": {"type": "enum", "default": "auto", "choices": TEXTURE_DETAILS},
     "RENDER_RESOLUTION": {"type": "enum", "default": "screen", "choices": RENDER_RESOLUTIONS},
+    "SSFACTOR": {"type": "float", "default": 1.0, "min": 0.0, "max": 4.0},
+    "CLAMPCOMPOSITES": {"type": "float", "default": 1.0, "min": 0.0, "max": 4.0},
     "ENGINE_TIMESCALE": {"type": "float", "default": 1.0, "min": 0.1, "max": 10.0},
     # Audio response dials. ENGINE-NATIVE values - the
     # same units set-tuning takes and the same units editor.AUDIO_DIALS maps to and from.
@@ -150,7 +159,7 @@ SETTINGS_SCHEMA: dict[str, dict] = {
 # engine-restart follow-up here so that a restore runs without Qt.
 REACH_NEXT_SHOW = ("ENGINE_SCALING", "ENGINE_CLAMP", "AUTOMUTE_DEFAULT")
 REACH_SERVICE_RESTART = ("ENGINE_LAYER", "ENGINE_HWDEC", "ENGINE_TEXCOMP", "TEXTURE_DETAIL",
-                         "RENDER_RESOLUTION", "ASSETS_DIR")
+                         "RENDER_RESOLUTION", "SSFACTOR", "CLAMPCOMPOSITES", "ASSETS_DIR")
 REACH_PANEL = ("CLOSE_TO_TRAY", "STEAM_DIR", "INTERFACE_SCALE")
 REACH_BOUNDARY = ("SCHEDULE_ENABLED", "SCHEDULE")
 REACH_NEXT_SCAN = ("WORKSHOP_DIR", "WALLPAPERS_DIR")
@@ -178,6 +187,8 @@ WP_SCHEMA: dict[str, dict] = {
     # the quality switches per wallpaper; "" inherits the Engine > Advanced value, which
     # reaches the engine through its env file, so only a set value rides the show
     "RENDER_RESOLUTION": {"type": "enum_or_empty", "default": "", "choices": RENDER_RESOLUTIONS},
+    "SSFACTOR": {"type": "float_or_empty", "default": "", "min": 0.0, "max": 4.0},
+    "CLAMPCOMPOSITES": {"type": "float_or_empty", "default": "", "min": 0.0, "max": 4.0},
     "TEXCOMP": {"type": "bool_or_empty", "default": ""},
     "TEXTURE_DETAIL": {"type": "enum_or_empty", "default": "", "choices": TEXTURE_DETAILS},
     "AUTOMUTE": {"type": "bool", "default": True},

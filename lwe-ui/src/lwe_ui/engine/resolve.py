@@ -3,6 +3,7 @@ resolved into the engine's show arguments. Plain Python over the store; no Qt im
 """
 from __future__ import annotations
 
+import math
 import os
 from typing import Any
 
@@ -253,10 +254,11 @@ def resolve_show_args(wid: str) -> tuple[str, dict[str, Any]]:
 
     # the quality switches ride the show only when the wallpaper set them; absent means
     # the engine's launch environment, which is where the global setting already lives
-    res = str(conf.get("RENDER_RESOLUTION") or "").strip()
-    if res in C.RENDER_RESOLUTIONS:
-        args["ssfactor"] = 0.0 if res == "wallpaper" else 1.0
-        args["clampcomposites"] = 1.0 if res == "screen" else 0.0
+    clamps = wp.clamp_values(conf, wid)
+    for key, name in (("SSFACTOR", "ssfactor"), ("CLAMPCOMPOSITES", "clampcomposites")):
+        value = clamps[key][0]
+        if value is not None and math.isfinite(value):
+            args[name] = max(0.0, min(4.0, value))
     texcomp = conf.get("TEXCOMP")
     if texcomp is not None and str(texcomp).strip() != "":
         args["texcomp"] = _conf_true(texcomp, True)

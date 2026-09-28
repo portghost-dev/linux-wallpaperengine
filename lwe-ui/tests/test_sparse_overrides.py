@@ -36,7 +36,7 @@ def main() -> None:
     assert wp.load("1")["SPEED"] == 1.0, "the dense reader still materialises defaults on read"
 
     # sparsify: a dense file loses its default-valued keys and keeps the rest
-    dense_text = "\n".join(f"{k}={s['default']}" for k, s in C.WP_SCHEMA.items() if k not in ("BG", "TYPE"))
+    dense_text = "\n".join(f"{k}={s['default']}" for k, s in C.WP_SCHEMA.items() if k not in ("BG", "TYPE", *C.CLAMP_KEYS))
     (paths.wp_dir() / "2.conf").write_text(f"BG=2\nTYPE=scene\n{dense_text}\nSPEED=2.5\nVOLUME=0\nPROP_x=1\n")
     (paths.wp_dir() / "3.conf").write_text("BG=3\nMOUSE=true\n")
     report = wp.sparsify_overrides()
