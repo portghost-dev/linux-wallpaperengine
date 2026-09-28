@@ -18,9 +18,11 @@ inside a burst's debounce leaves the re-show to the burst, which clears the mark
 backup import and the readiness bundle of a service start. A backup restore records BUNDLE and
 CURRENT before its store writes and holds the marker until the last one ends, so a drain admitted
 before the first store write, or before the last write, cannot clear it; an import refused by a busy
-store writes no pre-restore snapshot, so five of them leave the snapshots as they were. The engine is
-an api_client recorder with a scripted status; the child process gets an environment built from
-scratch.
+store writes no pre-restore snapshot, so five of them leave the snapshots as they were. The panel's
+import keeps the recovery snapshot rules: a failed import leaves recovery.json naming its snapshot, a
+retry takes no snapshot, a success removes recovery.json, and a named snapshot that is gone refuses
+the import with the way to clear it. The engine is an api_client recorder with a scripted status; the
+child process gets an environment built from scratch.
 
 Run: PYTHONPATH=src python3 tests/test_bridge_sync.py
 """
@@ -29,6 +31,7 @@ import contextlib
 import copy
 import functools
 import dataclasses
+import json
 import os
 import shutil
 import subprocess
@@ -565,6 +568,73 @@ class BridgeSyncTest(unittest.TestCase):
                 self.assertTrue(receipt.get("refused"), receipt)
                 self.assertTrue(receipt["errors"][-1]["reason"].startswith("Store busy"), receipt["errors"])
         self.assertEqual(sorted(p.name for p in backups.iterdir()), before)
+
+    def test_the_panels_import_keeps_the_recovery_snapshot_rules(self) -> None:
+        archive = self._archive()
+        backups = paths.state_dir() / "backups"
+        rec = backups / "recovery.json"
+        page = settings_bridge.SettingsBridge(self.backend)
+        failed: list = []
+        page.commitFailed.connect(lambda keys, reason: failed.append(reason))
+
+        def unwritable(plan, receipt):
+            receipt["errors"].append({"file": "rules/pause-blacklist.txt", "reason": "could not be written: full"})
+            return False
+        first_fails = (dataclasses.replace(registry.STORES[0], apply=unwritable), *registry.STORES[1:])
+        last_fails = (*registry.STORES[:-1], dataclasses.replace(registry.STORES[-1], apply=unwritable))
+
+        def snapshots() -> list:
+            return sorted(backups.glob("pre-restore-*.lwebackup"))
+
+        def named() -> str | None:
+            return json.loads(rec.read_text(encoding="utf-8"))["snapshot"] if rec.exists() else None
+
+        with self.engine(status()):
+            with mock.patch.object(registry, "STORES", first_fails):
+                self.assertFalse(page.importBackup(str(archive)), "refused after its snapshot")
+            first = snapshots()
+            with mock.patch.object(registry, "STORES", last_fails):
+                self.assertTrue(page.importBackup(str(archive)), "the retry fails part way")
+            self.assertEqual((len(first), snapshots(), named()), (1, first, first[0].name))
+            self.assertTrue(page.importBackup(str(archive)))
+            self.assertEqual((snapshots(), named()), (first, None), "the success took a snapshot or kept the record")
+            with mock.patch.object(registry, "STORES", last_fails):
+                self.assertTrue(page.importBackup(str(archive)))
+            second = [p for p in snapshots() if p not in first]
+            self.assertEqual(len(second), 1, "a new run of failures takes its own snapshot")
+            self.assertEqual(named(), second[0].name)
+            rec.write_text(json.dumps({"snapshot": "pre-restore-20200101-000000.lwebackup",
+                                       "since": "2020-01-01T00:00:00"}), encoding="utf-8")
+            settings.update({"ENGINE_FPS": "30"})
+            self.assertFalse(page.importBackup(str(archive)))
+        gone = backups / "pre-restore-20200101-000000.lwebackup"
+        self.assertEqual(failed, ["could not be written: full",
+                                  f"Nothing was imported: {gone}, the snapshot kept from before an earlier failed "
+                                  f"import, is missing. Deleting {rec} clears this block."])
+        self.assertEqual((settings.load()["ENGINE_FPS"], rec.exists()), (30, True))
+
+    def test_the_panels_import_settles_inside_its_restore_lock(self) -> None:
+        archive = self._archive()
+        depth, seen = [0], []
+        real_restoring, real_settle = backup.restoring, backup.settle
+
+        @contextlib.contextmanager
+        def counted():
+            with real_restoring() as got:
+                depth[0] += 1
+                try:
+                    yield got
+                finally:
+                    depth[0] -= 1
+
+        def settle(r, failed):
+            seen.append(depth[0])
+            return real_settle(r, failed)
+        page = settings_bridge.SettingsBridge(self.backend)
+        with self.engine(status()), mock.patch.object(backup, "restoring", counted), \
+                mock.patch.object(backup, "settle", settle):
+            self.assertTrue(page.importBackup(str(archive)))
+        self.assertEqual(seen, [1], "settle ran outside the panel's restore lock")
 
     def test_import_during_burst(self) -> None:
         archive = self._archive()

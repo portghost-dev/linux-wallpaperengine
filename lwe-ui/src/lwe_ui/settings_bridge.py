@@ -425,39 +425,44 @@ class SettingsBridge(QObject):
 
     @Slot(str, result=bool)
     def importBackup(self, url: str) -> bool:
-        """Open dialog accept: preflight, write through the schemas, refresh, receipt."""
+        """Open dialog accept: preflight, write through the schemas, refresh, receipt; then
+        backup.settle, with a refusal or any write failure in the receipt as the failed verdict, all
+        inside backup.restoring()."""
         local = self._local(url)
         if not local or not os.path.isfile(local):
             return self._fail("Configuration", "That file is not an LWE backup.")
-        try:
-            r = backup.apply(backup.preflight(local))
-        except Exception:
-            return self._fail("Configuration", "That backup could not be restored.")
-        log = logging.getLogger("lwe_ui.backup")
-        if r.get("refused"):
-            why = (r.get("errors") or [{}])[0].get("reason") or "That backup could not be restored."
-            return self._fail("Configuration", why)
-        log.info("restored %s: %s", local, json.dumps(r["counts"]))
-        for key in ("dropped", "held", "reresolved", "adjusted", "preserved", "notes",
-                    "followups", "errors"):
-            for item in r.get(key, []):
-                log.info("restore %s: %s", key, json.dumps(item))
-        self._receipt = r
-        # the same refresh a settings edit gets, then the engine sees the new policy
-        try:
-            self._backend.refresh()
-            self._backend.settingsChanged.emit()
-            self._backend.playlistsChanged.emit()
-            self._backend.themeRefreshRequested.emit()
-            push.sync_all("window", ("BUNDLE", "CURRENT"), defer_current=self._backend.delivery_due())
-        except Exception:
-            pass
-        if any(f["kind"] == "engine-restart" for f in r["followups"]):
+        with backup.restoring():
             try:
-                daemon_unit.write_env()
+                r = backup.apply(backup.preflight(local))
+            except Exception:
+                return self._fail("Configuration", "That backup could not be restored.")
+            log = logging.getLogger("lwe_ui.backup")
+            if r.get("refused"):
+                backup.settle(r, True)
+                why = (r.get("errors") or [{}])[0].get("reason") or "That backup could not be restored."
+                return self._fail("Configuration", why)
+            log.info("restored %s: %s", local, json.dumps(r["counts"]))
+            for key in ("dropped", "held", "reresolved", "adjusted", "preserved", "notes",
+                        "followups", "errors"):
+                for item in r.get(key, []):
+                    log.info("restore %s: %s", key, json.dumps(item))
+            self._receipt = r
+            # the same refresh a settings edit gets, then the engine sees the new policy
+            try:
+                self._backend.refresh()
+                self._backend.settingsChanged.emit()
+                self._backend.playlistsChanged.emit()
+                self._backend.themeRefreshRequested.emit()
+                push.sync_all("window", ("BUNDLE", "CURRENT"), defer_current=self._backend.delivery_due())
             except Exception:
                 pass
-            self._pending = None
+            if any(f["kind"] == "engine-restart" for f in r["followups"]):
+                try:
+                    daemon_unit.write_env()
+                except Exception:
+                    pass
+                self._pending = None
+            backup.settle(r, bool(r.get("errors")))
         self.changed.emit()
         self.truthRefreshed.emit()
         self.receiptChanged.emit()

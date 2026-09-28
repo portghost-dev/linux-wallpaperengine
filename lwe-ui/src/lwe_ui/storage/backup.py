@@ -27,7 +27,9 @@ import io
 import json
 import os
 import socket
+import threading
 import zipfile
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,8 @@ EXTENSION = ".lwebackup"
 MANIFEST = "manifest.json"
 #: pre-restore snapshots kept under state_dir()/"backups"; the oldest beyond this are deleted
 SNAPSHOTS_KEPT = 5
+#: beside the snapshots: names the snapshot an import that failed left as the way back (settle)
+RECOVERY = "recovery.json"
 
 
 def default_name() -> str:
@@ -197,9 +201,76 @@ def _referential(r: dict[str, Any], plan: dict[str, Any], current: dict[str, Any
         r["notes"].append({"kind": "dangling", "key": "ACTIVE_PLAYLIST", "slug": active})
 
 
+_restore = threading.local()
+
+
+@contextlib.contextmanager
+def restoring() -> Iterator[bool]:
+    """state_dir()/restore.lock for the body of the with statement, taken without waiting: True while
+    this thread holds it, False when another restore holds it. A door holds it from apply through its
+    later steps and settle, so no other import runs in between; a nested use on the same thread shares
+    the outermost one and takes no second flock."""
+    outer = getattr(_restore, "held", None)
+    if outer is not None:
+        yield outer
+        return
+    paths.ensure_dirs()
+    with open(paths.state_dir() / "restore.lock", "w") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            got = True
+        except OSError:
+            got = False
+        _restore.held = got
+        try:
+            yield got
+        finally:
+            _restore.held = None
+
+
+def _recovery() -> tuple[Path, str | None] | None:
+    """recovery.json's path and the snapshot file name it keeps, or None when there is no
+    recovery.json; the name is None when the file cannot be read or names no snapshot file."""
+    rec = paths.state_dir() / "backups" / RECOVERY
+    if not os.path.lexists(rec):
+        return None
+    try:
+        name = json.loads(rec.read_text(encoding="utf-8")).get("snapshot")
+    except (OSError, ValueError, AttributeError):
+        return rec, None
+    if not isinstance(name, str) or name in ("", ".", "..") or Path(name).name != name:
+        return rec, None
+    return rec, name
+
+
+def settle(r: dict[str, Any], failed: bool) -> None:
+    """An import's last step, from the door that ran it, still inside that door's restoring(), with
+    the door's verdict: an import that failed after taking its pre-restore snapshot makes that
+    snapshot the recovery snapshot, named with the time in recovery.json, written atomically; one
+    that failed without taking a snapshot leaves recovery.json as it is; one that succeeded removes
+    it. A recovery.json that cannot be written is added to the receipt's errors."""
+    rec = paths.state_dir() / "backups" / RECOVERY
+    if not failed:
+        with contextlib.suppress(OSError):
+            rec.unlink(missing_ok=True)
+        return
+    taken = next((n.get("path") for n in r.get("notes") or [] if n.get("kind") == "snapshot"), None)
+    if not taken:
+        return
+    tmp = rec.with_name(rec.name + ".part")
+    try:
+        tmp.write_text(json.dumps({"snapshot": Path(taken).name,
+                                   "since": datetime.datetime.now().isoformat(timespec="seconds")}),
+                       encoding="utf-8")
+        os.replace(tmp, rec)
+    except OSError as exc:
+        r.setdefault("errors", []).append({"file": RECOVERY, "reason": f"could not be written: {exc}"})
+
+
 def snapshot(r: dict[str, Any]) -> bool:
     """Export the configuration as it stands into state_dir()/backups, keeping the newest
-    SNAPSHOTS_KEPT of them. False when nothing was written, which abandons the apply."""
+    SNAPSHOTS_KEPT of them and the one recovery.json names. False when nothing was written, which
+    abandons the apply."""
     try:
         d = paths.state_dir() / "backups"
         d.mkdir(parents=True, exist_ok=True)
@@ -215,7 +286,9 @@ def snapshot(r: dict[str, Any]) -> bool:
             path.unlink(missing_ok=True)
             first = er["errors"][0]
             raise RuntimeError(f"{first['file']} {first['reason']}")
-        by_age = sorted(d.glob(f"pre-restore-*{EXTENSION}"), key=lambda p: p.stat().st_mtime_ns)
+        kept = (_recovery() or (None, None))[1]
+        by_age = sorted((p for p in d.glob(f"pre-restore-*{EXTENSION}") if p.name != kept),
+                        key=lambda p: p.stat().st_mtime_ns)
         for old in by_age[:-SNAPSHOTS_KEPT]:
             old.unlink(missing_ok=True)
     except Exception as exc:
@@ -228,27 +301,42 @@ def snapshot(r: dict[str, Any]) -> bool:
 
 
 def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
-    """Write a preflight's plan through this build's stores. The locks of the stores it writes
-    (each Store's name is its lock's) are taken first, in rank order, then the sync marker records
-    BUNDLE and CURRENT with a raised generation, and only then is the pre-restore snapshot of what
-    is there now written; a busy store lock or a marker that cannot be set refuses the import
-    before anything is written, the snapshot included. The marker stays held until the last store
-    write ends, so the engine side is owed before any store changes and no clearer can clear it
-    first; it is released before the store locks. Returns the receipt with the plan removed and
-    any write failure added to errors; the receipt is refused only when nothing was written."""
+    """Write a preflight's plan through this build's stores, under restoring(): another restore
+    holding it refuses the import. A recovery.json whose snapshot is missing, or that cannot be read,
+    refuses it next, with nothing written. The locks of the stores it writes (each Store's name is its
+    lock's) are taken next, in rank order, then the sync marker records BUNDLE and CURRENT with a
+    raised generation, and only then is the pre-restore snapshot of what is there now written, unless
+    recovery.json names one, which holds the state from before the first failed import; a busy store
+    lock or a marker that cannot be set refuses the import before anything is written, the snapshot
+    included. The marker stays held until the last store write ends, so the engine side is owed
+    before any store changes and no clearer can clear it first; it is released before the store
+    locks. Returns the receipt with the plan removed and any write failure added to errors; the
+    receipt is refused only when nothing was written. The door that ran the import then calls
+    settle, still inside its restoring()."""
     r = dict(plan_receipt)
     plan = r.pop("plan", None) or {}
     if r.get("refused"):
         return r
-    paths.ensure_dirs()
-    lock = open(paths.state_dir() / "restore.lock", "w")
-    try:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+    with restoring() as ours:
+        if not ours:
             r["errors"].append({"file": "restore", "reason": "Another restore is running."})
             r["refused"] = True
             return r
+        recovery = _recovery()
+        if recovery is not None:
+            rec, name = recovery
+            if name is None:
+                reason = (f"Nothing was imported: {rec} cannot be read, so the snapshot it keeps from before an "
+                          f"earlier failed import cannot be found. Deleting {rec} clears this block.")
+            elif not (rec.parent / name).is_file():
+                reason = (f"Nothing was imported: {rec.parent / name}, the snapshot kept from before an earlier "
+                          f"failed import, is missing. Deleting {rec} clears this block.")
+            else:
+                reason = None
+            if reason is not None:
+                r["errors"].append({"file": RECOVERY, "reason": reason})
+                r["refused"] = True
+                return r
         from ..engine import marker
         with contextlib.ExitStack() as held:
             try:
@@ -265,7 +353,7 @@ def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
                 r["errors"].append({"file": "sync-pending", "reason": f"The sync marker could not be written: {exc}"})
                 r["refused"] = True
                 return r
-            if not snapshot(r):
+            if recovery is None and not snapshot(r):
                 return r
             written = 0
             for st in registry.STORES:
@@ -275,8 +363,6 @@ def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
                     return r
                 written += 1
             foreign.apply_plan(plan, r)
-    finally:
-        lock.close()
     return r
 
 
@@ -362,7 +448,10 @@ def main(argv: list[str] | None = None) -> int:
         r = preflight(args.file)
         r.pop("plan", None)
         return _print_receipt(r)
-    return _print_receipt(import_from(args.file))
+    with restoring():
+        r = import_from(args.file)
+        settle(r, bool(r.get("errors")))
+    return _print_receipt(r)
 
 
 if __name__ == "__main__":

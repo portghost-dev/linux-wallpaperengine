@@ -12,10 +12,16 @@ Run: PYTHONPATH=src python3 tests/test_cli_backup.py
 """
 import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import contextlib
+import datetime
+import fcntl
 import io
+import json
 import os
 import shutil
+import subprocess
+import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -179,6 +185,129 @@ class BackupHandoffTest(unittest.TestCase):
                          (1, "", f"cannot write {self.sender}/newdir/: it names a folder\n"))
         self.assertFalse((self.sender / "newdir").exists())
 
+    def backups(self) -> Path:
+        return Path(self.env["XDG_STATE_HOME"]) / "lwe" / "backups"
+
+    def recovery(self) -> dict | None:
+        rec = self.backups() / "recovery.json"
+        return json.loads(rec.read_text(encoding="utf-8")) if rec.exists() else None
+
+    def failing_archive(self, then: str) -> Path:
+        """An archive whose ASSETS_DIR names a folder with a space, so every import of it fails at
+        engine-env after the stores are written; settings.conf is then `then`."""
+        assets = Path(self.env["HOME"]) / "My Assets"
+        assets.mkdir()
+        self.settings(f"ASSETS_DIR={assets}\nENGINE_FPS=45\n")
+        archive = self.root / "a.lwebackup"
+        self.assertEqual(self.lwe("backup", "export", str(archive))[0], 0)
+        self.settings(then)
+        return archive
+
+    def written(self) -> dict[str, bytes]:
+        """Every file under the lwe config and state folders but the restore lock, with its bytes."""
+        tree = {}
+        for base in (self.config, Path(self.env["XDG_STATE_HOME"]) / "lwe"):
+            for f in sorted(base.rglob("*")):
+                if f.is_file() and f.name != "restore.lock":
+                    tree[str(f)] = f.read_bytes()
+        return tree
+
+    def test_three_failing_imports_keep_one_snapshot_that_recovery_json_names_and_pruning_keeps(self) -> None:
+        archive = self.failing_archive("ASSETS_DIR=\nENGINE_FPS=30\n")
+        self.backups().mkdir(parents=True)
+        for n in range(6):
+            older = self.backups() / f"pre-restore-20200101-00000{n}.lwebackup"
+            shutil.copy(archive, older)
+            os.utime(older, (1_600_000_000 + n, 1_600_000_000 + n))
+        runs = [self.lwe("backup", "import", str(archive)) for _ in range(3)]
+        self.assertEqual([code for code, _out, _err in runs], [1, 1, 1], runs[0][1])
+        taken = [p for p in self.backups().glob("pre-restore-*.lwebackup")
+                 if not p.name.startswith("pre-restore-2020")]
+        self.assertEqual(len(taken), 1, [p.name for p in self.backups().iterdir()])
+        record = self.recovery()
+        self.assertEqual(record["snapshot"], taken[0].name)
+        self.assertIsInstance(datetime.datetime.fromisoformat(record["since"]), datetime.datetime)
+        way_back = (f"The configuration from before this import is in {taken[0]}; "
+                    f"lwe backup import {taken[0]} puts it back.")
+        self.assertEqual([way_back in out.splitlines() for _code, out, _err in runs], [True, False, False])
+        os.utime(taken[0], (1_500_000_000, 1_500_000_000))
+        folders = {name: self.env[name] for name in ("HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME")}
+        with mock.patch.dict(os.environ, folders):
+            from lwe_ui.storage import backup
+            self.assertTrue(backup.snapshot({"errors": [], "notes": []}))
+        self.assertTrue(taken[0].exists(), "the named snapshot outlived the pruning though it is the oldest")
+        self.assertEqual(len(list(self.backups().glob("pre-restore-*.lwebackup"))), backup.SNAPSHOTS_KEPT + 1)
+
+    def test_a_successful_import_removes_recovery_json(self) -> None:
+        self.settings("ENGINE_FPS=45\n")
+        archive = self.root / "a.lwebackup"
+        self.assertEqual(self.lwe("backup", "export", str(archive))[0], 0)
+        self.backups().mkdir(parents=True)
+        named = self.backups() / "pre-restore-20200101-000000.lwebackup"
+        shutil.copy(archive, named)
+        headless = [sys.executable, "-m", "lwe_ui.storage.backup", "restore", str(archive)]
+        for door in ("lwe backup import", "python3 -m lwe_ui.storage.backup restore"):
+            with self.subTest(door=door):
+                (self.backups() / "recovery.json").write_text(
+                    json.dumps({"snapshot": named.name, "since": "2020-01-01T00:00:00"}), encoding="utf-8")
+                if door.startswith("lwe"):
+                    code, out = self.lwe("backup", "import", str(archive))[:2]
+                else:
+                    run = subprocess.run(headless, env=self.env, cwd=self.env["HOME"], capture_output=True,
+                                         encoding="utf-8", timeout=60)
+                    code, out = run.returncode, run.stdout
+                self.assertEqual((code, self.recovery()), (0, None), out)
+                self.assertEqual(list(self.backups().glob("pre-restore-*")), [named], "a snapshot was taken")
+
+    def test_a_successful_import_of_the_named_snapshot_removes_recovery_json(self) -> None:
+        archive = self.failing_archive("ASSETS_DIR=\nENGINE_FPS=30\n")
+        self.assertEqual(self.lwe("backup", "import", str(archive))[0], 1)
+        named = self.backups() / self.recovery()["snapshot"]
+        code, out, err = self.lwe("backup", "import", str(named))
+        self.assertEqual((code, err), (0, ""), out)
+        self.assertIsNone(self.recovery())
+        self.assertIn("ENGINE_FPS=30", (self.config / "settings.conf").read_text(encoding="utf-8"))
+        self.assertEqual(list(self.backups().glob("pre-restore-*")), [named])
+
+    def test_a_named_snapshot_that_is_gone_refuses_the_import_writes_nothing_and_keeps_recovery_json(self) -> None:
+        self.settings("ENGINE_FPS=45\n")
+        archive = self.root / "a.lwebackup"
+        self.assertEqual(self.lwe("backup", "export", str(archive))[0], 0)
+        self.settings("ENGINE_FPS=30\n")
+        not_a_backup = self.root / "notes.txt"
+        not_a_backup.write_text("hello\n", encoding="utf-8")
+        self.assertEqual(self.lwe("backup", "import", str(not_a_backup))[0], 1)
+        self.assertIsNone(self.recovery(), "a refusal that took no snapshot wrote recovery.json")
+        self.backups().mkdir(parents=True, exist_ok=True)
+        rec = self.backups() / "recovery.json"
+        rec.write_text(json.dumps({"snapshot": "pre-restore-20200101-000000.lwebackup",
+                                   "since": "2020-01-01T00:00:00"}), encoding="utf-8")
+        before = self.written()
+        code, out, err = self.lwe("backup", "import", str(archive))
+        gone = self.backups() / "pre-restore-20200101-000000.lwebackup"
+        self.assertEqual((code, out, err), (1, f"Refused {archive}\nerrors: file=recovery.json, reason=Nothing was "
+                                               f"imported: {gone}, the snapshot kept from before an earlier failed "
+                                               f"import, is missing. Deleting {rec} clears this block.\n", ""))
+        self.assertEqual(self.written(), before)
+        code, out, _err = self.lwe("backup", "preview", str(archive))
+        self.assertEqual((code, out.splitlines()[0][:15], self.written()), (0, "Would restore: ", before))
+
+    def test_an_unreadable_recovery_json_refuses_the_import_the_same_way(self) -> None:
+        self.settings("ENGINE_FPS=45\n")
+        archive = self.root / "a.lwebackup"
+        self.assertEqual(self.lwe("backup", "export", str(archive))[0], 0)
+        self.settings("ENGINE_FPS=30\n")
+        self.backups().mkdir(parents=True)
+        rec = self.backups() / "recovery.json"
+        rec.write_text("{not json", encoding="utf-8")
+        before = self.written()
+        code, out, err = self.lwe("backup", "import", str(archive))
+        self.assertEqual((code, out, err), (1, f"Refused {archive}\nerrors: file=recovery.json, reason=Nothing was "
+                                               f"imported: {rec} cannot be read, so the snapshot it keeps from before "
+                                               f"an earlier failed import cannot be found. Deleting {rec} clears this "
+                                               "block.\n", ""))
+        self.assertEqual(self.written(), before)
+
     def test_refusals(self) -> None:
         not_a_backup = self.root / "notes.txt"
         not_a_backup.write_text("hello\n", encoding="utf-8")
@@ -194,6 +323,198 @@ class BackupHandoffTest(unittest.TestCase):
         for words in (("backup",), ("backup", "export"), ("backup", "export", "a", "b"), ("backup", "frob", "a")):
             with self.subTest(words=words):
                 self.assertEqual(self.lwe(*words), (3, "", usage))
+
+
+class RefusedAfterTheSnapshotTest(unittest.TestCase):
+    """The command's refused import, in this process: a refusal that comes after the pre-restore snapshot
+    (the first store could not be written) leaves recovery.json naming that snapshot."""
+
+    def test_a_refusal_after_the_snapshot_leaves_recovery_json_naming_it(self) -> None:
+        import dataclasses
+        from lwe_ui import cli, version
+        from lwe_ui.storage import backup, paths, registry
+        root = ROOT / self._testMethodName / "home"
+        folders = {"HOME": str(root), "XDG_CONFIG_HOME": str(root / ".config"),
+                   "XDG_STATE_HOME": str(root / ".local" / "state"), "XDG_DATA_HOME": str(root / ".local" / "share")}
+
+        def unwritable(plan, receipt):
+            receipt["errors"].append({"file": "settings.conf", "reason": "could not be written: full"})
+            return False
+        first_fails = (dataclasses.replace(registry.STORES[0], apply=unwritable), *registry.STORES[1:])
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, folders):
+            paths.ensure_dirs()
+            archive = root / "a.lwebackup"
+            self.assertFalse(backup.export_to(archive)["errors"])
+            with mock.patch.object(registry, "STORES", first_fails), contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(err):
+                code = cli.main(["backup", "import", str(archive)], sender_stamp=version.panel_stamp())
+            backups = paths.state_dir() / "backups"
+            taken = list(backups.glob("pre-restore-*.lwebackup"))
+            record = json.loads((backups / "recovery.json").read_text(encoding="utf-8"))
+        self.assertEqual((code, err.getvalue()), (1, ""), out.getvalue())
+        self.assertTrue(out.getvalue().startswith(f"Refused {archive}\n"), out.getvalue())
+        self.assertEqual((len(taken), record["snapshot"]), (1, taken[0].name))
+
+
+class RestoreLockTest(unittest.TestCase):
+    """The restore lock (storage/backup.py restoring), in this process with its folders at scratch and the
+    screens faked: a nested use on one thread takes one flock, another thread meets the refusal, and an
+    import that overlaps another's settle is refused, so the import that runs after it has the last word.
+    Each test starts at most one thread: a daemon, joined with a timeout."""
+
+    def setUp(self) -> None:
+        from lwe_ui.engine import daemon_unit
+        from lwe_ui.storage import backup, paths
+        self.backup, self.paths = backup, paths
+        self.root = ROOT / self._testMethodName / "home"
+        folders = {"HOME": str(self.root), "XDG_CONFIG_HOME": str(self.root / ".config"),
+                   "XDG_STATE_HOME": str(self.root / ".local" / "state"),
+                   "XDG_DATA_HOME": str(self.root / ".local" / "share")}
+        for patcher in (mock.patch.dict(os.environ, folders),
+                        mock.patch.object(daemon_unit, "enumerate_outputs", lambda: ["DP-1"])):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        paths.ensure_dirs()
+        self.rec = paths.state_dir() / "backups" / "recovery.json"
+
+    def archives(self) -> tuple[Path, Path]:
+        """(clean, failing): the failing one's ASSETS_DIR names a folder with a space, so its import fails
+        at engine-env after the stores are written."""
+        conf = self.paths.config_dir() / "settings.conf"
+        conf.write_text("ASSETS_DIR=\nENGINE_FPS=45\n", encoding="utf-8")
+        clean = self.root / "clean.lwebackup"
+        self.assertFalse(self.backup.export_to(clean)["errors"])
+        assets = self.root / "My Assets"
+        assets.mkdir()
+        conf.write_text(f"ASSETS_DIR={assets}\n", encoding="utf-8")
+        failing = self.root / "failing.lwebackup"
+        self.assertFalse(self.backup.export_to(failing)["errors"])
+        self.fresh()
+        return clean, failing
+
+    def fresh(self) -> None:
+        """Settings with no ASSETS_DIR and ENGINE_FPS 30, and no recovery.json."""
+        (self.paths.config_dir() / "settings.conf").write_text("ASSETS_DIR=\nENGINE_FPS=30\n", encoding="utf-8")
+        self.rec.unlink(missing_ok=True)
+
+    def door(self, archive: Path) -> tuple[int, str]:
+        """lwe backup import through its verb, with its own streams: (exit code, what it printed)."""
+        from lwe_ui.cli import Context
+        from lwe_ui.cli.verbs import backup as verbs
+        out = io.StringIO()
+        code = verbs._import(Context(False, out, out, None, False), str(archive))
+        return code, out.getvalue()
+
+    def test_an_import_that_overlaps_another_ones_settle_is_refused_and_the_later_import_decides(self) -> None:
+        clean, failing = self.archives()
+        real = self.backup.settle
+        for first, later in ((failing, clean), (clean, failing)):
+            with self.subTest(first=first.name, later=later.name):
+                self.fresh()
+                at_settle, release = threading.Event(), threading.Event()
+                runs: dict = {}
+
+                def paused(r, failed):
+                    if threading.current_thread().name == "first":
+                        at_settle.set()
+                        release.wait(10)
+                    return real(r, failed)
+
+                with mock.patch.object(self.backup, "settle", paused):
+                    thread = threading.Thread(target=lambda: runs.update(first=self.door(first)), name="first",
+                                              daemon=True)
+                    thread.start()
+                    try:
+                        self.assertTrue(at_settle.wait(10), "the first import never reached its settle")
+                        runs["overlap"] = runs["later"] = self.door(later)
+                    finally:
+                        release.set()
+                        thread.join(10)
+                    if "Another restore is running." in runs["overlap"][1]:
+                        runs["later"] = self.door(later)
+                record = json.loads(self.rec.read_text(encoding="utf-8")) if self.rec.exists() else None
+                if later is clean:
+                    self.assertIsNone(record, "a later success left a record")
+                else:
+                    lines = runs["later"][1].splitlines()
+                    taken = next(line.split(" is in ", 1)[1].split(";", 1)[0] for line in lines
+                                 if line.startswith("The configuration from before this import is in "))
+                    self.assertEqual((record or {}).get("snapshot"), Path(taken).name,
+                                     "a later failure lost its record")
+                self.assertFalse(thread.is_alive())
+                self.assertEqual((runs["first"][0], runs["overlap"][0]), (1 if first is failing else 0, 1))
+                self.assertIn("errors: file=restore, reason=Another restore is running.\n", runs["overlap"][1])
+
+    def settle_depths(self) -> tuple[contextlib.ExitStack, list[int]]:
+        """Patches that count the restoring() uses open on this thread and record that count at each
+        settle; the stack undoes them."""
+        depth, seen = [0], []
+        real_restoring, real_settle = self.backup.restoring, self.backup.settle
+
+        @contextlib.contextmanager
+        def counted():
+            with real_restoring() as got:
+                depth[0] += 1
+                try:
+                    yield got
+                finally:
+                    depth[0] -= 1
+
+        def settle(r, failed):
+            seen.append(depth[0])
+            return real_settle(r, failed)
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(self.backup, "restoring", counted))
+        stack.enter_context(mock.patch.object(self.backup, "settle", settle))
+        return stack, seen
+
+    def test_the_command_and_the_headless_restore_settle_inside_their_restore_lock(self) -> None:
+        clean, _failing = self.archives()
+        stack, seen = self.settle_depths()
+        with stack, contextlib.redirect_stdout(io.StringIO()):
+            codes = [self.door(clean)[0], self.backup.main(["restore", str(clean)])]
+        self.assertEqual((codes, seen), ([0, 0], [1, 1]))
+
+    def test_a_nested_use_on_one_thread_takes_one_flock(self) -> None:
+        clean, _failing = self.archives()
+        taken: list = []
+        real = fcntl.flock
+
+        def counted(f, op):
+            if getattr(f, "name", "").endswith("restore.lock"):
+                taken.append(op)
+            return real(f, op)
+
+        with mock.patch.object(self.backup.fcntl, "flock", counted):
+            with self.backup.restoring() as outer, self.backup.restoring() as inner:
+                receipt = self.backup.apply(self.backup.preflight(clean))
+        self.assertEqual((outer, inner, receipt.get("refused"), taken),
+                         (True, True, None, [fcntl.LOCK_EX | fcntl.LOCK_NB]))
+
+    def test_a_second_thread_meets_the_refusal(self) -> None:
+        clean, _failing = self.archives()
+        taken, release = threading.Event(), threading.Event()
+        held: list = []
+
+        def hold() -> None:
+            with self.backup.restoring() as got:
+                held.append(got)
+                taken.set()
+                release.wait(10)
+
+        thread = threading.Thread(target=hold, daemon=True)
+        thread.start()
+        try:
+            self.assertTrue(taken.wait(10))
+            with self.backup.restoring() as mine:
+                receipt = self.backup.apply(self.backup.preflight(clean))
+        finally:
+            release.set()
+            thread.join(10)
+        self.assertEqual((held, mine, thread.is_alive()), ([True], False, False))
+        self.assertEqual((receipt.get("refused"), receipt["errors"]),
+                         (True, [{"file": "restore", "reason": "Another restore is running."}]))
 
 
 class RestartLineTest(unittest.TestCase):

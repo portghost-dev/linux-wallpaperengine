@@ -112,15 +112,19 @@ def _import(ctx: Context, path: str) -> int:
             ctx.error(refusal)
             return REFUSED
     paths.ensure_dirs()
-    r = backup.apply(backup.preflight(path))
-    r.pop("plan", None)
-    if r.get("refused"):
-        _print(ctx, f"Refused {path}", r)
-        return REFUSED
-    failures: list[dict] = []
-    outcome = _after(failures, "sync", lambda: push.sync_all("command", ("BUNDLE", "CURRENT")))
-    env_state = _after(failures, "engine-env", daemon_unit.write_env)
-    waiting = _after(failures, "restart", restart_line)
+    with backup.restoring():
+        r = backup.apply(backup.preflight(path))
+        r.pop("plan", None)
+        if r.get("refused"):
+            backup.settle(r, True)
+            _print(ctx, f"Refused {path}", r)
+            return REFUSED
+        failures: list[dict] = []
+        outcome = _after(failures, "sync", lambda: push.sync_all("command", ("BUNDLE", "CURRENT")))
+        env_state = _after(failures, "engine-env", daemon_unit.write_env)
+        waiting = _after(failures, "restart", restart_line)
+        refused = outcome is not None and outcome.kind == "refused"
+        backup.settle(r, bool(r.get("errors") or failures or refused))
     extra = []
     if outcome is not None:
         extra.append(f"The engine refused it: {outcome.message}" if outcome.kind == "refused"
@@ -142,7 +146,6 @@ def _import(ctx: Context, path: str) -> int:
             extra.append(f"The configuration from before this import is in {snapshot}; "
                          f"lwe backup import {snapshot} puts it back.")
     _print(ctx, backup.receipt_line(r), r, extra)
-    refused = outcome is not None and outcome.kind == "refused"
     return REFUSED if r.get("errors") or failures or refused else DONE
 
 
