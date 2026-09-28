@@ -186,7 +186,8 @@ JSValue engine_register_audio_buffers (JSContext* ctx, JSValueConst this_val, in
 }
 
 EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& scene) :
-    m_scene (scene), m_engine (engine), m_instanceId (++EngineInstanceId), m_classId (0) {
+    m_timers (engine.getContext ()), m_scene (scene), m_engine (engine), m_instanceId (++EngineInstanceId),
+    m_classId (0) {
     engineInstances[this->m_instanceId] = this;
     this->m_definition = { .class_name = "IEngine" };
     JS_NewClassID (this->m_engine.getRuntime (), &this->m_classId);
@@ -267,13 +268,6 @@ EngineObject::EngineObject (ScriptEngine& engine, Render::Wallpapers::CScene& sc
 }
 
 EngineObject::~EngineObject () {
-    // clear all the timeouts and intervals
-    for (const auto& [id, timeout] : this->m_timeouts) {
-	JS_FreeValue (this->m_engine.getContext (), timeout.callback);
-    }
-    for (const auto& [id, interval] : this->m_intervals) {
-	JS_FreeValue (this->m_engine.getContext (), interval.callback);
-    }
     for (const auto& link : this->m_audioBuffers) {
 	JS_FreeValue (this->m_engine.getContext (), link.average);
 	JS_FreeValue (this->m_engine.getContext (), link.left);
@@ -282,56 +276,21 @@ EngineObject::~EngineObject () {
     this->m_audioBuffers.clear ();
 
     engineInstances.erase (this->m_instanceId);
-    this->m_intervals.clear ();
-    this->m_timeouts.clear ();
 
     JS_FreeValue (this->m_engine.getContext (), this->m_instance);
 }
 
 uint32_t EngineObject::reserveNextTimeoutId (JSValue function, uint64_t duration) {
-    const auto id = ++this->m_nextTimeoutId;
-
-    this->m_timeouts[id] = Timeout { .callback = function,
-				     .duration = std::chrono::milliseconds (duration),
-				     .next = std::chrono::steady_clock::now () + std::chrono::milliseconds (duration) };
-
-    return id;
+    return this->m_timers.addTimeout (function, duration);
 }
 
 uint32_t EngineObject::reserveNextIntervalId (JSValue function, uint64_t duration) {
-    const auto id = ++this->m_nextIntervalId;
-
-    this->m_intervals[id]
-	= Timeout { .callback = function,
-		    .duration = std::chrono::milliseconds (duration),
-		    .next = std::chrono::steady_clock::now () + std::chrono::milliseconds (duration) };
-
-    return id;
+    return this->m_timers.addInterval (function, duration);
 }
 
-void EngineObject::clearInterval (uint32_t id) {
-    const auto it = this->m_intervals.find (id);
+void EngineObject::clearInterval (uint32_t id) { this->m_timers.clearInterval (id); }
 
-    if (it == this->m_intervals.end ()) {
-	return;
-    }
-
-    JS_FreeValue (this->getEngine ().getContext (), it->second.callback);
-
-    this->m_intervals.erase (id);
-}
-
-void EngineObject::clearTimeout (uint32_t id) {
-    const auto it = this->m_timeouts.find (id);
-
-    if (it == this->m_timeouts.end ()) {
-	return;
-    }
-
-    JS_FreeValue (this->getEngine ().getContext (), it->second.callback);
-
-    this->m_timeouts.erase (id);
-}
+void EngineObject::clearTimeout (uint32_t id) { this->m_timers.clearTimeout (id); }
 
 JSValue EngineObject::registerAudioBuffers (int requestedResolution) {
     JSContext* ctx = this->m_engine.getContext ();
@@ -400,56 +359,9 @@ void EngineObject::updateAudioBuffers () {
     }
 }
 
-void EngineObject::runTimerCallback (Timeout& timeout, const char* context) {
-    JSContext* ctx = this->m_engine.getContext ();
-    JSValue result = JS_Call (ctx, timeout.callback, JS_NULL, 0, nullptr);
-
-    if (JS_IsException (result)) {
-	// a callback that keeps throwing is reported a few times, not every fire
-	if (timeout.errorsLogged < 3) {
-	    timeout.errorsLogged++;
-	    ScriptEngine::logException (ctx, context);
-	} else {
-	    JS_FreeValue (ctx, JS_GetException (ctx));
-	}
-    }
-
-    JS_FreeValue (ctx, result);
-}
-
 void EngineObject::tick () {
     // refresh audio-response arrays first so update() callbacks read current data
     this->updateAudioBuffers ();
 
-    const auto now = std::chrono::steady_clock::now ();
-
-    // check any interval and run them if needed
-    for (auto& timeout : this->m_intervals | std::views::values) {
-	if (timeout.next > now) {
-	    continue;
-	}
-
-	timeout.next = now + timeout.duration;
-
-	this->runTimerCallback (timeout, "engine.setInterval");
-    }
-
-    std::vector<uint32_t> removeTimeouts;
-
-    // check any timeout and run them if needed
-    for (auto& [id, timeout] : this->m_timeouts) {
-	if (timeout.next > now) {
-	    continue;
-	}
-
-	this->runTimerCallback (timeout, "engine.setTimeout");
-
-	JS_FreeValue (this->m_engine.getContext (), timeout.callback);
-
-	removeTimeouts.push_back (id);
-    }
-
-    for (auto id : removeTimeouts) {
-	this->m_timeouts.erase (id);
-    }
+    this->m_timers.tick ();
 }

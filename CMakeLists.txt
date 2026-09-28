@@ -601,6 +601,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Scripting/ConsoleObject.cpp
     src/WallpaperEngine/Scripting/EngineObject.h
     src/WallpaperEngine/Scripting/EngineObject.cpp
+    src/WallpaperEngine/Scripting/ScriptTimers.h
+    src/WallpaperEngine/Scripting/ScriptTimers.cpp
     src/WallpaperEngine/Scripting/InputObject.h
     src/WallpaperEngine/Scripting/InputObject.cpp
     src/WallpaperEngine/Scripting/SceneObject.h
@@ -664,7 +666,8 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/BootGuard.cpp
         src/WallpaperEngine/Testing/Cases/WebAssetLocator.cpp
         src/WallpaperEngine/Testing/Cases/WebLibraryScan.cpp
-        src/WallpaperEngine/Testing/Cases/RenderOrder.cpp)
+        src/WallpaperEngine/Testing/Cases/RenderOrder.cpp
+        src/WallpaperEngine/Testing/Cases/ScriptTimers.cpp)
 endif()
 
 add_library(
