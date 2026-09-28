@@ -1287,7 +1287,7 @@ class EditorBridge(QObject):
     def ccChannels(self) -> list:
         """The four channel values as floats, in CC slot order (brightness/contrast/sat/hue).
         An absent CC reads as the authored look, mirroring the show path's fallback."""
-        parts = str(self._wp_get("CC") or self._authored_cc()).split()
+        parts = str(self._present.get("CC") or self._authored_cc()).split()
         out: list[float] = []
         for i, neutral in enumerate((1.0, 1.0, 1.0, 0.0)):
             try:
@@ -1299,7 +1299,7 @@ class EditorBridge(QObject):
     def _authored_cc(self) -> str:
         """The authored look's CC string: derive_cc over the project's preset block (or its
         raw keys), identity when the wallpaper ships no wec_* grading."""
-        raw = self._proj.get("raw") if isinstance(self._proj, dict) else {}
+        raw = self._ident.get("raw") if isinstance(self._ident, dict) else {}
         if not isinstance(raw, dict):
             raw = {}
         preset = raw.get("preset")

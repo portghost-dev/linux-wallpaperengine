@@ -113,8 +113,9 @@ def load_set_path(path) -> dict[str, Any]:
     SCALING=default cannot be expressed as overrides. This reader answers the other
     question: which keys are PRESENT. Key presence IS set-ness.
 
-    load() is untouched and remains the reader for every resolve/launch path; this is a
-    second view over the same file for surfaces that must tell set from inherited.
+    The show resolver decides by this view for every value a wallpaper can set, among them
+    the volume, the speed (through set_speed) and the audio dials, so a key the file leaves
+    out inherits. Surfaces that must tell set from inherited read it too.
     Raises when the file exists but cannot be read.
     """
     raw, _ = migrate.apply_tables("overrides", tier_a.parse(_read_raw(path)))
@@ -231,8 +232,8 @@ def modify_set(wid: str, fn: Callable[[dict[str, str]], dict[str, Any] | None]) 
 
 def sparsify_overrides() -> dict[str, list[str]]:
     """One-time clean-up: drop every schema key whose value equals the current default
-    (identity keys and PROP_ keys kept), so a materialised default stops reading as a pin.
-    Returns {wid: [removed keys]} for the files that changed."""
+    (identity keys, PROP_ keys and CC under CC_MODE=custom kept), so a materialized default
+    stops reading as a pin. Returns {wid: [removed keys]} for the files that changed."""
     report: dict[str, list[str]] = {}
     for conf in sorted(paths.wp_dir().glob("*.conf")):
         wid = conf.stem
@@ -246,7 +247,8 @@ def sparsify_overrides() -> dict[str, list[str]]:
                 continue
             removed = [k for k, v in raw.items()
                        if k in C.WP_SCHEMA and k not in IDENTITY_KEYS
-                       and _coerce(C.WP_SCHEMA[k], v) == C.WP_SCHEMA[k]["default"]]
+                       and _coerce(C.WP_SCHEMA[k], v) == C.WP_SCHEMA[k]["default"]
+                       and not (k == "CC" and raw.get("CC_MODE") == "custom")]
             if not removed:
                 continue
             try:

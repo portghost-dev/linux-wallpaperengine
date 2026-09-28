@@ -46,6 +46,12 @@ def main() -> None:
     assert kept == {"BG": "2", "TYPE": "scene", "SPEED": "2.5", "PROP_x": "1"}, kept
     assert wp.load_set("2") == {"BG": "2", "TYPE": "scene", "SPEED": 2.5, "props": {"x": "1"}}
     assert wp.sparsify_overrides() == {}, "a second run changes nothing"
+    (paths.wp_dir() / "6.conf").write_text("BG=6\nCC=1 1 1 0\nCC_MODE=custom\n")
+    (paths.wp_dir() / "7.conf").write_text("BG=7\nCC=1 1 1 0\nCC_MODE=none\n")
+    report = wp.sparsify_overrides()
+    assert report == {"7": ["CC"]}, report
+    assert tier_a.parse((paths.wp_dir() / "6.conf").read_text()) == {
+        "BG": "6", "CC": "1 1 1 0", "CC_MODE": "custom"}, "a Custom grade equal to identity is a choice and stays"
 
     # the startup hook: snapshot first, marker written, runs once
     import logging

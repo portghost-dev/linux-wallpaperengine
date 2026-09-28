@@ -413,6 +413,37 @@ class TestEditorAgainstRealScene(unittest.TestCase):
         e.open(self.wid)
         self.assertEqual(e.ccMode(), "none", "legacy preset IS the authored look")
 
+    def test_absent_cc_shows_the_authored_grade(self) -> None:
+        """A file without CC shows the grade the show sends, the one its project authors; a
+        file that carries CC shows its own. A preset's grade comes from its own project."""
+        import json
+
+        from lwe_ui.storage import wp
+
+        graded = self.wallpapers / "4000000001"
+        graded.mkdir()
+        (graded / "project.json").write_text(
+            json.dumps({"title": "graded", "type": "scene", "preset": {"wec_brs": 75}}), encoding="utf-8")
+        e = self.editor
+        e.open("4000000001")
+        self.assertEqual(e.ccChannels(), [1.5, 1.0, 1.0, 0.0], "absent CC -> the authored grade")
+        wp.update_set("4000000001", {"TYPE": "scene", "CC": "1 1 1 0"})
+        e.open("4000000001")
+        self.assertEqual(e.ccChannels(), [1.0, 1.0, 1.0, 0.0], "a present CC wins over the authored grade")
+
+        base = self.wallpapers / "2000000001"
+        base.mkdir()
+        (base / "project.json").write_text(json.dumps({"title": "base", "type": "scene"}), encoding="utf-8")
+        preset = self.wallpapers / "3000000001"
+        preset.mkdir()
+        (preset / "project.json").write_text(json.dumps(
+            {"title": "preset", "dependency": "2000000001", "preset": {"wec_brs": 60}}), encoding="utf-8")
+        wp.write_keys("3000000001", {"BG": str(base), "TYPE": "scene"})
+        e.open("3000000001")
+        self.assertEqual(e.ccChannels(), [1.2, 1.0, 1.0, 0.0], "a preset without CC -> its own authored grade")
+        self.assertTrue(e.setCcMode("none"))
+        self.assertEqual(wp.load_set("3000000001").get("CC"), "1.2 1 1 0", "None on a preset writes its own grade")
+
     def test_authored_groups_against_real_scene(self) -> None:
         """authoredGroups() groups the real scene by the author's names, type-homogeneous."""
         e = self.editor
