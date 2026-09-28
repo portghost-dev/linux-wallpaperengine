@@ -4,6 +4,7 @@
 #include "WallpaperEngine/Application/Config.h"
 #include "WallpaperEngine/Application/DebugSwitches.h"
 #include "WallpaperEngine/Application/FlagValues.h"
+#include "WallpaperEngine/Application/HelpText.h"
 #include "WallpaperEngine/Data/JSON.h"
 #include "WallpaperEngine/Logging/Log.h"
 
@@ -255,7 +256,15 @@ void ApplicationContext::loadSettingsFromArgv () {
     std::optional<std::string> fullscreenWord;
     bool noFullscreenPause = false;
 
-    argparse::ArgumentParser program ("linux-wallpaperengine", LWE_VERSION, argparse::default_arguments::help);
+    argparse::ArgumentParser program ("linux-wallpaperengine", LWE_VERSION, argparse::default_arguments::none);
+
+    program.add_argument ("-h", "--help")
+	.help ("Prints the help text and exits")
+	.flag ()
+	.action ([] (const std::string& value) -> void {
+	    std::cout << engineHelpText ();
+	    std::exit (0);
+	});
 
     program.add_argument ("--version")
 	.help ("Prints the version and exits")

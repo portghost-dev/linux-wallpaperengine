@@ -346,6 +346,8 @@ set(COMMON_SOURCES
     src/WallpaperEngine/Application/DebugSwitches.h
     src/WallpaperEngine/Application/FlagValues.cpp
     src/WallpaperEngine/Application/FlagValues.h
+    src/WallpaperEngine/Application/HelpText.cpp
+    src/WallpaperEngine/Application/HelpText.h
     src/WallpaperEngine/Application/WallpaperApplication.cpp
     src/WallpaperEngine/Application/WallpaperApplication.h
 
@@ -642,7 +644,8 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/CommandDispatcher.cpp
         src/WallpaperEngine/Testing/Cases/FlagValues.cpp
         src/WallpaperEngine/Testing/Cases/ArgvFlags.cpp
-        src/WallpaperEngine/Testing/Cases/DebugSwitches.cpp)
+        src/WallpaperEngine/Testing/Cases/DebugSwitches.cpp
+        src/WallpaperEngine/Testing/Cases/HelpText.cpp)
 endif()
 
 add_library(
@@ -763,6 +766,11 @@ add_executable(linux-wallpaperengine
     src/main.cpp)
 
 target_link_libraries (linux-wallpaperengine PUBLIC linux-wallpaperengine-lib)
+
+if (BUILD_TESTING)
+    # the help test runs the engine binary, so building the tests builds it first
+    add_dependencies (tests linux-wallpaperengine)
+endif()
 
 add_executable(lwe-web-helper
     src/web-helper-main.cpp
