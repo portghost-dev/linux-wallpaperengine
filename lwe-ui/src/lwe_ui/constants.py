@@ -108,7 +108,7 @@ SETTINGS_SCHEMA: dict[str, dict] = {
     "PAUSE_RECOVERY_ACTION": {"type": "enum", "default": "pause", "choices": PAUSE_RECOVERY_ACTIONS},
     # engine-global defaults (Settings > Engine); a per-wallpaper conf value wins where set
     "ENGINE_FPS": {"type": "int", "default": 60, "min": 1, "max": 480},
-    "ENGINE_VOLUME": {"type": "int", "default": 15, "min": 0, "max": 100},
+    "ENGINE_VOLUME": {"type": "int", "default": 15, "min": 0, "max": 128},
     "ENGINE_SCALING": {"type": "enum", "default": "default", "choices": SCALINGS},
     "ENGINE_CLAMP": {"type": "enum_or_empty", "default": "", "choices": CLAMPS},
     "ENGINE_LAYER": {"type": "enum", "default": "bottom", "choices": LAYERS},
@@ -182,7 +182,7 @@ WP_SCHEMA: dict[str, dict] = {
     "AUDIO_GAIN": {"type": "float", "default": 3.0},
     "CLASSIC_K": {"type": "float", "default": 0.7},
     "CLASSIC_EXP": {"type": "float", "default": 2.6},
-    "VOLUME": {"type": "int", "default": 0},
+    "VOLUME": {"type": "int", "default": 0, "min": 0, "max": 128},
     "CLAMPING": {"type": "enum_or_empty", "default": "", "choices": CLAMPS},
     # the quality switches per wallpaper; "" inherits the Engine > Advanced value, which
     # reaches the engine through its env file, so only a set value rides the show

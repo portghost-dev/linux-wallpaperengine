@@ -688,6 +688,19 @@ Window { width: 1400; height: 620; visible: true
             assert sb.settleScale(v) == want, (v, sb.settleScale(v), want)
         assert sb.commit("INTERFACE_SCALE", 100) is True
         print("OK T31 Interface scale row: range, detents, glyphs, chip, settle")
+
+        view.setProperty("pageIndex", 1)
+        QTest.qWait(150)
+        engine_page = next(i for i in walk(view)
+                           if cls(i) == "SettingsEngine" and i.isVisible())
+        vol_chip = next(i for i in walk(engine_page) if i.property("objectName") == "settingsVolumeChip")
+        vol_slider = next(i for i in walk(engine_page) if i.property("objectName") == "settingsVolumeSlider")
+        assert sb.commit("ENGINE_VOLUME", 120) is True
+        QTest.qWait(120)
+        shown = (vol_chip.property("displayText"), vol_chip.property("entryText"))
+        assert shown == ("120", "120"), f"the volume chip must read the store: {shown}"
+        assert vol_slider.property("value") == 100, vol_slider.property("value")
+        print("OK volume chip: a stored 120 reads 120 while the 0 to 100 slider sits at its end")
     finally:
         for k, v in orig.items():
             if v is None:

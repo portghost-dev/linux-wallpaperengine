@@ -826,7 +826,7 @@ class EditorBridge(QObject):
         wallpaper on screen, its own VOLUME kept and mute giving 0. An applied or pending change
         returns True; one the engine refused or did not answer stays saved and reports failure."""
         try:
-            vol = max(0, min(100, int(value)))
+            vol = max(0, min(128, int(value)))
         except (TypeError, ValueError):
             self.commitFailed.emit(["ENGINE_VOLUME"])
             return False
@@ -1031,7 +1031,7 @@ class EditorBridge(QObject):
     @Slot(int, result=bool)
     def setVolumeValue(self, value: int) -> bool:
         try:
-            v = max(0, min(100, int(value)))
+            v = max(0, min(128, int(value)))
         except (TypeError, ValueError):
             self.commitFailed.emit(["VOLUME"])
             return False
@@ -1096,9 +1096,9 @@ class EditorBridge(QObject):
                     conf_speed = max(SPEED_MIN, min(SPEED_MAX, pending.pop("wp_speed")))
                     api_client.set_speed(C.resolve_speed(conf_speed, self.globalSpeed()))
                 if "volume" in pending:
-                    api_client.set_volume(max(0, min(100, int(round(pending.pop("volume"))))))
+                    api_client.set_volume(max(0, min(128, int(round(pending.pop("volume"))))))
                 if "wp_volume" in pending:
-                    api_client.set_volume(max(0, min(100, int(round(pending.pop("wp_volume"))))))
+                    api_client.set_volume(max(0, min(128, int(round(pending.pop("wp_volume"))))))
                 dials: dict[str, float] = {}
                 for key in [k for k in pending if k.startswith("dial:")]:
                     spec = AUDIO_DIALS.get(key[5:])

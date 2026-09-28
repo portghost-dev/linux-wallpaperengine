@@ -206,8 +206,8 @@ Column {
                 freeEntry: true
                 failed: page.isFailed("ENGINE_VOLUME")
                 model: []
-                entryText: String(Math.round(volumeSlider.value))
-                displayText: String(Math.round(volumeSlider.value))
+                entryText: String(volumeSlider.pressed ? Math.round(volumeSlider.value) : volumeRow.current)
+                displayText: String(volumeSlider.pressed ? Math.round(volumeSlider.value) : volumeRow.current)
                 onEntered: function(t) { settingsBridge.commit("ENGINE_VOLUME", t); }
             }
         }

@@ -1346,9 +1346,11 @@ Rectangle {
                                             onPreview: function(v) { editor.previewLive("volume", Math.round(v)) }
                                         }
                                         PChip {
+                                            objectName: "editorVolumeChip"
                                             anchors.verticalCenter: parent.verticalCenter
                                             ckey: "ENGINE_VOLUME"
-                                            text: String(Math.round(gVolSlider.value))
+                                            text: String(gVolSlider.pressed ? Math.round(gVolSlider.value)
+                                                         : (view.rev, editor.globalVolume()))
                                             onEntered: function(t) {
                                                 var n = parseInt(t);
                                                 if (isNaN(n)) { editor.reportFailure(["ENGINE_VOLUME"]); return }
@@ -1574,10 +1576,13 @@ Rectangle {
                                 onPreview: function(v) { editor.previewLive("wp_volume", Math.round(v)) }
                             }
                             PChip {
+                                objectName: "editorWpVolumeChip"
                                 anchors.verticalCenter: parent.verticalCenter
                                 ckey: "VOLUME"
                                 text: (view.rev, editor.volumeValue()) === ""
-                                      ? "Global" : String(Math.round(wpVolSlider.value))
+                                      ? "Global"
+                                      : String(wpVolSlider.pressed ? Math.round(wpVolSlider.value)
+                                                                   : Math.round(Number(editor.volumeValue())))
                                 onEntered: function(t) {
                                     if (String(t).trim() === "") { editor.clearOverride("volume"); return }
                                     var n = parseInt(t);

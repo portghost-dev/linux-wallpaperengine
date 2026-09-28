@@ -293,6 +293,19 @@ def main() -> None:
         assert abs(float(sliders["popupPanY"].property("value"))) < 1e-6
         print("OK fit rows - six sliders present, seated from the store on both surfaces, "
               "round trip, revert, chip arithmetic pinned")
+
+        settings.update({"ENGINE_VOLUME": 120})
+        _wp.update_set("synthwp_hi", {"VOLUME": 120})
+        editor.open("synthwp_hi")
+        deck_popup.stateChanged.emit()
+        QTest.qWait(120)
+        chips = {name: win.findChild(QObject, name)
+                 for name in ("editorVolumeChip", "editorWpVolumeChip", "popupVolumeChip")}
+        missing = [n for n, c in chips.items() if c is None]
+        assert not missing, f"the volume chips must be reachable by objectName: missing {missing}"
+        texts = {n: c.property("text") for n, c in chips.items()}
+        assert texts == dict.fromkeys(chips, "120"), f"every volume chip must read the stored 120: {texts}"
+        print("OK volume chips - a stored 120 reads 120 on both editor rows and the popup")
     finally:
         for k, v in orig.items():
             if v is None:

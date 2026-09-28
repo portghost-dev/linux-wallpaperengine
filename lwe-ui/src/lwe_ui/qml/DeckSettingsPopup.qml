@@ -789,9 +789,11 @@ Popup {
                                         onPreview: function(v) { deckPopup.previewLive("volume", Math.round(v)) }
                                     }
                                     PChip {
+                                        objectName: "popupVolumeChip"
                                         anchors.verticalCenter: parent.verticalCenter
                                         ckey: "ENGINE_VOLUME"
-                                        text: String(Math.round(volSlider.value))
+                                        text: String(volSlider.pressed ? Math.round(volSlider.value)
+                                                     : (pop.rev, deckPopup.globalVolume()))
                                         onEntered: function(t) {
                                             var n = parseInt(t);
                                             if (isNaN(n)) { deckPopup.reportFailure(["ENGINE_VOLUME"]); return }
