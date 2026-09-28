@@ -813,11 +813,11 @@ def burst_existed(tickets: list[Ticket]) -> bool:
     return tickets[0].existed or any(b.generation != a.generation + 1 for a, b in zip(tickets, tickets[1:]))
 
 
-def deliver(ticket: Ticket) -> Outcome:
+def deliver(ticket: Ticket, defer_current: bool = False) -> Outcome:
     """The second half of run_change for a saved change: sync, the status and version check inside it,
     the bundle first when a marker existed, the change's push, and the clear when every request
-    ended ok."""
-    return _deliver(ticket)
+    ended ok. defer_current is run_change's."""
+    return _deliver(ticket, defer_current)
 
 
 def run_change(locks: Iterable[str], write: Callable[[], Any], rows: Iterable[tuple[str, str | None]],

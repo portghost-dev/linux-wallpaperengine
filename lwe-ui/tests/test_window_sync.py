@@ -8,7 +8,9 @@ runs inside the sync hold.
 With sync held by another process a change returns pending, and the poll's drain returns at once.
 The service switch rebuilds engine-env, the unit and daemon-reload before systemctl, fails with the
 existing notice when that fails, and bundles once the engine answers; a restart waits for a new pid.
-A manual switch while the engine is away with the schedule on writes nothing. A hand-broken store
+A manual switch while the engine is away with the schedule on writes nothing. A switch to a playlist
+being deleted, made by another writer while the delete reads, waits for the delete: the delete raises
+nothing and changes ACTIVE_PLAYLIST only in a change that carries the active row. A hand-broken store
 line refuses the change before any request. The tray's next and pause send nothing while sync is
 held elsewhere. An import pass runs one sync_all. The start-up reconcile writes engine-env only. A
 settings reset sends the bundle with one re-show and rewrites engine-env. The engine is an
@@ -389,6 +391,56 @@ class WindowSyncTest(unittest.TestCase):
         self.assertEqual(sorted(p["slug"] for p in playlists.list_playlists()), ["main", "night"])
         self.assertIsNone(marker.read()["generation"])
         self.assertEqual(rec.verbs(), [])
+
+    def test_a_switch_to_a_playlist_being_deleted_waits_for_the_delete(self) -> None:
+        real_active, real_delete, real_modify, real_save = (playlists.active_slug, playlists.delete, settings.modify,
+                                                            push.save_change)
+        main = threading.current_thread()
+        for schedule in ("", "07:00=main;20:00=night"):
+            with self.subTest(schedule=schedule):
+                playlists.save("night", {"NAME": "Night", "MODE": "shuffle", "INTERVAL": 900, "UNIT": "min",
+                                         "MEMBERS": "333"})
+                settings.update({"ACTIVE_PLAYLIST": "main", "SCHEDULE": schedule, "SCHEDULE_ENABLED": False})
+                switches: list[threading.Thread] = []
+                errors: list[Exception] = []
+                rows: list = []
+                repointed: list = []
+
+                def raced_read(validate=True):
+                    found = real_active(validate)
+                    if threading.current_thread() is main and not switches:
+                        switch = threading.Thread(target=settings.update, args=({"ACTIVE_PLAYLIST": "night"},))
+                        switches.append(switch)
+                        switch.start()
+                        switch.join(0.5)
+                    return found
+
+                def watched_delete(slug):
+                    try:
+                        return real_delete(slug)
+                    except Exception as exc:
+                        errors.append(exc)
+                        raise
+
+                def watched_modify(fn):
+                    before = settings.load()["ACTIVE_PLAYLIST"]
+                    out = real_modify(fn)
+                    if threading.current_thread() is main and settings.load()["ACTIVE_PLAYLIST"] != before:
+                        repointed.append(list(rows[-1]) if rows else [])
+                    return out
+
+                def watched_save(locks, write, change_rows, **kwargs):
+                    rows.append(list(change_rows))
+                    return real_save(locks, write, change_rows, **kwargs)
+
+                with self.engine(status()), mock.patch.object(playlists, "active_slug", raced_read), \
+                        mock.patch.object(playlists, "delete", watched_delete), \
+                        mock.patch.object(settings, "modify", watched_modify), \
+                        mock.patch.object(push, "save_change", watched_save):
+                    self.backend.deletePlaylist("night")
+                    switches[0].join(10)
+                self.assertEqual(errors, [])
+                self.assertTrue(all(("active", "ACTIVE_PLAYLIST") in r for r in repointed), repointed)
 
     def test_a_hand_broken_store_line_refuses_the_change_before_any_request(self) -> None:
         text = paths.settings_file().read_text(encoding="utf-8")

@@ -696,8 +696,9 @@ class StoreLockTest(unittest.TestCase):
             self.assertIn(key, message)
         self.assertEqual({key: settings.load()[key] for key in keys}, before, "a busy store saves nothing")
 
-    def test_deleting_a_playlist_that_is_not_active_leaves_settings_alone(self) -> None:
+    def test_a_window_delete_holds_settings_so_a_busy_settings_store_refuses_it_cleanly(self) -> None:
         from lwe_ui import models
+        from lwe_ui.engine import marker
         for slug in ("keep", "beta", "gamma"):
             playlists.save(slug, {"NAME": slug, "MODE": "shuffle", "INTERVAL": 900, "UNIT": "min",
                                   "MEMBERS": ""})
@@ -707,16 +708,20 @@ class StoreLockTest(unittest.TestCase):
         backend.playlistsChanged.connect(lambda: changed.append(1))
         pushes: list[bool] = []
         backend._sync_engine = lambda manual=False: pushes.append(manual)
-        with mock.patch.object(lock, "LOCK_WAIT_S", 0.3), self._held_elsewhere("settings"):
+        with mock.patch.object(lock, "LOCK_WAIT_S", 0.3), self._held_elsewhere("settings"), \
+                self.assertLogs("lwe_ui", level="WARNING") as logged:
             start = time.monotonic()
             playlists.delete("beta")
             waited = time.monotonic() - start
             backend.deletePlaylist("gamma")
-        self.assertLess(waited, 0.25, "deleting a playlist that is not active took the settings lock")
+        self.assertLess(waited, 0.25, "the store's delete of a playlist that is not active took the settings lock")
         self.assertFalse(paths.playlist_file("beta").exists())
-        self.assertFalse(paths.playlist_file("gamma").exists())
-        self.assertEqual((len(changed), pushes), (1, []), "the window refreshed the menu and sent nothing")
+        self.assertEqual(len(logged.records), 1)
+        self.assertTrue(paths.playlist_file("gamma").exists(),
+                        "the window's delete takes settings first: nothing was deleted")
+        self.assertEqual((len(changed), pushes), (0, []), "nothing saved, refreshed or sent")
         self.assertEqual(settings.load()["ACTIVE_PLAYLIST"], "keep")
+        self.assertEqual(marker.read()["classes"], [], "no pending record was left for a delete that did not happen")
 
     def test_deleting_the_active_playlist_while_settings_is_busy_deletes_nothing_and_reports(self) -> None:
         from lwe_ui import models

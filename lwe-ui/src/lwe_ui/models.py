@@ -585,10 +585,10 @@ class Backend(QObject):
                                                            **kwargs),
                              schedule=any(row == "schedule" for row, _key in rows))
 
-    def _guarded(self, what: str, change: Any, schedule: bool = False) -> Any:
+    def _guarded(self, what: str, change: Any, schedule: Any = False) -> Any:
         """Run change(), which returns an Outcome, with _change's handling: a refused switch or a
         store refusal logs one warning and returns None, as any other failure does; the Outcome goes
-        to _note."""
+        to _note, with `schedule` or, when it is a function, what it returns after change()."""
         try:
             outcome = change()
         except push.SwitchRefused as exc:
@@ -599,7 +599,7 @@ class Backend(QObject):
             return None
         except Exception:
             return None
-        self._note(outcome, schedule=schedule)
+        self._note(outcome, schedule=schedule() if callable(schedule) else schedule)
         return outcome
 
     def _note(self, outcome: Any, schedule: bool = False) -> None:
@@ -681,20 +681,31 @@ class Backend(QObject):
             self._delete_playlist(slug)
 
     def _delete_playlist(self, slug: str) -> None:
-        """One delete through the change runner. Judged from a lock-free read, deleting the active
-        playlist is a switch and deleting a scheduled one drops it from the schedule, and either
-        takes the settings lock too; a playlist that is neither sends nothing."""
-        active = slug == self._active_slug()
-        packed = str(self._setting("SCHEDULE", "") or "")
-        scheduled = any(e.strip() and e.partition("=")[2].strip() == slug for e in packed.split(";"))
-        rows = ([("active", "ACTIVE_PLAYLIST")] if active else []) + ([("schedule", "SCHEDULE")] if scheduled else [])
+        """One delete through the change runner. After the status read, the settings and playlists
+        locks are held from a fresh read through the write: deleting the active playlist is a
+        switch and deleting a scheduled one drops it from the schedule, so the change carries those
+        rows and its marker is set before anything is written; a playlist that is neither sends
+        nothing."""
+        decided: list[tuple[str, str]] = []
 
-        def write() -> None:
-            playlists.delete(slug)  # tombstones + reassigns the active pointer if it was active
-            if scheduled:
-                self._drop_from_schedule(slug)
-        if self._change("playlist delete", ("playlists", "settings") if rows else ("playlists",), write,
-                        rows or [("none", None)], manual=active) is None:
+        def change() -> Any:
+            first = push.read_status()
+            with lock.held("settings"), lock.held("playlists"):
+                active = slug == self._active_slug()
+                packed = str(self._setting("SCHEDULE", "") or "")
+                scheduled = any(e.strip() and e.partition("=")[2].strip() == slug for e in packed.split(";"))
+                decided.extend(([("active", "ACTIVE_PLAYLIST")] if active else [])
+                               + ([("schedule", "SCHEDULE")] if scheduled else []))
+
+                def write() -> None:
+                    playlists.delete(slug)  # tombstones + reassigns the active pointer if it was active
+                    if scheduled:
+                        self._drop_from_schedule(slug)
+                ticket = push.save_change(("playlists", "settings"), write, decided or [("none", None)],
+                                          manual=active, status=first)
+            return push.deliver(ticket, defer_current=self.delivery_due())
+        if self._guarded("playlist delete", change,
+                         schedule=lambda: any(row == "schedule" for row, _key in decided)) is None:
             return
         self._after_playlist_change()
 
