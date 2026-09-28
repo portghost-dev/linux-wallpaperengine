@@ -17,7 +17,7 @@ bool safeRunPath (const std::string_view runPath) {
 	const auto entry
 	    = runPath.substr (start, colon == std::string_view::npos ? std::string_view::npos : colon - start);
 
-	if (!entry.starts_with ('/') && !entry.starts_with ("$ORIGIN")) {
+	if (!entry.starts_with ('/') && entry != "$ORIGIN" && !entry.starts_with ("$ORIGIN/")) {
 	    return false;
 	}
 
@@ -102,6 +102,8 @@ TEST_CASE ("a run path passes only with absolute folders and $ORIGIN", "[runpath
     CHECK_FALSE (safeRunPath ("."));
     CHECK_FALSE (safeRunPath ("lib"));
     CHECK_FALSE (safeRunPath (":$ORIGIN"));
+    CHECK_FALSE (safeRunPath ("$ORIGINlib"));
+    CHECK (safeRunPath ("$ORIGIN"));
 }
 
 TEST_CASE ("the engine and its library look for libraries only in absolute folders and $ORIGIN", "[runpath]") {
