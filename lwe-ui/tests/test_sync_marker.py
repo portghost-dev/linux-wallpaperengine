@@ -13,8 +13,9 @@ records a sent playlist only for its generation and its engine, named by pid, bo
 and owed are, and another engine, the same pid with another start included, empties the list at a run's
 start; an unknown start records nothing. The served pid is written without raising the generation,
 survives a clear, a writer's step, ensure and a sent record, and a file without it reads as none. The
-served record names one engine of this boot, its start within 5 s either way, and one that still carries
-"short" without boot and start reads without error and names none; an unknown start names no record. owe
+served record, {"pid", "at", "boot", "start"}, names one engine of this boot, its start within 5 s either way,
+one that still carries "short" without boot and start reads without error and names none, a legacy one's
+"braked" is read and ignored, and an unknown start names no record. owe
 ensures CURRENT and records the engine it is owed to, which every other write keeps; drop_owed takes back
 only the CURRENT owe added, whatever generation a writer raised meanwhile, and never a CURRENT a writer
 added, and an obligation still standing passes to the next engine owed. Every child process gets an
@@ -250,9 +251,9 @@ class SyncMarkerTest(unittest.TestCase):
         self.assertEqual(marker.generation(), raised + 1)
 
     def test_the_served_record_names_one_engine_of_this_boot_and_a_record_without_boot_names_none(self) -> None:
-        marker.record_served(4242, 1000.0, braked=True, at=5.0)
+        marker.record_served(4242, 1000.0, at=5.0)
         record = marker.served_record()
-        self.assertEqual(record, {"pid": 4242, "at": 5.0, "boot": marker.boot_id(), "start": 1000.0, "braked": True})
+        self.assertEqual(record, {"pid": 4242, "at": 5.0, "boot": marker.boot_id(), "start": 1000.0})
         self.assertEqual([marker.names(record, pid, start) for pid, start in
                           ((4242, 1004.5), (4242, 994.0), (4243, 1000.0), (4242, None))],
                          [True, False, False, False])
@@ -263,6 +264,17 @@ class SyncMarkerTest(unittest.TestCase):
         self.file.write_text(json.dumps(doc), encoding="utf-8")
         self.assertEqual(marker.served(), 4242)
         self.assertFalse(marker.names(marker.served_record(), 4242, None))
+
+    def test_a_legacy_served_record_is_read_and_its_braked_ignored(self) -> None:
+        self.file.parent.mkdir(parents=True, exist_ok=True)
+        self.file.write_text(json.dumps({"version": 1, "generation": None, "classes": [], "sent": EMPTY,
+                                         "served": {"pid": 4242, "at": 5.0, "boot": marker.boot_id(),
+                                                    "start": 1000.0, "braked": True}}), encoding="utf-8")
+        self.assertTrue(marker.names(marker.served_record(), 4242, 1000.0))
+        marker.record_served(4242, 1000.0, at=9.0)
+        self.assertEqual(marker.served_record()["at"], 5.0, "a record that names the engine is left as it is")
+        marker.record_served(5000, 1000.0, at=9.0)
+        self.assertEqual(marker.served_record(), {"pid": 5000, "at": 9.0, "boot": marker.boot_id(), "start": 1000.0})
 
     def test_the_start_tolerance_is_5_s_either_way_and_an_unknown_start_names_no_record(self) -> None:
         marker.record_served(4242, 1000.0)

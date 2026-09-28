@@ -2,9 +2,9 @@
 
 show picks one wallpaper by the rules in cli/select.py and prints the pick line; once status answers it sends the
 wallpaper through push.show_final under the sync lock, held until the load finishes, and set-tuning only
-after a done ok. It starts no service and writes nothing, but for an engine served under the brake: then
-the rotation lanes-set follows the show and the served record's braked flag clears. The engine is always
-tests/_fake_engine.py on a socket the test made. A complete download in the scratch Workshop folder, numbered after the pool, is
+after a done ok. It starts no service and writes nothing, carries no automatic flag, and nothing follows it,
+also when a legacy served record says braked. The engine is always tests/_fake_engine.py on a socket the
+test made. A complete download in the scratch Workshop folder, numbered after the pool, is
 refused before anything is sent.
 
 In-process forms run through cli.main with HOME and the XDG folders at scratch (_cli_env.scratch_home), a
@@ -114,18 +114,18 @@ class ShowTest(unittest.TestCase):
         self.assertEqual((show["id"], show["ui_id"]), ("1505438974", "1505438974"))
         self.assertEqual(show["speed"], self.resolve.resolve_show_args("1505438974")[1]["speed"])
 
-    def test_a_show_to_an_engine_served_under_the_brake_then_sends_its_rotation_lanes_set(self) -> None:
+    def test_a_show_carries_no_automatic_flag_and_nothing_follows_it(self) -> None:
         from lwe_ui.engine import marker
         engine = self.engine()
-        marker.record_served(engine.fields["pid"], engine.started, braked=True)
-        before = self.snapshot()
+        legacy = {"pid": engine.fields["pid"], "at": 5.0, "boot": marker.boot_id(), "start": engine.started,
+                  "braked": True}
+        marker._file().write_text(json.dumps({"version": 1, "generation": None, "classes": [],
+                                              "sent": {"pid": None, "playlists": []}, "served": legacy}),
+                                  encoding="utf-8")
+        self.before = self.snapshot()
         self.assertEqual(self.lwe("show", "2"), (0, LINE + "\n", ""))
-        self.assertEqual([cmd for cmd, _args in self.requests(engine)], ["show", "set-tuning", "lanes-set"])
-        self.assertFalse(marker.served_record()["braked"])
-        after = self.snapshot()
-        self.assertEqual({path for path in {*before, *after} if before.get(path) != after.get(path)},
-                         {str(marker._file())}, "the one write is the served record's braked flag")
-        self.before = after
+        sent = self.requests(engine)
+        self.assertEqual(([cmd for cmd, _args in sent], "automatic" in sent[0][1]), (["show", "set-tuning"], False))
 
     def test_a_download_not_in_the_pool_is_refused_and_nothing_is_sent(self) -> None:
         engine = self.engine()

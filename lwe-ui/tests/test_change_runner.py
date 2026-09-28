@@ -273,7 +273,8 @@ class ChangeRunnerTest(unittest.TestCase):
         cases = (
             ("active switch", ("active", "ACTIVE_PLAYLIST"), dict(slug="night"), status(),
              lambda: settings.update({"ACTIVE_PLAYLIST": "night"}),
-             [("playlist_set", "night"), ("lanes_set", [{"id": "all", "playlist": "night", "enabled": True}])]),
+             [("playlist_set", "night"),
+              ("lanes_set", [{"id": "all", "playlist": "night", "enabled": True, "manual": True}])]),
             ("active switch, schedule on", ("active", "ACTIVE_PLAYLIST"), dict(slug="night"),
              status(schedule_on=True), lambda: settings.update({"ACTIVE_PLAYLIST": "night"}),
              [("playlist_set", "night"),

@@ -377,10 +377,12 @@ is to be the daemon API's reference client and the system's owner:
   on every playlist change, `set-*` for live dials, `ping`+`status` every 2 seconds -
   which doubles as the deadman heartbeat. Policy is pushed whole on first sight of an
   engine and once to each engine the panel has not served yet (a new pid, or the same
-  pid from another boot or with another start); while an engine reports that its
-  crash-loop guard refused its restore, those automatic pushes leave out the re-show
-  and the rotation start until the user shows a wallpaper, steps to the next one or
-  picks a playlist.
+  pid from another boot or with another start). Every re-show the panel sends on its
+  own is marked automatic; while an engine's crash-loop guard has refused its restore,
+  the engine holds those re-shows and its own rotation and schedule until the user
+  shows a wallpaper, steps to the next or previous one, or picks a playlist. The panel
+  keeps no brake state: it sends every setting as configured, and a re-show the engine
+  held counts as suppressed, not as a failure.
 - It **owns the library workflow**: browse/search, playlists, per-wallpaper editor
   (autosaving, presence-as-setness conf model), a bench that test-renders new workshop
   items on a throwaway windowed engine beside the desktop engine, and an import

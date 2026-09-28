@@ -7,9 +7,8 @@ writes nothing and is never retried.
 
 next and prev are engine-only: one status read first, then the engine's next or prev sent under the
 sync lock, which stays held until the engine's final reply; they write nothing, leave the playlist timer
-as it is and are never retried. A show or next that ended ok starts the rotation of an engine served
-under the brake before the lock is released (engine/push.py::rearm_rotation), which clears the served
-record's braked flag. pause saves ROTATION_ENABLED through the change runner
+as it is and are never retried. show, next and prev carry no automatic flag, so one that ends ok releases
+an engine held after a refused restore. pause saves ROTATION_ENABLED through the change runner
 (engine/push.py::save_change and deliver), whose own push is one lanes-set with the lane's enabled
 state; it never sends set-speed, and a value already saved is neither written nor sent.
 """
@@ -81,8 +80,6 @@ def _step(ctx: Context, name: str, args: list[str]) -> int:
         with push.engine_only():
             reply = send(wait_done=True)
             nothing_ran, acked = api_client.last_class() == "away", api_client.acked()
-            if name == "next" and isinstance(reply, dict) and api_client.reply_class(reply) == "ok":
-                push.rearm_rotation()
     except StoreBusy:
         return _refuse(ctx, "the service is busy", REFUSED)
     if not isinstance(reply, dict):
@@ -221,8 +218,6 @@ def _show(ctx: Context, args: list[str]) -> int:
         with push.engine_only():
             reply = push.show_final(pick.ui_id)
             nothing_ran, acked = api_client.last_class() == "away", api_client.acked()
-            if isinstance(reply, dict) and api_client.reply_class(reply) == "ok":
-                push.rearm_rotation()
     except StoreBusy:
         return refused("the service is busy", REFUSED)
     if not isinstance(reply, dict):

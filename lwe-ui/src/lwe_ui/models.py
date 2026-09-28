@@ -474,8 +474,8 @@ class Backend(QObject):
     @Slot(str, result=bool)
     def showNow(self, wid: str) -> bool:
         """Show this wallpaper on the desktop now (engine `show` verb, ack-only ~30ms). While this
-        process's restart holds sync it starts no service and is refused at once; an accepted show
-        then starts the rotation of an engine served under the brake (push.rearm_rotation)."""
+        process's restart holds sync it starts no service and is refused at once. The show carries no
+        automatic flag, so it releases an engine held after a refused restore."""
         wid = (wid or "").strip()
         if not paths.is_safe_wid(wid):
             self.notice.emit(REFUSED_REASON)
@@ -494,8 +494,6 @@ class Backend(QObject):
         try:
             with push.engine_only():
                 shown = push.show(wid)
-                if shown:
-                    push.rearm_rotation()
             if shown:
                 self.statusChanged.emit()
                 return True
@@ -1061,8 +1059,6 @@ class Backend(QObject):
         try:
             with push.engine_only():
                 reply = api_client.next_wallpaper()
-                if reply is not None and reply.get("ok"):
-                    push.rearm_rotation()
         except Exception:
             return False
         if reply is not None and reply.get("ok"):

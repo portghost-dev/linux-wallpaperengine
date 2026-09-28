@@ -4,8 +4,8 @@ The first word names the verb and the rest are its arguments; -j or --json anywh
 asks for JSON output. Verbs come from the modules in lwe_ui.cli.verbs (see registry), and each
 returns its exit code: DONE 0, REFUSED 1, ENGINE_DOWN 2, USAGE 3. Every line goes out as UTF-8
 through clean(), as the engine writes its own output, and a closed output pipe ends the command
-quietly with PIPE_CLOSED. A braked bundle that ended applied during the verb prints its reason
-through ctx.note after the verb's own output (engine/push.brake_notes).
+quietly with PIPE_CLOSED. A run that ended applied during the verb with a re-show the engine held
+prints the brake note through ctx.note after the verb's own output (engine/push.brake_notes).
 """
 from __future__ import annotations
 

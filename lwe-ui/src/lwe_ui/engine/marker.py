@@ -2,16 +2,16 @@
 what the store holds.
 
 The file holds {"version": 1, "generation": N, "classes": [...], "sent": {"pid": N or null, "boot": B,
-"start": S, "playlists": [...]}, "served": {"pid": P, "at": T, "boot": B, "start": S, "braked": F}, "owed":
-{"pid": P, "boot": B, "start": S, "current": G}}. BUNDLE means the engine needs the full sync from the
-store, and CURRENT that the wallpaper on screen also needs a re-show. sent lists the playlists a window run
-has already transferred in this generation to one engine, named as served and owed name theirs (boot and
-start are left out while sent names none). served names the engine that last took a
-whole bundle: its pid, the boot_id of the boot it ran in, its start time S on the engine's clock (None when
-its status gave no uptime, which names no engine) and whether it took the bundle under the brake F, written
-at time T. owed names the engine the owed bundle was last owed to, with the generation G at which owe
-added CURRENT for it: its obligation, None once taken back or once a writer adds CURRENT itself, since a
-writer's CURRENT is never taken back. Both are written without raising the generation, every other write
+"start": S, "playlists": [...]}, "served": {"pid": P, "at": T, "boot": B, "start": S}, "owed": {"pid": P,
+"boot": B, "start": S, "current": G}}. BUNDLE means the engine needs the full sync from the store, and
+CURRENT that the wallpaper on screen also needs a re-show. sent lists the playlists a window run has already
+transferred in this generation to one engine, named as served and owed name theirs (boot and start are left
+out while sent names none). served names the engine that last took a whole bundle: its pid, the boot_id of
+the boot it ran in and its start time S on the engine's clock (None when its status gave no uptime, which
+names no engine), written at time T; a "braked" an older panel wrote there is read and ignored. owed names
+the engine the owed bundle was last owed to, with the generation G at which owe added CURRENT for it: its
+obligation, None once taken back or once a writer adds CURRENT itself, since a writer's CURRENT is never
+taken back. Both are written without raising the generation, every other write
 keeps them (a writer that adds CURRENT only ends owed's obligation), and a file without them reads as none,
 so an engine the served record does not name is owed the bundle.
 A record that holds only served has no generation, and reads as no marker for everything else.
@@ -164,26 +164,17 @@ def owed_record() -> dict[str, Any] | None:
     return None if record is None else dict(record)
 
 
-def record_served(pid: int, start: float | None = None, braked: bool = False, at: float | None = None) -> None:
-    """The engine whose status pid is `pid` and whose start is `start` has taken a whole bundle, under
-    the brake when `braked`: write served as {"pid", "at", "boot", "start", "braked"} under the marker
-    lock, with the time `at` (now when not given) and this boot's boot_id, keeping the generation, the
-    classes, sent and owed. A record that already names that engine with the same braked is left as it
-    is. With no marker, the record holds served alone."""
+def record_served(pid: int, start: float | None = None, at: float | None = None) -> None:
+    """The engine whose status pid is `pid` and whose start is `start` has taken a whole bundle: write
+    served as {"pid", "at", "boot", "start"} under the marker lock, with the time `at` (now when not
+    given) and this boot's boot_id, keeping the generation, the classes, sent and owed. A record that
+    already names that engine is left as it is. With no marker, the record holds served alone."""
     with lock.held("marker"):
         state = _load()
-        if names(state["served"], pid, start) and state["served"].get("braked") is braked:
+        if names(state["served"], pid, start):
             return
         _write({**state, "served": {"pid": pid, "at": time.time() if at is None else at, "boot": boot_id(),
-                                    "start": start, "braked": braked}})
-
-
-def clear_braked(pid: int, start: float | None) -> None:
-    """While the served record names that engine as braked, write it with braked false."""
-    with lock.held("marker"):
-        state = _load()
-        if names(state["served"], pid, start) and state["served"].get("braked") is True:
-            _write({**state, "served": {**state["served"], "braked": False}})
+                                    "start": start}})
 
 
 def owe(pid: int, start: float | None) -> int:

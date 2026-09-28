@@ -3,9 +3,10 @@
 `playlist` and `playlist list` number the playlists by name and mark the playing one. `playlist <p>`
 switches: with the schedule on it needs the running service, since the engine takes a hand switch only
 as a manual bind, and it is refused before any write while the service is away; otherwise
-ACTIVE_PLAYLIST is saved through the change runner, which binds the playlist, manual while the schedule
-is on. `playlist load` binds the saved playlist again without manual. For reload, check_files checks every
-playlist file from its raw text and writes nothing, and apply_cleanups makes its one cleanup.
+ACTIVE_PLAYLIST is saved through the change runner, which binds the playlist with manual, the user's own
+switch, whether or not the schedule is on. `playlist load` binds the saved playlist again without manual.
+For reload, check_files checks every playlist file from its raw text and writes nothing, and
+apply_cleanups makes its one cleanup.
 
 order and interval act on the derived active playlist, the playlist the engine plays for the panel:
 the engine's binding while its schedule is on and that playlist's file exists, else the saved active

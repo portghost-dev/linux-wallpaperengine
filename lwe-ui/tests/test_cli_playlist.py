@@ -3,8 +3,8 @@
 playlist and playlist list number the playlists by name, ties by file name, and mark the playing one:
 the engine's binding when status answers, else the saved active playlist; with none, "No playlists."
 and nothing is made. playlist <p> saves only the ACTIVE_PLAYLIST line and sends playlist-set then
-lanes-set with the playlist, manual only while the engine's schedule is on, and the receipt names the
-next start time. With the schedule on in the store and the engine away it exits 2 with nothing saved
+lanes-set with the playlist and manual, whether or not the engine's schedule is on, and the receipt names
+the next start time. With the schedule on in the store and the engine away it exits 2 with nothing saved
 and no marker; with it off, the switch is saved and pending; an engine lost after the status read
 leaves it saved, pending and not made. The playlist already playing sends nothing; one the store names
 while the engine is bound elsewhere under the schedule gets the manual bind with nothing written.
@@ -332,7 +332,7 @@ class PlaylistVerbTest(unittest.TestCase):
         self.assertEqual(self.lwe("playlist", "4"), (0, SWITCHED.format("Night (4)"), ""))
         self.assertEqual(self.read("settings.conf"), "ACTIVE_PLAYLIST=night\n")
 
-    def test_a_switch_binds_manual_only_while_the_schedule_is_on_and_names_the_next_start(self) -> None:
+    def test_a_switch_binds_manual_whether_or_not_the_schedule_is_on_and_names_the_next_start(self) -> None:
         self.four("ENGINE_VOLUME=40\nACTIVE_PLAYLIST=main\nSCHEDULE_ENABLED=false\n")
         engine = self.engine()
         self.assertEqual(self.lwe("playlist", "Night"), (0, SWITCHED.format("Night (4)"), ""))
@@ -340,7 +340,7 @@ class PlaylistVerbTest(unittest.TestCase):
                          "ENGINE_VOLUME=40\nACTIVE_PLAYLIST=night\nSCHEDULE_ENABLED=false\n")
         self.assertEqual(self.sent(engine), [("playlist-set", "night", "sequential", 90, 1, 1, 1),
                                              ("lanes-set", {"lanes": [{"id": "all", "playlist": "night",
-                                                                       "enabled": True}]})])
+                                                                       "enabled": True, "manual": True}]})])
         engine.calls.clear()
         engine.set(schedule={"enabled": True, "entries": [{"at": "08:00", "playlist": "main"},
                                                           {"at": "20:00", "playlist": "night"}],

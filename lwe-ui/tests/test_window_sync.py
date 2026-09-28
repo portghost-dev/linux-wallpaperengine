@@ -17,8 +17,10 @@ old engine (an unreadable MainPID, a hold that ended early, a start that took th
 the socket), the new engine is served by the next poll, and so is an engine the panel did not start: a
 pid that changes between polls, or one that arrives after the marker was cleared. Each gets one bundle
 and is then recorded as served. While the engine reports that it refused its restore, a new window's first
-sight sends no show and no lanes-set that enables rotation, and an explicit show or next, from the window
-or the tray, then sends the rotation lanes-set. After a suspend the polls send the same engine nothing,
+sight still sends its lanes-set as configured, enabled included; an explicit show, next or prev, from the
+window or the tray, carries no automatic flag and nothing follows it; the window's playlist switch sends
+manual with the schedule off; and a re-show the engine held sends no tail and never counts against the
+drain's retries. After a suspend the polls send the same engine nothing,
 a bundle that takes 6 s serves its engine once, an engine whose status gives no uptime stays unserved but
 gets only the bounded retries, and a deferred first sight followed by a build edit of another wallpaper
 shows once. An engine that reuses the pid of one whose window bundle stopped at its budget gets the
@@ -32,8 +34,8 @@ being deleted, made by another writer while the delete reads, waits for the dele
 nothing and changes ACTIVE_PLAYLIST only in a change that carries the active row. A hand-broken store
 line refuses the change before any request. The tray's next and pause send nothing while sync is
 held elsewhere. An import pass runs one sync_all. The start-up reconcile writes engine-env only. A
-settings reset sends the bundle with one re-show and rewrites engine-env, also while the engine
-refused its restore. The engine is an
+settings reset sends the bundle with one re-show and rewrites engine-env, its re-show marked automatic
+while the engine reports that it refused its restore. The engine is an
 api_client recorder with a scripted status, its clock frozen at 10000 and uptime_s 100 unless a test says
 otherwise; the one child process gets an environment built from scratch.
 
@@ -74,6 +76,7 @@ from lwe_ui.storage import lock, paths, playlists, settings, tags, wp  # noqa: E
 
 OK = {"id": 1, "ok": True, "status": "done", "result": {}}
 REFUSED = {"id": 1, "ok": False, "error": "no"}
+HELD = {"id": 1, "ok": True, "status": "done", "result": {"held": True}}
 
 CHILD = r"""
 import sys, time
@@ -905,17 +908,38 @@ class WindowSyncTest(unittest.TestCase):
         self.assertEqual((self.backend._drain_generation, marker.read()["classes"]),
                          (marker.generation(), ["BUNDLE", "CURRENT"]))
 
-    def test_a_new_window_sends_no_show_and_starts_no_rotation_while_the_engine_refused_its_restore(self) -> None:
+    def test_a_new_window_sends_its_bundle_as_configured_while_the_engine_reports_restore_refused(self) -> None:
         with self.engine(status(pid=300, restore_refused=True)) as rec:
             self.assertEqual(push.sync_all("command").kind, "applied")
-            push.brake_notes()
+            first = [kwargs.get("automatic") for verb, _a, kwargs in rec.calls if verb == "show"]
+            notes = push.brake_notes()
             sent = len(rec.calls)
             models.Backend().status()
         after = rec.calls[sent:]
-        self.assertIn("lanes_set", [verb for verb, _a, _k in after], "the first sight bundled")
-        self.assertNotIn("show", [verb for verb, _a, _k in after])
+        self.assertEqual((first, notes), ([True], []))
         self.assertEqual([lane for verb, args, _k in after if verb == "lanes_set" for lane in args[0]],
-                         [{"id": "all", "playlist": "main"}])
+                         [{"id": "all", "playlist": "main", "enabled": True}])
+
+    def test_the_windows_playlist_switch_sends_manual_with_the_schedule_off(self) -> None:
+        with self.engine(status()) as rec:
+            self.backend.setActivePlaylist("night")
+        self.assertEqual([lane for verb, args, _k in rec.calls if verb == "lanes_set" for lane in args[0]],
+                         [{"id": "all", "playlist": "night", "enabled": True, "manual": True}])
+
+    def test_a_held_reshow_never_counts_against_the_drains_retries(self) -> None:
+        self.backend._engine_pid_seen = 4242
+        clock = Clock()
+        with mock.patch.object(models, "monotonic", clock):
+            with self.engine(status(pid=5000)) as rec:
+                rec.answer("show", HELD)
+                self.backend.status()
+                verbs = rec.verbs()
+                tail = verbs[verbs.index("show"):]
+                for _ in range(3):
+                    clock.now += 100.0
+                    self.backend.status()
+        self.assertEqual((tail, self.backend._drain_failures, marker.served(), marker.read()["classes"],
+                          rec.verbs().count("show"), push.brake_notes()), (["show"], 0, 5000, [], 1, []))
 
     def test_readiness_takes_only_an_engine_whose_pid_is_a_new_non_zero_main_pid(self) -> None:
         # (status pid, MainPID, MainPID before the launch, ready)
@@ -991,21 +1015,22 @@ class WindowSyncTest(unittest.TestCase):
         self.assertLess(took, 0.1)
         self.assertEqual(rec.verbs(), [])
 
-    def test_after_a_braked_bundle_an_explicit_show_or_next_starts_the_rotation(self) -> None:
+    def test_an_explicit_show_next_or_prev_carries_no_automatic_flag_and_nothing_follows_it(self) -> None:
+        legacy = {"pid": 4242, "at": 5.0, "boot": marker.boot_id(), "start": 9900.0, "braked": True}
         shell = types.SimpleNamespace()
-        for name, action in (("showNow", lambda: self.backend.showNow("111")),
-                             ("rotateNext", self.backend.rotateNext),
+        got = []
+        for name, action in (("showNow", lambda: self.backend.showNow("111")), ("rotateNext", self.backend.rotateNext),
+                             ("rotatePrev", self.backend.rotatePrev),
                              ("the tray's next", lambda: tray.TrayProcess._next(shell))):
-            with self.subTest(action=name):
-                with self.engine(status(pid=300, restore_refused=True)) as rec:
-                    self.assertEqual(push.sync_all("window").kind, "applied")
-                    sent = len(rec.calls)
-                    action()
-                self.assertNotIn({"id": "all", "playlist": "main", "enabled": True},
-                                 [lane for verb, args, _k in rec.calls[:sent] if verb == "lanes_set" for lane in args[0]])
-                self.assertEqual([lane for verb, args, _k in rec.calls[sent:] if verb == "lanes_set" for lane in args[0]],
-                                 [{"id": "all", "playlist": "main", "enabled": True}])
-                self.assertFalse(marker.served_record()["braked"])
+            (paths.panel_state_dir() / "sync-pending").write_text(json.dumps(
+                {"version": 1, "generation": None, "classes": [], "sent": {"pid": None, "playlists": []},
+                 "served": legacy}), encoding="utf-8")
+            with self.engine(status()) as rec:
+                action()
+            flags = [kwargs.get("automatic") for verb, _a, kwargs in rec.calls if verb == "show"]
+            got.append((name, rec.verbs(), flags))
+        self.assertEqual(got, [("showNow", ["show", "set_tuning"], [None]), ("rotateNext", ["next_wallpaper"], []),
+                               ("rotatePrev", ["prev_wallpaper"], []), ("the tray's next", ["next_wallpaper"], [])])
 
     def test_a_delivery_already_taking_sync_when_a_restart_hold_begins_does_not_wait_for_it(self) -> None:
         go, held, release = threading.Event(), threading.Event(), threading.Event()
@@ -1311,17 +1336,14 @@ class WindowSyncTest(unittest.TestCase):
         self.assertEqual(self.env_writes, ["write_env"])
         self.assertEqual(marker.read()["classes"], [])
 
-    def test_a_settings_reset_still_reshows_and_starts_rotation_while_the_engine_refused_its_restore(self) -> None:
-        (paths.panel_state_dir() / "sync-pending").write_text(json.dumps(
-            {"version": 1, "generation": None, "classes": [], "sent": {"pid": None, "playlists": []},
-             "served": {"pid": 4200, "at": time.time() - 10.0, "short": 1}}), encoding="utf-8")
+    def test_a_settings_reset_reshows_marked_automatic_and_sends_enabled_while_the_engine_reports_restore_refused(
+            self) -> None:
         with self.engine(status(restore_refused=True)) as rec:
-            self.assertTrue(self.backend.resetConfig())
-        self.assertEqual(rec.verbs().count("show"), 1)
+            self.assertEqual(self.backend.resetConfig().kind, "applied")
+        self.assertEqual([kwargs.get("automatic") for verb, _a, kwargs in rec.calls if verb == "show"], [True])
         lanes = [lane for verb, args, _k in rec.calls if verb == "lanes_set" for lane in args[0]]
         self.assertTrue(lanes and all("enabled" in lane for lane in lanes), lanes)
         self.assertEqual((marker.served(), marker.read()["classes"]), (4242, []))
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

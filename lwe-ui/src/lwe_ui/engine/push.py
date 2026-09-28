@@ -4,9 +4,9 @@ rows), the bundle that rebuilds the engine from the store (sync_all), engine-onl
 the sync lock, and a single show. A delivery sends the whole bundle first to an engine the served
 record does not name (its pid, boot and start), the first such bundle to an engine owes its re-show
 once (_unserved, _owe), and a bundle that ended all ok, its re-show included, records the engine that
-took it (_record_served). While the engine reports restore_refused, an automatic bundle leaves out the
-re-show and the rotation start (_Run.brake), and an explicit show or next then starts the rotation
-(rearm_rotation). Plain Python over the store and the resolver; no Qt import.
+took it (_record_served). Every re-show is marked automatic, so an engine held after a refused restore
+holds it and answers {"held": true}, which counts as a suppressed re-show (_reshow); the panel keeps
+no brake state. Plain Python over the store and the resolver; no Qt import.
 """
 from __future__ import annotations
 
@@ -315,13 +315,16 @@ def restart_holding() -> bool:
     return _restart_holding.is_set()
 
 
-def show_final(wid: str, tuned: Callable[[dict[str, Any] | None], Any] | None = None) -> dict[str, Any] | None:
+def show_final(wid: str, tuned: Callable[[dict[str, Any] | None], Any] | None = None,
+               automatic: bool = False) -> dict[str, Any] | None:
     """Show `wid` with its resolved arguments and wait for the load to finish; set-tuning follows
-    only a done ok, and its reply goes to `tuned` when given. Returns the final reply, None when
-    the engine never answered."""
+    only a done ok the engine did not hold, and its reply goes to `tuned` when given. automatic marks
+    a re-show the panel sends on its own. Returns the final reply, None when the engine never
+    answered."""
     engine_wid, show_args = resolve_show_args(wid)
-    reply = api_client.show(engine_wid, wait_done=True, ui_id=wid, **show_args)
-    if reply is not None and _reply_class(reply) == "ok":
+    extra = {"automatic": True} if automatic else {}
+    reply = api_client.show(engine_wid, wait_done=True, ui_id=wid, **show_args, **extra)
+    if reply is not None and _reply_class(reply) == "ok" and not _held(reply):
         tuning = api_client.set_tuning(**resolved_tuning(wid))
         if tuned is not None:
             tuned(tuning)
@@ -367,6 +370,12 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def _held(reply: dict[str, Any] | None) -> bool:
+    """Whether a show's final reply says the engine held it: a done ok whose result is {"held": true}."""
+    result = reply.get("result") if isinstance(reply, dict) else None
+    return isinstance(result, dict) and result.get("held") is True
+
+
 def _on_screen(status: dict[str, Any] | None) -> str:
     current = (status or {}).get("current")
     return str(current.get("ui_id") or "") if isinstance(current, dict) else ""
@@ -381,10 +390,10 @@ class _Run:
     """One delivery under the sync hold. It sends requests in order and keeps how they ended: an
     uncertain or away reply ends the run, a refusal is kept (the first message) and the run goes on,
     and a window run stops at its budget, which is checked between steps and between playlists.
-    brake is set for an automatic run whose status reports restore_refused; bundled, deferred, reshown
-    and armed say that its bundle ran, that it left its re-show to a due delivery, that every request of
-    a re-show ended ok, and that a lanes-set carrying enabled ended ok. engine is the answering engine's
-    identity, taken once from the status as the run starts (_engine) and kept for the whole run."""
+    bundled, deferred, reshown, held and released say that its bundle ran, that it left its re-show to a
+    due delivery, that every request of a re-show ended ok, that the engine held a re-show, and
+    that a manual lanes-set, the user's own switch, ended ok. engine is the answering engine's identity,
+    taken once from the status as the run starts (_engine) and kept for the whole run."""
 
     def __init__(self, run: str, generation: int, status: dict[str, Any]) -> None:
         self.window = run == "window"
@@ -397,15 +406,14 @@ class _Run:
         self.all_ok = True
         self.stopped = False
         self.recorded = 0
-        self.schedule: bool | None = None
         self.reply: Any = None
         self.clock: tuple[int, int] | None = None
         self.refused_verb: str | None = None
-        self.brake = False
         self.bundled = False
         self.deferred = False
         self.reshown = False
-        self.armed = False
+        self.held = False
+        self.released = False
         self._payloads: dict[str, tuple] = {}
 
     def send(self, call: Callable[..., Any], *args: Any, **kwargs: Any) -> bool:
@@ -444,21 +452,10 @@ class _Run:
     def enabled(self, slug: str | None) -> bool:
         return bool(slug) and bool(self.payload(slug)[3])
 
-    def schedule_on(self) -> bool:
-        """Whether the engine's schedule is on: as this run's last schedule-set that ended ok
-        left it, else as the status read inside sync reported it."""
-        if self.schedule is not None:
-            return self.schedule
-        schedule = self.status.get("schedule")
-        return isinstance(schedule, dict) and bool(schedule.get("enabled"))
-
 
 def _send_schedule(run: _Run) -> None:
-    """schedule-set with the stored schedule; one that ends ok is the schedule state the run
-    leaves in the engine."""
-    enabled = _schedule_enabled()
-    if run.send(api_client.schedule_set, enabled, _schedule_entries()):
-        run.schedule = enabled
+    """schedule-set with the stored schedule."""
+    run.send(api_client.schedule_set, _schedule_enabled(), _schedule_entries())
 
 
 def _transfer(run: _Run, slug: str) -> bool:
@@ -475,11 +472,11 @@ def _transfer(run: _Run, slug: str) -> bool:
 
 def _lanes_set(run: _Run, lane: dict[str, Any]) -> None:
     """lanes-set for the one lane; an ok reply's lane clock (next_in_ms, interval_s) is kept for
-    the deck's countdown."""
+    the deck's countdown, and an ok manual one marks the run released."""
     if not run.send(api_client.lanes_set, [lane]):
         return
-    if "enabled" in lane:
-        run.armed = True
+    if lane.get("manual"):
+        run.released = True
     result = run.reply.get("result")
     lanes = result.get("lanes") if isinstance(result, dict) else None
     first = lanes[0] if isinstance(lanes, list) and lanes and isinstance(lanes[0], dict) else {}
@@ -526,14 +523,18 @@ def _live(run: _Run, verb: str, wid: str, args: dict[str, Any]) -> None:
 
 
 def _reshow(run: _Run, wid: str) -> None:
-    """One re-show of `wid` that keeps the speed read inside sync: show_final, whose set-tuning
-    reply counts as one of the run's requests, then set-skip when the wallpaper lists skips, since
-    a show clears the skip list, then set-speed with the read speed, whatever the show's outcome. The run
-    is marked reshown only when every one of these requests ended ok."""
+    """One re-show of `wid`, marked automatic, that keeps the speed read inside sync: show_final, whose
+    set-tuning reply counts as one of the run's requests, then set-skip when the wallpaper lists skips,
+    since a show clears the skip list, then set-speed with the read speed, whatever the show's outcome.
+    A re-show the engine held marks the run held and sends none of that tail. The run is marked
+    reshown only when every one of these requests ended ok."""
     speed = run.status.get("speed")
     ended: list[bool] = []
-    shown = show_final(wid, tuned=lambda reply: ended.append(run.note(reply, "set-tuning")))
+    shown = show_final(wid, tuned=lambda reply: ended.append(run.note(reply, "set-tuning")), automatic=True)
     ended.append(run.note(shown, "show"))
+    if _held(shown):
+        run.held = True
+        return
     skips = resolve_show_args(wid)[1].get("skip_objects")
     if skips:
         ended.append(run.note(api_client.set_skip(skips), "set-skip"))
@@ -555,13 +556,9 @@ def _bundle(run: _Run, derived: str | None, reshow: bool, reload: bool = False, 
     """sync_all's requests on the run's generation and status. It re-shows when the
     marker holds CURRENT, and for a reload's run whatever the marker holds, since that re-show is
     the reload's own action and goes out after a budget stop as a change's own rows do; a re-show
-    left to a due delivery (`defer`) marks the run deferred. A braked run sends no re-show and logs
-    why."""
+    left to a due delivery (`defer`) marks the run deferred."""
     _bundle_steps(run, derived)
     run.bundled = True
-    if run.brake:
-        _log.info("engine %s: %s", run.status.get("pid"), BRAKED)
-        return
     wid = _on_screen(run.status)
     if not wid or not (reshow or defer):
         return
@@ -573,10 +570,10 @@ def _bundle(run: _Run, derived: str | None, reshow: bool, reload: bool = False, 
 
 
 def _bundle_steps(run: _Run, derived: str | None) -> None:
-    """Steps 2 to 6. A window run records each playlist it transferred in the marker and skips
-    the ones an earlier run of this generation recorded for the same engine, by its pid, boot and start
-    (run.engine); a run whose status gives no pid records and skips nothing. A braked run's
-    lanes-set carries the lane's playlist binding without enabled, which leaves rotation as it is."""
+    """The bundle's requests before the re-show. A window run records each playlist it transferred
+    in the marker and skips the ones an earlier run of this generation recorded for the same engine,
+    by its pid, boot and start (run.engine); a run whose status gives no pid records and skips
+    nothing."""
     scheduled = _scheduled()
     tracked = run.window and run.engine is not None
     skip: set[str] = set()
@@ -610,8 +607,7 @@ def _bundle_steps(run: _Run, derived: str | None) -> None:
         lane: dict[str, Any] = {"id": "all"}
         if derived:
             lane["playlist"] = derived
-        if not run.brake:
-            lane["enabled"] = run.enabled(derived)
+        lane["enabled"] = run.enabled(derived)
         _lanes_set(run, lane)
     if run.halted():
         return
@@ -669,10 +665,7 @@ def _own(run: _Run, row: str, key: str | None, ticket: Ticket, derived: str | No
     screen."""
     if row == "active":
         if active and sent.get(active):
-            lane: dict[str, Any] = {"id": "all", "playlist": active, "enabled": run.enabled(active)}
-            if run.schedule_on():
-                lane["manual"] = True
-            _lanes_set(run, lane)
+            _lanes_set(run, {"id": "all", "playlist": active, "enabled": run.enabled(active), "manual": True})
     elif row == "pause":
         _lanes_set(run, {"id": "all", "enabled": run.enabled(derived)})
     elif row in ("policy", "members"):
@@ -810,63 +803,34 @@ def _owe(run: _Run) -> None:
 
 
 def brake_notes() -> list[str]:
-    """The brake reasons of this process's command runs whose braked bundle ended applied, kept since
-    the last call, which are then forgotten."""
+    """The brake notes of this process's command runs that ended applied with a re-show the engine held,
+    kept since the last call, which are then forgotten."""
     notes = list(_brake_notes)
     _brake_notes.clear()
     return notes
 
 
-def rearm_rotation() -> None:
-    """After an explicit show or next that ended ok, under the caller's sync hold: when the served
-    record is braked and names the engine that answers a status read, the lanes-set its braked bundle
-    left out, with the lane's playlist and enabled as the store says; an ok reply clears braked. With
-    no braked record nothing is read or sent, and a marker that cannot be read or written leaves
-    braked for the next explicit action."""
-    try:
-        record = marker.served_record()
-        if record is None or record.get("braked") is not True:
-            return
-        cls, status = read_status()
-        if cls != "ok":
-            return
-        run = _Run("command", 0, status)
-        if run.engine is None or not marker.names(record, *run.engine):
-            return
-        derived = derived_active(status)[0]
-        lane: dict[str, Any] = {"id": "all"}
-        if derived:
-            lane["playlist"] = derived
-        lane["enabled"] = run.enabled(derived)
-        _lanes_set(run, lane)
-        if run.armed:
-            marker.clear_braked(*run.engine)
-    except OSError:
-        pass
-
-
 def _record_served(run: _Run) -> None:
     """What the run leaves in the served and owed records for its engine (run.engine). After a bundle
     whose every request ended ok, with nothing stopped and no re-show left to a due delivery, the engine
-    is served, braked when the run was braked and armed no rotation. A run that ended refused or
-    uncertain takes back the CURRENT its engine's owed bundle added (marker.drop_owed) only when every
-    request of its re-show ended ok or the brake left the re-show out; otherwise CURRENT stays owed for
-    the next bundle. An ok lanes-set carrying enabled clears braked for that engine."""
+    is served, a re-show the engine held counting as ended ok. A run that ended refused or uncertain
+    takes back the CURRENT its engine's owed bundle added (marker.drop_owed) only when every request of
+    its re-show ended ok or the engine held the re-show; otherwise CURRENT stays owed for the next
+    bundle."""
     if run.engine is None:
         return
     with contextlib.suppress(OSError):
         if run.bundled and run.all_ok and run.ended is None and not run.stopped and not run.deferred:
-            marker.record_served(*run.engine, braked=run.brake and not run.armed, at=_now())
-        elif not run.all_ok and not run.stopped and run.ended != "away" and (run.reshown or run.brake):
+            marker.record_served(*run.engine, at=_now())
+        elif not run.all_ok and not run.stopped and run.ended != "away" and (run.reshown or run.held):
             marker.drop_owed(*run.engine)
-        if run.armed:
-            marker.clear_braked(*run.engine)
 
 
 def _finish(run: _Run, env: str | None = None, keep_current: bool = False) -> Outcome:
     """Record the run's engine (_record_served), clear the marker when every request ended ok,
-    CURRENT kept when `keep_current`, and name the outcome; a braked bundle of a command run that
-    ended applied keeps its reason for brake_notes()."""
+    CURRENT kept when `keep_current`, and name the outcome; a command run that ended applied with a
+    re-show the engine held keeps the brake note for brake_notes(), unless its own manual switch
+    released the engine."""
     _record_served(run)
     warning = None
     if run.all_ok and not run.stopped:
@@ -889,7 +853,7 @@ def _finish(run: _Run, env: str | None = None, keep_current: bool = False) -> Ou
         return Outcome("pending", reason="budget", recorded=run.recorded, **seen)
     if run.refused is not None:
         return Outcome("refused", message=run.refused, **seen)
-    if run.brake and run.bundled and not run.window:
+    if run.held and not run.released and not run.window:
         _brake_notes.append(BRAKED)
     return Outcome("applied", warning=warning, **seen)
 
@@ -905,7 +869,6 @@ def _deliver(ticket: Ticket, defer_current: bool = False) -> Outcome:
         derived = derived_active(status)[0]
         rows = [row for row, _key in ticket.rows]
         reload = "reload" in rows
-        run.brake = status.get("restore_refused") is True and not reload
         reshow = bool(ticket.wid) and ticket.wid == _on_screen(status) and "wp_build" in rows
         unserved = _unserved(run.engine)
         bundle = unserved or ticket.existed or reload
@@ -919,7 +882,7 @@ def _deliver(ticket: Ticket, defer_current: bool = False) -> Outcome:
                     defer=defer_current and not reshow)
         if run.ended is None:
             _rows(run, ticket, derived, reshow)
-        return _finish(run, ticket.env, keep_current=defer_current and not reshow and not run.brake)
+        return _finish(run, ticket.env, keep_current=defer_current and not reshow)
 
 
 def _adopt_current(run: _Run, whole: bool) -> None:
@@ -1041,9 +1004,9 @@ def sync_all(run: str, classes: Iterable[str] = ("BUNDLE",), wait_s: float = 2.0
     neither. defer_current leaves the re-show and CURRENT to a window delivery that is due, as
     run_change does. An engine the served record does not name gets CURRENT ensured as well, once
     for that engine, and a bundle whose every request ended ok, its re-show included, records it as
-    served. A run whose status reports restore_refused is braked unless `classes` names CURRENT: no
-    re-show, a lanes-set without enabled, and no CURRENT kept. The outcome carries the generation the
-    run worked from: the one ensure gave, or the one its owed bundle raised it to."""
+    served; the re-show is marked automatic, and one the engine held counts as suppressed. The
+    outcome carries the generation the run worked from: the one ensure gave, or the one its owed bundle
+    raised it to."""
     classes = tuple(classes)
     generation = marker.ensure(classes)
     with contextlib.ExitStack() as stack:
@@ -1052,8 +1015,7 @@ def sync_all(run: str, classes: Iterable[str] = ("BUNDLE",), wait_s: float = 2.0
             return replace(status, generation=generation)
         r = _Run(run, generation, status)
         reload = "CURRENT" in classes
-        r.brake = status.get("restore_refused") is True and not reload
         if _unserved(r.engine):
             _owe(r)
         _bundle(r, derived_active(status)[0], reshow=not defer_current, reload=reload, defer=defer_current)
-        return _finish(r, keep_current=defer_current and not r.brake)
+        return _finish(r, keep_current=defer_current)

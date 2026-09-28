@@ -183,6 +183,7 @@ def show(
     clampcomposites: float | None = None,
     texcomp: bool | None = None,
     texdetail: str | None = None,
+    automatic: bool = False,
     sock: "str | os.PathLike | None" = None,
 ) -> dict[str, Any] | None:
     """Hot-swap every output to this wallpaper id. Default waits only for the ack.
@@ -200,7 +201,9 @@ def show(
     pan_x, pan_y -1..1}; the engine composes it with the lane layer (set_fit). ssfactor
     and clampcomposites, the scene and effect caps as multiples of the screen (0 or below
     is off, at most 4), texcomp a bool, texdetail in auto/full: the quality switches read
-    at scene load; omitted means the engine's launch environment.
+    at scene load; omitted means the engine's launch environment. automatic marks a re-show the
+    panel sends on its own: an engine held after a refused restore answers it done with
+    {"held": true} and shows nothing, where a show without it that ends ok releases the hold.
     """
     args: dict[str, Any] = {"id": wid}
     if cc is not None:
@@ -242,6 +245,8 @@ def show(
         # opaque identity echo: the engine stores + reports it so Now Playing can name
         # the preset TILE the user picked, not the base wallpaper the engine renders
         args["ui_id"] = str(ui_id)
+    if automatic:
+        args["automatic"] = True
     return request("show", args, wait_done=wait_done, sock=sock)
 
 
@@ -316,9 +321,10 @@ def playlist_set(
 
 def lanes_set(lanes: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Bind lanes to playlists. Each lane is {id, playlist?, enabled?, group?, fit?, manual?};
-    the engine refuses a playlist it has not been sent and returns every lane's status. With
-    the schedule on, a playlist change is honoured only with manual=True (the user's own
-    switch, held until the next boundary); a policy push keeps the engine's binding."""
+    the engine refuses a playlist it has not been sent and returns every lane's status. manual=True
+    marks the user's own switch: with the schedule on it is honored and held until the next
+    boundary, where a policy push keeps a binding the engine already holds, and it releases an
+    engine held after a refused restore."""
     return request("lanes-set", {"lanes": list(lanes)})
 
 

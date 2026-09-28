@@ -2,10 +2,9 @@
 
 next and prev read status first, then send the engine's next or prev under the sync lock, held until
 the final reply, and print what is on screen from one more status read; they write nothing, leave the
-playlist timer alone and send no lanes-set, but a next to an engine served under the brake is followed by
-the rotation lanes-set and clears the served record's braked flag. pause saves ROTATION_ENABLED through the change runner and
-sends one lanes-set with the lane's enabled state, never set-speed; a value already saved is neither
-written nor sent. The engine is always tests/_fake_engine.py on a socket the test made. "The only
+playlist timer alone and send no lanes-set, also when a legacy served record says braked, and they carry
+no automatic flag. pause saves ROTATION_ENABLED through the change runner and sends one lanes-set with the
+lane's enabled state, never set-speed; a value already saved is neither written nor sent. The engine is always tests/_fake_engine.py on a socket the test made. "The only
 request" means apart from status reads, and the marker is read as engine/marker.py defines it: it exists while it
 holds a class.
 
@@ -118,13 +117,16 @@ class NextPrevTest(RunningCase):
         self.assertEqual(self.conf.read_bytes(), before)
         self.assertEqual(self.marker_classes(), [])
 
-    def test_a_next_to_an_engine_served_under_the_brake_then_sends_its_rotation_lanes_set(self) -> None:
+    def test_a_next_or_prev_carries_no_automatic_flag_and_sends_no_lanes_set(self) -> None:
         engine = self.engine(current=DEEP, lanes=[{"id": "all", "playlist": "chill"}])
-        self.marker.record_served(engine.fields["pid"], engine.started, braked=True)
-        self.assertEqual(self.lwe("next")[0], 0)
-        self.assertEqual(self.requests(engine)[1:],
-                         [("lanes-set", {"lanes": [{"id": "all", "playlist": "chill", "enabled": True}]})])
-        self.assertFalse(self.marker.served_record()["braked"])
+        legacy = {"pid": engine.fields["pid"], "at": 5.0, "boot": self.marker.boot_id(), "start": engine.started,
+                  "braked": True}
+        self.marker._file().write_text(json.dumps({"version": 1, "generation": None, "classes": [],
+                                                   "sent": {"pid": None, "playlists": []}, "served": legacy}),
+                                       encoding="utf-8")
+        self.assertEqual((self.lwe("next")[0], self.lwe("prev")[0]), (0, 0))
+        self.assertEqual(self.requests(engine), [("next", {}), ("prev", {})])
+        self.assertTrue(self.marker.served_record()["braked"], "nothing rewrites the legacy record")
 
     def test_a_done_without_a_status_answer_after_it_names_the_id_from_the_reply(self) -> None:
         engine = self.engine(current=DEEP)

@@ -147,10 +147,7 @@ class TrayProcess(QObject):
     def _next(self) -> None:
         try:
             with lock.held("sync"):
-                reply = api_client.next_wallpaper()
-                if isinstance(reply, dict) and reply.get("ok"):
-                    from .engine import push
-                    push.rearm_rotation()
+                api_client.next_wallpaper()
         except lock.StoreBusy as exc:
             logging.getLogger(__name__).warning("next not sent: %s", exc)
 
