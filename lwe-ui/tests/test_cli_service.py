@@ -49,7 +49,9 @@ class ServiceTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         from lwe_ui import api_client, cli
         from lwe_ui.engine import daemon_unit, push
+        from lwe_ui.cli import report
         cls.api, cls.cli, cls.unit, cls.push = api_client, cli, daemon_unit, push
+        cls.chances = report.OPPORTUNITIES
         engine = ROOT / "bin" / "linux-wallpaperengine"
         engine.parent.mkdir(parents=True, exist_ok=True)
         engine.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -61,6 +63,10 @@ class ServiceTest(unittest.TestCase):
         shutil.rmtree(ROOT, True)
 
     def setUp(self) -> None:
+        from lwe_ui.engine import marker
+        state = marker.read()
+        if state["generation"] is not None:
+            marker.clear(state["generation"])
         self.events: list = []
         CONFIG.mkdir(parents=True, exist_ok=True)
         (CONFIG / "settings.conf").write_text(f"ENGINE_BIN={self.engine}\n", encoding="utf-8")
@@ -187,12 +193,12 @@ class ServiceTest(unittest.TestCase):
         self.sync.assert_not_called()
         code, out, err = self.run_lwe(["start"], STOPPED, ready=False)
         self.assertEqual((code, out), (1, ""))
-        self.assertEqual(err, "The service started, but the engine did not answer within 20 s; your settings will "
-                              f"be sent at the next chance. {LOG} shows why.\n")
+        self.assertEqual(err, f"The service started, but the engine did not answer within 20 s; {LOG} shows why. "
+                              f"The engine has not taken your saved configuration yet. {self.chances}\n")
         pending = self.push.Outcome("pending", reason="away")
         self.assertEqual(self.run_lwe(["start"], STOPPED, outcome=pending),
                          (0, "Started the service. Autostart is unchanged (off).\n"
-                             "It has not taken your settings yet (away); lwe reload sends them.\n", ""))
+                             f"The engine has not taken your saved configuration yet (away). {self.chances}\n", ""))
         refused = self.push.Outcome("refused", message="unknown playlist")
         self.assertEqual(self.run_lwe(["restart"], RUNNING, outcome=refused)[0], 1)
 
@@ -220,6 +226,65 @@ class ServiceTest(unittest.TestCase):
         self.assertNotIn("layer", out)
         code, out, err = self.run_lwe(["-j"], RUNNING, waiting={"ENGINE_TEXCOMP": True, "ENGINE_LAYER": False})
         self.assertEqual((code, err, json.loads(out)["waiting"]), (0, "", ["texturecache"]))
+
+    def test_an_interrupted_wait_leaves_the_owed_bundle(self) -> None:
+        from lwe_ui.cli.verbs import service
+        from lwe_ui.engine import marker
+        for action in ("start", "restart"):
+            with self.subTest(action=action):
+                state = marker.read()
+                if state["generation"] is not None:
+                    marker.clear(state["generation"])
+                calls = []
+
+                def runner(args, **kw):
+                    calls.append(args)
+                    return 0, "", ""
+
+                with mock.patch.object(self.unit, "RUNNER", runner), \
+                        mock.patch.object(self.push, "wait_ready", side_effect=KeyboardInterrupt), \
+                        mock.patch.object(self.push, "sync_all") as sync:
+                    with self.assertRaises(KeyboardInterrupt):
+                        service._launch([action, "lwe-engine.service"], None)
+                self.assertEqual((calls, sync.call_count), ([[action, "lwe-engine.service"]], 0))
+                self.assertIn("BUNDLE", marker.read()["classes"])
+
+    def test_a_marker_failure_exits_1_and_launches_nothing(self) -> None:
+        from lwe_ui.engine import marker
+        for words, state in ((["start"], STOPPED), (["restart"], RUNNING)):
+            with self.subTest(words=words):
+                self.events.clear()
+                with mock.patch.object(marker, "ensure", side_effect=OSError("disk full")):
+                    code, out, err = self.run_lwe(words, state)
+                self.assertEqual((code, out, err),
+                                 (1, "", "The sync record could not be written (disk full), so nothing was started.\n"))
+                self.assertNotIn(words[0], self.kinds())
+
+    def test_a_timeout_keeps_the_record_and_sends_nothing(self) -> None:
+        from lwe_ui.engine import marker
+        for words, state in ((["start"], STOPPED), (["restart"], RUNNING)):
+            for pending in ((), ("CURRENT",)):
+                with self.subTest(words=words, pending=pending):
+                    held = marker.read()
+                    if held["generation"] is not None:
+                        marker.clear(held["generation"])
+                    if pending:
+                        marker.ensure(pending)
+                    self.assertEqual(self.run_lwe(words, state, ready=False)[0], 1)
+                    self.assertEqual(set(marker.read()["classes"]), {"BUNDLE", *pending})
+                    self.sync.assert_not_called()
+
+    def test_the_lines_that_do_not_apply_name_the_receipt_opportunities(self) -> None:
+        from lwe_ui.cli.verbs import service
+        err = self.run_lwe(["start"], STOPPED, ready=False)[2]
+        self.assertTrue(err.endswith(f" {self.chances}\n"))
+        for kind, reason in (("pending", "busy"), ("uncertain", None)):
+            with self.subTest(kind=kind):
+                out = self.run_lwe(["restart"], RUNNING, outcome=self.push.Outcome(kind, reason=reason))[1]
+                self.assertTrue(out.endswith(f" {self.chances}\n"), out)
+                self.assertNotIn("lwe reload sends them", out)
+        self.assertNotIn("next chance", err)
+        self.assertNotIn(self.chances[:20], Path(service.__file__).read_text(encoding="utf-8"))
 
     def test_an_engine_bin_named_lwe_is_skipped(self) -> None:
         lwe = ROOT / "bin" / "lwe"
