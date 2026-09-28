@@ -257,7 +257,7 @@ private:
     /** released engines must not LOOK like they hold memory: trim the heap and ask the
      * kernel to evict our clean file-backed pages now instead of lazily on pressure */
     void evictResidentPages () const;
-    /** orphan reflex: no frames AND no client heartbeat for the window => shed the outputs */
+    /** orphan reflex: no frames AND no client heartbeat for the window => shed the outputs if the driver can */
     void tickDeadman ();
     /**
      * FullscreenBehavior::Stop edge, once per main-loop pass: shed the outputs while

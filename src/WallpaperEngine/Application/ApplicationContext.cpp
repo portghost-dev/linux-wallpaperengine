@@ -584,8 +584,8 @@ void ApplicationContext::loadSettingsFromArgv () {
 	.action ([this] (const std::string& value) -> void {
 	    this->settings.general.daemonMode = true;
 	    this->settings.general.apiSocket = true;
-	    // Stop, not Off: the engine releases outputs itself when something goes
-	    // fullscreen (41ms release / 105ms re-acquire, measured) and needs no
+	    // Stop, not Off: where the driver can, the engine releases outputs itself when something goes
+	    // fullscreen (41ms release / 105ms re-acquire, measured), else it pauses, and needs no
 	    // outside watcher. Persisted state and client verbs both override this.
 	    this->settings.render.fullscreenBehavior = FullscreenBehavior::Stop;
 	});

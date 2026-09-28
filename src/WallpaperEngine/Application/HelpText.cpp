@@ -62,8 +62,8 @@ const char* engineHelpText () {
   --daemon                              Starts with no wallpaper and waits for a show command on the
                                         socket (name each screen with --screen, no --wallpaper); it
                                         also turns on --listen, releases the screens while an app is
-                                        fullscreen (Wayland only), and saves its state to restore on
-                                        the next start.
+                                        fullscreen (on the Wayland desktop; elsewhere it pauses),
+                                        and saves its state to restore on the next start.
   --screenshot <file>                   Saves one screenshot of the wallpaper to this file once it
                                         has drawn a few frames (see --screenshot-delay), for color
                                         tools such as pywal.
@@ -113,15 +113,19 @@ const char* engineHelpText () {
                                         card when it can. Same as the videodecode setting; its
                                         engine variable still works. Default software.
   --color <"b c s h">                   The color correction every wallpaper starts with when the
-                                        engine runs without the panel. Same as the color setting;
-                                        its engine variable still works. Default "1 1 1 0".
+                                        engine runs without the panel. The hue is in degrees. Same
+                                        as the color setting; its engine variable still works, with
+                                        the hue in radians. Default "1 1 1 0".
   --speed <0-10>                        How fast scene animation runs, from 0 to 10; 1 is normal and
                                         0 freezes it. Same as the speed setting; its engine variable
                                         still works. Default 1.
-  --watchdog <seconds>                  If the engine has drawn nothing and heard nothing from the
-                                        panel for this long, it frees your screens. It does not
-                                        restart anything. Same as the watchdog setting; its engine
-                                        variable still works. Default 300.
+  --watchdog <seconds>                  Once the panel or another client has pinged the engine, if
+                                        the engine then draws nothing and hears nothing for this
+                                        long, it frees your screens (on the Wayland desktop;
+                                        elsewhere it only logs). It does not restart anything. Takes
+                                        seconds, or a whole number with s, m or h. Same as the
+                                        watchdog setting; its engine variable still works. Default
+                                        300.
   --lightdimming <number>               Overall brightness of the lights inside scenes. Same as the
                                         lightdimming setting; its engine variable still works.
                                         Default 16.
@@ -136,11 +140,14 @@ const char* engineHelpText () {
                                         still works. Default 90.
   --socket <path>                       Where the engine listens for commands. Same as the socket
                                         setting; its engine variable still works. Default
-                                        $XDG_RUNTIME_DIR/lwe/engine.sock.
+                                        $XDG_RUNTIME_DIR/lwe/engine.sock, else
+                                        /tmp/lwe-<uid>/engine.sock.
   --fullscreen <keep|pause|stop>        What happens while a game or app is fullscreen: keep
-                                        playing, pause, or stop and free the screens; stop is
-                                        Wayland only. --no-fullscreen-pause keeps working as
-                                        --fullscreen keep, unless a later --daemon sets stop.
+                                        playing, pause, or stop and free the screens; stop frees the
+                                        screens only on the Wayland desktop and pauses elsewhere.
+                                        Default pause, or stop with --daemon. --no-fullscreen-pause
+                                        keeps working as --fullscreen keep, unless a later --daemon
+                                        sets stop.
   --debug <switch>=<value>              Sets one debugging switch by its plain name; repeat it for
                                         more.
   --help-debug                          Prints the unsupported debugging switches and exits.

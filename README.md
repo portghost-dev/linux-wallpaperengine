@@ -259,7 +259,7 @@ and whether it came from a flag, the environment or the default.
 | `--videodecode` | `LWE_HWDEC` | software or auto | software | How video wallpapers are decoded; auto uses the graphics card when it can. |
 | `--color` | `LWE_CC` | "brightness contrast saturation hue" | "1 1 1 0" | The color correction every wallpaper starts with. The flag takes the hue in degrees; the variable takes radians. |
 | `--speed` | `LWE_TIMESCALE` | a number from 0 to 10 | 1 | How fast scene animation runs; 0 freezes it. |
-| `--watchdog` | `LWE_DEADMAN` | whole seconds, or a whole number with s, m or h, up to 24h; 0 is off | 300 | If the engine has drawn nothing and heard nothing from the panel for this long, it frees your screens. It restarts nothing. |
+| `--watchdog` | `LWE_DEADMAN` | whole seconds, or a whole number with s, m or h, up to 24h; 0 is off | 300 | Once the panel or another client has pinged the engine, if the engine then draws nothing and hears nothing for this long, it frees your screens (on the Wayland desktop; elsewhere it only logs). It restarts nothing. |
 | `--lightdimming` | `LWE_CLASSICK` | 0.01 to 1000 | 16 | Overall brightness of the lights inside scenes; higher is dimmer. |
 | `--lightfalloff` | `LWE_CLASSICEXP` | 0.5 to 6 | 2 | How quickly scene lights fade with distance. |
 | `--audiogain` | `LWE_AUDIOGAIN` | 0.1 to 20 | 1 | How strongly wallpapers react to sound. |
@@ -277,10 +277,13 @@ Good to know:
 - The variables keep their old forms: `LWE_CC` takes the hue in radians,
   `LWE_DEADMAN` plain seconds, `LWE_TIMESCALE` any speed up to 20, and
   `LWE_HWDEC` any of mpv's hardware decoding modes.
-- With `--daemon`, a saved state brings back speed, color, light dimming, light
-  falloff and sound strength right after launch, unless the command line gives a
-  screen a wallpaper (`--screen` with `--wallpaper` or `--steamplaylist`). The
-  `config` block still shows the flag's value.
+- With `--daemon`, a saved state brings back light dimming, light falloff and
+  sound strength right after launch and shows the wallpaper that was on screen,
+  with its own speed and color or else these flags' values. A wallpaper on the
+  command line (`--wallpaper`, alone or after `--screen` or `--span`, or
+  `--steamplaylist` after `--screen`) skips the saved state. The `config` block
+  shows the flags' values. Two engines started with different `--socket` paths
+  still share one saved state; give each its own `XDG_STATE_HOME`.
 - A `show` command that carries its own caps or texture choices keeps them for
   that wallpaper, whatever the flags say.
 - A value that starts with a dash can't be given unless it is a plain number
@@ -320,12 +323,13 @@ named just before it; given before any screen, it sets the window and the
 starting value for the screens named after it.
 
 `--fullscreen keep`, `pause` or `stop` sets what happens while a game or app is
-fullscreen: keep playing, pause, or stop and free the screens (stop needs
-Wayland). Without it the engine pauses, or stops with `--daemon`; `--fullscreen`
-wins over `--daemon` in either order. `--no-fullscreen-pause` does the same as
-`keep`, unless a later `--daemon` sets stop. `--fullscreen` and
-`--no-fullscreen-pause` can't be given together. With `--daemon`, a restored
-state also brings back its saved fullscreen choice.
+fullscreen: keep playing, pause, or stop and free the screens (stop frees the
+screens only on the Wayland desktop and pauses elsewhere). Without it the engine
+pauses, or stops with `--daemon`; `--fullscreen` wins over `--daemon` in either
+order. `--no-fullscreen-pause` does the same as `keep`, unless a later
+`--daemon` sets stop. `--fullscreen` and `--no-fullscreen-pause` can't be given
+together. With `--daemon`, a restored state also brings back its saved
+fullscreen choice.
 
 ### Debugging switches
 

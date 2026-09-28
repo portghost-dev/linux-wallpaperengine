@@ -33,7 +33,7 @@ enum class FullscreenBehavior {
     Off = 0,
     /** freeze the scene, surfaces and VRAM retained, resume is instant */
     Pause = 1,
-    /** tear the surfaces down and free the resources; re-acquired when it clears */
+    /** tear the surfaces down and free the resources if the driver can (else pause); re-acquired when it clears */
     Stop = 2,
 };
 
@@ -136,8 +136,8 @@ public:
 	    int maximumFPS;
 	    /**
 	     * Indicates if pausing should happen when something goes fullscreen.
-	     * LAUNCH-scoped: it decides whether a REAL fullscreen detector is built
-	     * (VideoFactories) and is what --no-fullscreen-pause writes. The running
+	     * LAUNCH-scoped: without the command socket it decides whether a REAL
+	     * fullscreen detector is built (VideoFactories) and is what --no-fullscreen-pause writes. The running
 	     * policy lives in fullscreenBehavior below - read that, not this, when
 	     * deciding what to do on a fullscreen edge.
 	     */

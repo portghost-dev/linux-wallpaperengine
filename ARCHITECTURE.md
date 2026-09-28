@@ -228,18 +228,23 @@ Fullscreen, AppCondition }`, `WallpaperApplication.h::ReleaseReason`):
   acquire rebuilds. Idempotent; a Verb hold cannot be downgraded by other sources
   (WallpaperApplication.cpp::apiReleaseOutputs).
 - **Deadman switch** - after the first `ping` is ever seen, if both pings and renders
-  stop for `LWE_DEADMAN` seconds (default 300), outputs release themselves: the orphan
+  stop for `LWE_DEADMAN` seconds (default 300), outputs release themselves where the
+  driver can release them (the Wayland desktop; elsewhere the engine logs that once and
+  does nothing more): the orphan
   reflex for "the panel died, don't burn GPU forever" (`tickDeadman`, WallpaperApplication.cpp::tickDeadman).
   A ping under a Deadman hold re-acquires; under a Verb hold it does not.
 - **Fullscreen stop** - when the live policy is `stop` and a relevant fullscreen app
   appears, outputs shed; they re-acquire the moment it clears (`tickFullscreenGate`,
-  WallpaperApplication.cpp::tickFullscreenGate).
+  WallpaperApplication.cpp::tickFullscreenGate). Only a driver that can release its
+  surfaces does this (the Wayland desktop); on any other, stop pauses as pause does
+  (`Application/FullscreenPolicy.cpp::inEffect`).
 - **Running-apps rule** - `set-app-conditions` gives the engine a list of process
   names and a behavior (off/pause/stop). A 3-second poll of `/proc/PID/comm` -
   process existence is the only honest signal for a windowless CLI process like a
   local LLM - drives it: pause is the master-pause fact (timescale 0, prior speed
   restored on release), stop releases the outputs with reason `app` and re-acquires
-  when no listed process remains (`tickAppCondition`, WallpaperApplication.cpp::tickAppCondition). Each mechanism
+  when no listed process remains, or pauses the same way where the driver cannot release
+  them (`tickAppCondition`, WallpaperApplication.cpp::tickAppCondition). Each mechanism
   only ever undoes what it engaged; holds owned by a bench, the deadman, or the
   fullscreen gate are never stolen.
 
@@ -248,7 +253,8 @@ The fullscreen policy itself is now tri-state - Off / Pause / Stop
 `set-fullscreen`, with a live-editable app-id ignore list (`set-fullscreen-ignore`
 triggers an immediate detector recount, `Render/Drivers/Detectors/WaylandFullScreenDetector.cpp::recomputeRelevance`).
 Pause means freeze (rendering halts, allocations stay);
-Stop means release the outputs entirely.
+Stop means release the outputs entirely where the driver can (the Wayland desktop),
+and pause elsewhere.
 
 ### 2.7 VRAM: the steady-state pipeline
 
@@ -267,7 +273,8 @@ keyed by sha256 of the stored mip0 bytes, after the container's LZ4 wrapping is
 reversed and before any image decode (`uploadFromTexcache`, `CTexture.cpp::uploadFromTexcache`;
 the encoder shim is `tools/texcomp/lwe_bc7enc.cpp`, x86-64 only via ispc; the cache
 producer is the panel's import wizard). And the full-reclaim path is not pause at all:
-it is `stop` - the fullscreen/app-condition policies release the outputs (section 2.6),
+it is `stop` - on the Wayland desktop the fullscreen/app-condition policies release the
+outputs (section 2.6; elsewhere stop pauses),
 and the panel's master switch stops the engine service outright
 (`lwe-ui/src/lwe_ui/models.py::setMaster`, section 4).
 
@@ -402,13 +409,14 @@ the ring -> per frame, `FrameReader.consume()` latches the live slot (abandons a
 torn reads, keeps old texture) -> `glTexSubImage2D`. Socket silent the whole time.
 Anchors in section 3.
 
-**A fullscreen game starts (policy = stop, the shipped reclaim path).**
+**A fullscreen game starts (policy = stop on the Wayland desktop, the shipped reclaim path).**
 Wayland detector recount -> `tickFullscreenGate` sees a relevant fullscreen toplevel ->
 `apiReleaseOutputs`: GL is torn down while a context is still current, then the layer
 surfaces are destroyed - the desktop goes from full scene VRAM to nothing, and the
 socket still answers while released. Game exits -> detector clears -> outputs
-re-acquire and the wallpaper rebuilds. (With policy = `pause` the scene merely
-freezes and keeps its allocations. The outermost option is the panel stopping
+re-acquire and the wallpaper rebuilds. (With policy = `pause`, or `stop` on a driver
+that cannot release its surfaces, the scene merely freezes and keeps its allocations.
+The outermost option is the panel stopping
 `lwe-engine.service` entirely.) Anchors in section 2.6.
 
 ---
