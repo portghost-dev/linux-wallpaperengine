@@ -15,8 +15,10 @@ that predates the API or is not running at all.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import socket
+import struct
 import threading
 from pathlib import Path
 from typing import Any
@@ -31,6 +33,7 @@ _DONE_TIMEOUT = 30.0
 
 _MAX_REPLY = 64 * 1024  # mirrors the engine's own per-line cap
 
+_log = logging.getLogger(__name__)
 _reply = threading.local()
 
 
@@ -48,10 +51,26 @@ def socket_path() -> Path:
 
 
 def last_class() -> str | None:
-    """How this thread's last request() ended: "ok" (a reply with ok true), "refused" (ok false),
-    "uncertain" (it may have run: something failed after the connect, or an accepted show never
-    finished) or "away" (nothing ran: the connect failed); None before any request."""
+    """How this thread's last request() ended: "ok" (a done reply with ok true), "refused" (ok
+    false), "uncertain" (it may have run: something failed after the connect, an accepted show
+    never finished, or the reply was neither) or "away" (nothing ran: the connect failed, or the
+    listener runs as another user); None before any request."""
     return getattr(_reply, "cls", None)
+
+
+def reply_class(reply: dict[str, Any]) -> str:
+    """The class of one reply object: "ok" only for a done reply with ok true,
+    "refused" for ok false, and "uncertain" for anything else, such as an accepted show whose
+    done never came, another terminal status with ok true, or an object without ok."""
+    if reply.get("ok") is True and reply.get("status") == "done":
+        return "ok"
+    return "refused" if reply.get("ok") is False else "uncertain"
+
+
+def _peer_uid(s: socket.socket) -> int:
+    """The uid of the process at the other end of the connected unix socket `s` (SO_PEERCRED)."""
+    creds = s.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("iII"))
+    return struct.unpack("iII", creds)[1]
 
 
 def _resolve(sock: "str | os.PathLike | None") -> Path:
@@ -103,7 +122,8 @@ def request(cmd: str, args: dict | None = None, wait_done: bool = True,
     wait_done=False returns the FIRST reply instead - for `show` that is the accepted
     ack, which is the click-handler contract. An engine-side rejection comes back as a
     normal dict with ok=False; the caller distinguishes "engine said no" (dict) from
-    "engine unreachable" (None).
+    "engine unreachable" (None). A socket whose listener runs as another user is refused as
+    away, with one log line, and nothing is sent to it.
     """
     req: dict[str, Any] = {"id": 1, "cmd": cmd}
     if args:
@@ -112,7 +132,13 @@ def request(cmd: str, args: dict | None = None, wait_done: bool = True,
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(_TIMEOUT)
-            s.connect(str(_resolve(sock)))
+            path = _resolve(sock)
+            s.connect(str(path))
+            uid = _peer_uid(s)
+            if uid != os.geteuid():
+                _log.warning("the engine socket %s is served by uid %d, not uid %d, so nothing was sent",
+                             path, uid, os.geteuid())
+                return None
             _reply.cls = "uncertain"
             s.sendall((json.dumps(req) + "\n").encode())
             buf = bytearray()
@@ -122,7 +148,7 @@ def request(cmd: str, args: dict | None = None, wait_done: bool = True,
                     s.settimeout(_DONE_TIMEOUT)
                     reply = _read_reply(s, buf)
             if reply is not None:
-                _reply.cls = "ok" if reply.get("ok") else "refused"
+                _reply.cls = reply_class(reply)
             return reply
     except OSError:
         return None
@@ -212,9 +238,9 @@ def show(
 
 
 def status(sock: "str | os.PathLike | None" = None) -> dict[str, Any] | None:
-    """The engine's status snapshot, or None when unreachable."""
+    """The engine's status snapshot, or None when unreachable or the reply is not a done ok."""
     reply = request("status", sock=sock)
-    if reply is None or not reply.get("ok"):
+    if reply is None or reply_class(reply) != "ok":
         return None
     result = reply.get("result")
     return result if isinstance(result, dict) else None

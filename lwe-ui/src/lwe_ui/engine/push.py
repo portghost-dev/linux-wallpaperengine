@@ -350,11 +350,12 @@ class SwitchRefused(Exception):
 
 @dataclass(frozen=True)
 class Outcome:
-    """How a change or a sync ended: kind "applied" (every request ok), "pending" (reason busy,
-    away, unresponsive, version or budget), "refused" (message quotes the engine's first refusal)
-    or "uncertain" (a request got no final reply). message also carries a version refusal; env is
-    the engine-env write of a tuning or restart change; recorded counts the playlists a budget stop
-    recorded in the marker; warning says the marker could not be cleared."""
+    """How a change or a sync ended: kind "applied" (every request ok; reason "no engine side" when
+    the change had nothing to send), "pending" (reason busy, away, unresponsive, version or budget),
+    "refused" (message quotes the engine's first refusal) or "uncertain" (a request got no final
+    reply, or one that was neither a done ok nor ok false). message also carries a version refusal;
+    env is the engine-env write of a tuning or restart change; recorded counts the playlists a
+    budget stop recorded in the marker; warning says the marker could not be cleared."""
     kind: str
     reason: str | None = None
     message: str | None = None
@@ -389,9 +390,15 @@ def read_status() -> tuple[str, dict[str, Any] | None]:
 def derived_active(status: dict[str, Any] | None) -> tuple[str | None, str]:
     """The playlist the engine plays for the panel, never written: the lane's binding while status
     answered with the schedule on and that playlist's file exists ("engine"), else the saved active
-    playlist ("saved")."""
-    from ..cli.settings_table import derived_active_playlist
-    return derived_active_playlist(status)
+    playlist when its file exists, or None ("saved")."""
+    if isinstance(status, dict):
+        schedule, lanes = status.get("schedule"), status.get("lanes")
+        if isinstance(schedule, dict) and schedule.get("enabled") and isinstance(lanes, list) and lanes \
+                and isinstance(lanes[0], dict):
+            bound = str(lanes[0].get("playlist") or "")
+            if bound and paths.playlist_file(bound).exists():
+                return bound, "engine"
+    return playlists.active_slug(validate=True) or None, "saved"
 
 
 def engine_only() -> contextlib.AbstractContextManager[None]:
@@ -400,13 +407,16 @@ def engine_only() -> contextlib.AbstractContextManager[None]:
     return lock.held("sync")
 
 
-def show_final(wid: str) -> dict[str, Any] | None:
+def show_final(wid: str, tuned: Callable[[dict[str, Any] | None], Any] | None = None) -> dict[str, Any] | None:
     """Show `wid` with its resolved arguments and wait for the load to finish; set-tuning follows
-    only a done ok. Returns the final reply, None when the engine never answered."""
+    only a done ok, and its reply goes to `tuned` when given. Returns the final reply, None when
+    the engine never answered."""
     engine_wid, show_args = resolve_show_args(wid)
     reply = api_client.show(engine_wid, wait_done=True, ui_id=wid, **show_args)
-    if reply is not None and reply.get("ok"):
-        api_client.set_tuning(**resolved_tuning(wid))
+    if reply is not None and _reply_class(reply) == "ok":
+        tuning = api_client.set_tuning(**resolved_tuning(wid))
+        if tuned is not None:
+            tuned(tuning)
     return reply
 
 
@@ -424,8 +434,13 @@ def wait_ready(old_pid: int | None = None, timeout_s: float = 20.0) -> dict[str,
 
 
 def _reply_class(reply: dict[str, Any] | None) -> str:
+    """The class of one request, as api_client.reply_class and last_class give it: "ok" only
+    for a done reply with ok true, "refused" for ok false, "uncertain" for any other reply or for
+    none after the connect, "away" when nothing ran."""
     if isinstance(reply, dict):
-        return "ok" if reply.get("ok") else "refused"
+        if reply.get("ok") is True and reply.get("status") == "done":
+            return "ok"
+        return "refused" if reply.get("ok") is False else "uncertain"
     return "away" if api_client.last_class() == "away" else "uncertain"
 
 
@@ -458,6 +473,7 @@ class _Run:
         self.all_ok = True
         self.stopped = False
         self.recorded = 0
+        self.schedule: bool | None = None
         self._payloads: dict[str, tuple] = {}
 
     def send(self, call: Callable[..., Any], *args: Any, **kwargs: Any) -> bool:
@@ -492,6 +508,22 @@ class _Run:
 
     def enabled(self, slug: str | None) -> bool:
         return bool(slug) and bool(self.payload(slug)[3])
+
+    def schedule_on(self) -> bool:
+        """Whether the engine's schedule is on: as this run's last schedule-set that ended ok
+        left it, else as the status read inside sync reported it."""
+        if self.schedule is not None:
+            return self.schedule
+        schedule = self.status.get("schedule")
+        return isinstance(schedule, dict) and bool(schedule.get("enabled"))
+
+
+def _send_schedule(run: _Run) -> None:
+    """schedule-set with the stored schedule; one that ends ok is the schedule state the run
+    leaves in the engine."""
+    enabled = _schedule_enabled()
+    if run.send(api_client.schedule_set, enabled, _schedule_entries()):
+        run.schedule = enabled
 
 
 def _transfer(run: _Run, slug: str) -> bool:
@@ -544,11 +576,11 @@ def _live(run: _Run, verb: str, wid: str, args: dict[str, Any]) -> None:
 
 
 def _reshow(run: _Run, wid: str) -> None:
-    """One re-show of `wid` that keeps the speed read inside sync: show_final, then set-skip when the
-    wallpaper lists skips, since a show clears the skip list, then set-speed with the read speed,
-    whatever the show's outcome."""
+    """One re-show of `wid` that keeps the speed read inside sync: show_final, whose set-tuning
+    reply counts as one of the run's requests, then set-skip when the wallpaper lists skips, since
+    a show clears the skip list, then set-speed with the read speed, whatever the show's outcome."""
     speed = run.status.get("speed")
-    run.note(show_final(wid))
+    run.note(show_final(wid, tuned=run.note))
     skips = resolve_show_args(wid)[1].get("skip_objects")
     if skips:
         run.note(api_client.set_skip(skips))
@@ -564,10 +596,11 @@ def _holds_current() -> bool:
         return True
 
 
-def _bundle(run: _Run, derived: str | None, reshow: bool) -> None:
+def _bundle(run: _Run, derived: str | None, reshow: bool, reload: bool = False) -> None:
     """sync_all's steps 2 to 7 on the run's generation and status. A window run records each
     playlist it transferred in the marker and skips the ones an earlier run of this generation
-    recorded for the same engine pid."""
+    recorded for the same engine pid. Step 7 re-shows when the marker holds CURRENT, and for a
+    reload's run whatever the marker holds, since that re-show is the reload's own action."""
     scheduled = _scheduled()
     pid = run.status.get("pid")
     skip: set[str] = set()
@@ -594,7 +627,7 @@ def _bundle(run: _Run, derived: str | None, reshow: bool) -> None:
     if run.halted():
         return
     if not failed.intersection(scheduled):
-        run.send(api_client.schedule_set, _schedule_enabled(), _schedule_entries())
+        _send_schedule(run)
     if run.halted():
         return
     if derived not in failed:
@@ -622,7 +655,7 @@ def _bundle(run: _Run, derived: str | None, reshow: bool) -> None:
     else:
         run.send(api_client.set_fullscreen, resolve_fullscreen_behavior(s))
         run.send(api_client.set_tuning, **resolved_tuning(""))
-    if reshow and wid and not run.halted() and _holds_current():
+    if reshow and wid and not run.halted() and (reload or _holds_current()):
         _reshow(run, wid)
 
 
@@ -652,8 +685,7 @@ def _own(run: _Run, row: str, key: str | None, ticket: Ticket, derived: str | No
     if row == "active":
         if active and sent.get(active):
             lane: dict[str, Any] = {"id": "all", "playlist": active, "enabled": run.enabled(active)}
-            schedule = run.status.get("schedule")
-            if isinstance(schedule, dict) and schedule.get("enabled"):
+            if run.schedule_on():
                 lane["manual"] = True
             run.send(api_client.lanes_set, [lane])
     elif row == "pause":
@@ -664,7 +696,7 @@ def _own(run: _Run, row: str, key: str | None, ticket: Ticket, derived: str | No
             run.send(api_client.lanes_set, [{"id": "all", "enabled": run.enabled(derived)}])
     elif row == "schedule":
         if all(sent.get(slug) for slug in _scheduled()):
-            run.send(api_client.schedule_set, _schedule_enabled(), _schedule_entries())
+            _send_schedule(run)
     elif row == "verb":
         _verb(run, str(key), s)
     elif row == "live":
@@ -681,9 +713,18 @@ def _own(run: _Run, row: str, key: str | None, ticket: Ticket, derived: str | No
         _live(run, _WP_VERBS[str(key)], screen, resolve_show_args(screen)[1])
 
 
+def _deliberate_speed(row: str, key: str | None) -> bool:
+    """Whether the row's own verb is a deliberate set-speed: ENGINE_TIMESCALE or a wallpaper's
+    SPEED."""
+    verbs = _LIVE_VERBS if row == "live" else _WP_VERBS if row == "wp_live" else {}
+    return verbs.get(str(key)) == "speed"
+
+
 def _rows(run: _Run, ticket: Ticket, derived: str | None, reshow: bool) -> None:
     """The change's own push: the entry refresh of every playlist its rows carry, each sent once,
-    then each row's own verb in order, and last the one re-show of a wallpaper build change."""
+    then each row's own verb in order, and last the one re-show of a wallpaper build change,
+    followed by the change's deliberate set-speed so the re-show's restored speed never
+    replaces it."""
     held = list(dict.fromkeys(([derived] if derived else []) + _scheduled()))
     active = ticket.slug or playlists.active_slug(validate=True) or None
     refresh: dict[str, None] = {}
@@ -697,12 +738,17 @@ def _rows(run: _Run, ticket: Ticket, derived: str | None, reshow: bool) -> None:
         sent[slug] = _transfer(run, slug)
     s = settings.load()
     screen = _on_screen(run.status)
-    for row, key in ticket.rows:
+    after = [(row, key) for row, key in ticket.rows if reshow and _deliberate_speed(row, key)]
+    for row, key in [pair for pair in ticket.rows if pair not in after]:
         if run.ended is not None:
             return
         _own(run, row, key, ticket, derived, screen, active, sent, s)
     if reshow and run.ended is None:
         _reshow(run, str(ticket.wid))
+    for row, key in after:
+        if run.ended is not None:
+            return
+        _own(run, row, key, ticket, derived, screen, active, sent, s)
 
 
 def _version_refusal(status: dict[str, Any]) -> str | None:
@@ -751,7 +797,7 @@ def _finish(run: _Run, env: str | None = None) -> Outcome:
 
 def _deliver(ticket: Ticket) -> Outcome:
     if ticket.generation is None:
-        return Outcome("applied", env=ticket.env)
+        return Outcome("applied", reason="no engine side", env=ticket.env)
     with contextlib.ExitStack() as stack:
         status = _synced(stack, lock.LOCK_WAIT_S, ticket.env)
         if isinstance(status, Outcome):
@@ -761,8 +807,8 @@ def _deliver(ticket: Ticket) -> Outcome:
         rows = [row for row, _key in ticket.rows]
         reshow = bool(ticket.wid) and ticket.wid == _on_screen(status) and "wp_build" in rows
         if ticket.existed or "reload" in rows:
-            _bundle(run, derived, reshow=not reshow)
-        if run.ended is None and not run.stopped:
+            _bundle(run, derived, reshow=not reshow, reload="reload" in rows)
+        if run.ended is None:
             _rows(run, ticket, derived, reshow)
         return _finish(run, ticket.env)
 
@@ -841,29 +887,29 @@ def run_change(locks: Iterable[str], write: Callable[[], Any], rows: Iterable[tu
     wallpaper rows name (None where a row names none). locks names every store write touches;
     status is a read_status() result already taken. Status is read before any lock, and it raises
     SwitchRefused for a manual switch it cannot make; the store locks are taken in rank order; the
-    marker is set and held across write(); then sync, the status and version check inside it, the
-    bundle first when a marker existed, this change's push with each row's own verb last, the clear
-    when every request ended ok, and the release, highest rank first. An exception from write()
-    reaches the caller with nothing sent, and a marker already set stays."""
-    rows = tuple(rows)
-    first = _read_first(rows, manual, status)
-    with _store_locks(locks):
-        return _deliver(_write_step(rows, write, wid, slug, run, first))
+    marker is set and held across write(); engine-env is written for a tuning or restart row; the
+    store locks are released, highest rank first; then sync, the status and version check inside
+    it, the bundle first when a marker existed, this change's push with each row's own verb last,
+    also after a bundle the window's budget stopped, and the clear when every request ended ok. An
+    exception from write() reaches the caller with nothing sent, and a marker already set stays."""
+    return _deliver(save_change(locks, write, rows, wid=wid, slug=slug, manual=manual, status=status, run=run))
 
 
 def sync_all(run: str, classes: Iterable[str] = ("BUNDLE",), wait_s: float = 2.0) -> Outcome:
     """Rebuild the engine from the store under one sync hold. The marker is ensured first,
-    keeping an existing generation; a status that is not ok, or another build's engine, returns
-    pending with nothing sent. Then every engine-held playlist, the schedule, the lane, the global
-    verbs, the live values of the wallpaper on screen with speed left out while the engine reports
-    0, and a re-show when the marker holds CURRENT; the marker clears when every request ended ok.
-    A "window" run keeps an 8 s budget and records its progress in the marker; a "command" run
-    has neither."""
+    keeping an existing generation unless `classes` adds a class it did not hold; a status that is
+    not ok, or another build's engine, returns pending with nothing sent. Then every engine-held
+    playlist, the schedule, the lane, the global verbs, the live values of the wallpaper on screen
+    with speed left out while the engine reports 0, and a re-show when the marker holds CURRENT or
+    `classes` names CURRENT (a reload's run); the marker clears when every request ended ok. A
+    "window" run keeps an 8 s budget and records its progress in the marker; a "command" run has
+    neither."""
+    classes = tuple(classes)
     generation = marker.ensure(classes)
     with contextlib.ExitStack() as stack:
         status = _synced(stack, wait_s, None)
         if isinstance(status, Outcome):
             return status
         r = _Run(run, generation, status)
-        _bundle(r, derived_active(status)[0], reshow=True)
+        _bundle(r, derived_active(status)[0], reshow=True, reload="CURRENT" in classes)
         return _finish(r)

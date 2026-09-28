@@ -7,7 +7,8 @@ A row's parse(word, cwd_entered=False) returns the value to store, or raises val
 its transaction; a volume step gives a Step; color gives its four numbers with the hue in radians,
 as engine-env holds it. format(value) prints a stored value in the words the setting takes, the hue
 in degrees; an empty per-wallpaper value, which inherits, prints as "". Top level imports stdlib only;
-derived_active_playlist and read import the store when they are called.
+derived_active_playlist imports engine/push.py, and with it the store, when it is called; read imports the store
+when it is called.
 """
 from __future__ import annotations
 
@@ -309,18 +310,12 @@ WALLPAPER_BY_NAME = {row.name: row for row in ROWS if row.form == WALLPAPER}
 
 
 def derived_active_playlist(status: dict | None) -> tuple[str | None, str]:
-    """The playlist order, interval and playlist act on, never written: the one the engine's lane is
-    bound to when status answered with the schedule on and that playlist's file exists ("engine");
-    else the saved active playlist when its file exists ("saved"); else None."""
-    from ..storage import paths, playlists
-    if isinstance(status, dict):
-        schedule, lanes = status.get("schedule"), status.get("lanes")
-        if isinstance(schedule, dict) and schedule.get("enabled") and isinstance(lanes, list) and lanes \
-                and isinstance(lanes[0], dict):
-            bound = str(lanes[0].get("playlist") or "")
-            if bound and paths.playlist_file(bound).exists():
-                return bound, "engine"
-    return playlists.active_slug(validate=True) or None, "saved"
+    """The playlist order, interval and playlist act on, never written: engine/push.py's
+    derived_active, the one the engine's lane is bound to when status answered with the schedule on
+    and that playlist's file exists ("engine"); else the saved active playlist when its file exists
+    ("saved"); else None."""
+    from ..engine.push import derived_active
+    return derived_active(status)
 
 
 def _saved_lines() -> dict[str, tuple[int, str, str]]:

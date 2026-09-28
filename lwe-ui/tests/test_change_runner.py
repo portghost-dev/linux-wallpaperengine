@@ -2,15 +2,23 @@
 
 A change of ENGINE_VOLUME sends the entry refresh and one set-volume resolved for the wallpaper on
 screen, and while the engine is frozen only ENGINE_TIMESCALE and a wallpaper's SPEED send a
-set-speed that unfreezes it. Each row sends exactly its requests with its own verb last, and a
-wallpaper not on screen gets its entry refresh and no live verb. With a marker already set the
-bundle goes first and the change last, and the marker clears only when both ended ok. A death
-between the marker and the store write, or between the store write and the push, leaves the marker
-for the next sync_all, which delivers the stored value and clears it. A refused write sends nothing
-and reaches the caller; a manual switch while the engine is away and the schedule is on is refused
-before any lock; a busy sync lock or another build's engine leaves the change pending with the
-marker kept. The engine is an api_client recorder with a scripted status; every child process
-gets an environment built from scratch.
+set-speed that unfreezes it. Each row sends exactly its requests with its own verb last, a
+wallpaper not on screen gets its entry refresh and no live verb, and a change with nothing to send
+is applied with reason "no engine side". With a marker already set the bundle goes first and the
+change last, also when the window's budget stopped the bundle, and the marker clears only when both
+ended ok; after the bundle, a manual switch follows the schedule the bundle left. A change that
+re-shows keeps the bundle from re-showing again, a set-tuning after its re-show that fails decides
+the outcome by its class, and a deliberate speed in the same change goes after the re-show. A
+reply that is not a done ok and not ok false leaves the change uncertain, and a clear whose
+directory fsync fails keeps the marker and warns. The store locks are released before sync: a
+second writer of the same store is not blocked while a delivery waits on a slow show, and the
+marker waits for the next sync_all, which delivers both values. A death between the marker and the
+store write, or between the store write and the push, leaves the marker for the next sync_all,
+which delivers the stored value and clears it. A refused write sends nothing and reaches the
+caller; a manual switch while the engine is away and the schedule is on is refused before any
+lock; a busy sync lock, a status that fails inside sync or another build's engine leaves the change
+pending with the marker kept. The engine is an api_client recorder with a scripted status; every
+child process gets an environment built from scratch.
 
 Run: PYTHONPATH=src python3 tests/test_change_runner.py
 """
@@ -19,6 +27,7 @@ import contextlib
 import copy
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -66,14 +75,17 @@ push.run_change(("settings",), write, [("live", "ENGINE_VOLUME")])
 
 class Recorder:
     """A recording api_client: every api_client verb is recorded as (verb, args, kwargs) and answered
-    from a per-verb script, ok by default; a step that is a class name answers None with that class.
-    status answers the scripted status, or None with status_class."""
+    from a per-verb script, ok by default; a step that is a class name answers None with that class,
+    and a hook runs before each answer of its verb. status answers each queued (reply, class) once,
+    then the scripted status, or None with status_class."""
 
     def __init__(self, status: dict | None, status_class: str = "ok") -> None:
         self.calls: list[tuple] = []
         self.status_reply = status
         self.status_class = status_class
+        self.statuses: list[tuple] = []
         self.script: dict[str, list] = {}
+        self.hooks: dict[str, object] = {}
         self._last: str | None = None
 
     def answer(self, verb: str, *steps) -> None:
@@ -81,11 +93,12 @@ class Recorder:
 
     def status(self, sock=None):
         self.calls.append(("status", (), {}))
-        if self.status_reply is None:
-            self._last = self.status_class
+        reply, cls = self.statuses.pop(0) if self.statuses else (self.status_reply, self.status_class)
+        if reply is None:
+            self._last = cls
             return None
         self._last = "ok"
-        return copy.deepcopy(self.status_reply)
+        return copy.deepcopy(reply)
 
     def last_class(self):
         return self._last
@@ -96,6 +109,8 @@ class Recorder:
 
         def call(*args, **kwargs):
             self.calls.append((verb, args, kwargs))
+            if verb in self.hooks:
+                self.hooks[verb]()
             steps = self.script.get(verb)
             step = steps.pop(0) if steps else OK
             if isinstance(step, str):
@@ -104,6 +119,19 @@ class Recorder:
             self._last = "ok" if step.get("ok") else "refused"
             return step
         return call
+
+
+class Clock:
+    """push's time: monotonic() reads now, sleep() moves it."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
 
 
 def status(current: str = "111", speed=1.0, schedule_on: bool = False, **extra) -> dict:
@@ -299,6 +327,8 @@ class ChangeRunnerTest(unittest.TestCase):
              lambda: settings.update({"ENGINE_SCALING": "fill"}), [("playlist_set", "main"), ("playlist_set", "night")]),
             ("layer", ("restart", "ENGINE_LAYER"), {}, status(), lambda: settings.update({"ENGINE_LAYER": "top"}),
              []),
+            ("close to tray", ("none", None), {}, status(), lambda: settings.update({"CLOSE_TO_TRAY": False}),
+             []),
             ("wallpaper volume", ("wp_live", "VOLUME"), dict(wid="111"), status(),
              lambda: wp.update_set("111", {"VOLUME": 25}), [("playlist_set", "main"), ("set_volume", 25)]),
             ("wallpaper speed", ("wp_live", "SPEED"), dict(wid="111"), status(),
@@ -331,9 +361,11 @@ class ChangeRunnerTest(unittest.TestCase):
                     outcome = push.run_change(locks, write, [row], **where)
                 self.assertEqual(sent(rec), expected)
                 env = row[0] in ("tuning", "restart")
-                self.assertEqual((outcome.kind, outcome.env, len(self.env_writes)),
-                                 ("applied", "written" if env else None, 1 if env else 0))
-                if row[0] == "restart":
+                nothing = row[0] in ("restart", "none")
+                self.assertEqual((outcome.kind, outcome.reason, outcome.env, len(self.env_writes)),
+                                 ("applied", "no engine side" if nothing else None, "written" if env else None,
+                                  1 if env else 0))
+                if nothing:
                     self.assertIsNone(marker.read()["generation"])
                 else:
                     self.assertEqual(marker.read()["classes"], [])
@@ -356,6 +388,194 @@ class ChangeRunnerTest(unittest.TestCase):
                 self.assertEqual(sent(rec)[-1], ("set_volume", 30))
                 self.assertEqual(outcome.kind, "applied" if cleared else "refused")
                 self.assertEqual(marker.read()["classes"], [] if cleared else ["BUNDLE"])
+
+    def test_a_bundle_stopped_at_the_budget_still_sends_the_changes_own_verb_last(self) -> None:
+        bundle = [("playlist_set", "main"), ("playlist_set", "night")]
+        cases = (
+            ("volume", lambda: settings.update({"ENGINE_VOLUME": 30}), [("live", "ENGINE_VOLUME")], {}, status(),
+             [("playlist_set", "main"), ("playlist_set", "night"), ("set_volume", 30)]),
+            ("manual switch, engine schedule on", lambda: settings.update({"ACTIVE_PLAYLIST": "night"}),
+             [("active", "ACTIVE_PLAYLIST")], dict(slug="night", manual=True), status(schedule_on=True),
+             [("playlist_set", "night"),
+              ("lanes_set", [{"id": "all", "playlist": "night", "enabled": True, "manual": True}])]),
+        )
+        for name, write, rows, where, reply, own in cases:
+            with self.subTest(case=name):
+                self._fresh()
+                marker.ensure(("BUNDLE",))
+                clock = Clock()
+                with mock.patch.object(push, "time", clock), self.engine(reply) as rec, \
+                        self.assertLogs("lwe_ui.engine.push", "WARNING") as logs:
+                    rec.hooks["playlist_set"] = lambda: clock.sleep(5)
+                    outcome = push.run_change(("settings",), write, rows, run="window", **where)
+                self.assertEqual(sent(rec), bundle + own)
+                self.assertEqual(outcome, push.Outcome("pending", reason="budget", recorded=2))
+                self.assertEqual(len(logs.records), 1)
+                self.assertEqual(marker.read()["classes"], ["BUNDLE"])
+
+    def test_a_change_that_reshows_keeps_the_bundle_from_reshowing_again(self) -> None:
+        marker.ensure(("BUNDLE", "CURRENT"))
+        with self.engine(status()) as rec:
+            outcome = push.run_change(("overrides",), lambda: wp.update_set("111", {"SCALING": "fit"}),
+                                      [("wp_build", "SCALING")], wid="111")
+        self.assertEqual([verb for verb, _value in sent(rec)],
+                         BUNDLE + ["playlist_set", "show", "set_tuning", "set_speed"])
+        self.assertEqual(outcome, push.Outcome("applied"))
+        self.assertEqual(marker.read()["classes"], [])
+
+    def test_a_failed_set_tuning_after_a_reshow_decides_the_outcome_by_its_class(self) -> None:
+        cases = (({"id": 1, "ok": False, "error": "tuning refused"}, push.Outcome("refused", message="tuning refused")),
+                 ("uncertain", push.Outcome("uncertain")),
+                 ("away", push.Outcome("pending", reason="away")))
+        for failure, expected in cases:
+            with self.subTest(failure=failure):
+                self._fresh()
+                with self.engine(status(speed=0)) as rec:
+                    rec.answer("set_tuning", failure)
+                    outcome = push.run_change(("overrides",), lambda: wp.update_set("111", {"SCALING": "fit"}),
+                                              [("wp_build", "SCALING")], wid="111", run="command")
+                self.assertEqual([verb for verb, _value in sent(rec)],
+                                 ["playlist_set", "show", "set_tuning", "set_speed"])
+                self.assertEqual(outcome, expected)
+                self.assertEqual(marker.read()["classes"], ["BUNDLE", "CURRENT"])
+
+    def test_after_a_drain_the_manual_switch_follows_the_schedule_the_bundle_left(self) -> None:
+        settings.update({"SCHEDULE_ENABLED": True})
+        marker.ensure(("BUNDLE",))
+
+        class Engine(Recorder):
+            """The engine's lane rules: schedule-set turns the schedule on or off, and while it is
+            on, a lane set naming another playlist binds it only with manual."""
+
+            def __init__(self) -> None:
+                super().__init__(status(schedule_on=False))
+                self.enabled, self.bound = False, "main"
+
+            def schedule_set(self, enabled, entries):
+                self.calls.append(("schedule_set", (enabled, entries), {}))
+                self.enabled = enabled
+                return OK
+
+            def lanes_set(self, lanes):
+                self.calls.append(("lanes_set", (lanes,), {}))
+                slug = lanes[0].get("playlist", self.bound)
+                if not self.enabled or slug == self.bound or lanes[0].get("manual"):
+                    self.bound = slug
+                return OK
+        engine = Engine()
+        with mock.patch.object(push, "api_client", engine):
+            outcome = push.run_change(("settings",), lambda: settings.update({"ACTIVE_PLAYLIST": "night"}),
+                                      [("active", "ACTIVE_PLAYLIST")], slug="night", manual=True, run="command")
+        self.assertEqual(sent(engine)[-1],
+                         ("lanes_set", [{"id": "all", "playlist": "night", "enabled": True, "manual": True}]))
+        self.assertEqual((outcome, engine.bound), (push.Outcome("applied"), "night"))
+        self.assertEqual(marker.read()["classes"], [])
+
+    def test_a_deliberate_speed_beside_a_build_key_is_sent_after_the_reshow(self) -> None:
+        with self.engine(status(speed=0)) as rec:
+            outcome = push.run_change(("overrides",), lambda: wp.update_set("111", {"SPEED": 3.0, "SCALING": "fit"}),
+                                      [("wp_live", "SPEED"), ("wp_build", "SCALING")], wid="111", run="command")
+        self.assertEqual([verb for verb, _value in sent(rec)],
+                         ["playlist_set", "show", "set_tuning", "set_speed", "set_speed"])
+        self.assertEqual([value for verb, value in sent(rec) if verb == "set_speed"], [0, 3.0])
+        self.assertEqual(outcome, push.Outcome("applied"))
+
+    def test_a_clear_whose_directory_fsync_fails_keeps_the_marker_and_warns(self) -> None:
+        clear, fsync = marker.clear, os.fsync
+
+        def failing(fd: int) -> None:
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError("injected directory fsync failure")
+            fsync(fd)
+
+        def failing_clear(generation: int) -> bool:
+            with mock.patch.object(os, "fsync", failing):
+                return clear(generation)
+        with self.engine(status()), mock.patch.object(marker, "clear", failing_clear):
+            outcome = push.run_change(("settings",), lambda: settings.update({"ENGINE_VOLUME": 30}),
+                                      [("live", "ENGINE_VOLUME")])
+        self.assertEqual((outcome.kind, outcome.warning),
+                         ("applied", "the sync marker could not be cleared: injected directory fsync failure"))
+        self.assertEqual(marker.read()["classes"], ["BUNDLE"])
+
+    def test_a_terminal_reply_that_is_not_a_done_ok_leaves_the_change_uncertain(self) -> None:
+        broken = {"id": 1, "ok": True, "status": "broken"}
+        with self.engine(status()) as rec:
+            rec.answer("set_fps", broken)
+            outcome = push.run_change(("settings",), lambda: settings.update({"ENGINE_FPS": 40}),
+                                      [("verb", "ENGINE_FPS")], run="command")
+        self.assertEqual(sent(rec), [("set_fps", 40)])
+        self.assertEqual(outcome, push.Outcome("uncertain"))
+        self.assertEqual(marker.read()["classes"], ["BUNDLE"])
+        self._fresh()
+        with self.engine(status()) as rec:
+            rec.answer("show", broken)
+            outcome = push.run_change(("overrides",), lambda: wp.update_set("111", {"SCALING": "fit"}),
+                                      [("wp_build", "SCALING")], wid="111", run="command")
+        self.assertEqual([verb for verb, _value in sent(rec)], ["playlist_set", "show", "set_speed"])
+        self.assertEqual(outcome, push.Outcome("uncertain"))
+        self.assertEqual(marker.read()["classes"], ["BUNDLE", "CURRENT"])
+
+    def test_a_second_writer_of_the_same_store_is_not_blocked_while_a_delivery_runs(self) -> None:
+        showing, written, done = threading.Event(), threading.Event(), threading.Event()
+        seen: list[bool] = []
+        second: list = []
+
+        def slow_show() -> None:
+            start = time.monotonic()
+            showing.set()
+            done.wait(10)
+            time.sleep(max(0.0, 3.0 - (time.monotonic() - start)))
+            seen.append(written.is_set())
+
+        def write_222() -> None:
+            wp.update_set("222", {"VOLUME": 10})
+            written.set()
+
+        def other() -> None:
+            showing.wait(10)
+            try:
+                second.append(push.run_change(("overrides",), write_222, [("wp_live", "VOLUME")], wid="222",
+                                              run="command"))
+            except Exception as exc:
+                second.append(exc)
+            finally:
+                done.set()
+        writer = threading.Thread(target=other)
+        with self.engine(status()) as rec:
+            rec.hooks["show"] = slow_show
+            writer.start()
+            try:
+                first = push.run_change(("overrides",), lambda: wp.update_set("111", {"SCALING": "fit"}),
+                                        [("wp_build", "SCALING")], wid="111", run="command")
+            finally:
+                showing.set()
+                writer.join(10)
+        self.assertEqual(second, [push.Outcome("pending", reason="busy")])
+        self.assertEqual(seen, [True])
+        self.assertEqual(first, push.Outcome("applied"))
+        self.assertEqual([verb for verb, _value in sent(rec)], ["playlist_set", "show", "set_tuning", "set_speed"])
+        self.assertEqual(marker.read()["classes"], ["BUNDLE", "CURRENT"])
+        with self.engine(status()) as rec:
+            drained = push.sync_all("command")
+        entries = {entry["ui_id"]: entry for verb, args, _kw in rec.calls
+                   if verb == "playlist_set" and args[0] == "main" for entry in args[1]}
+        self.assertEqual(drained, push.Outcome("applied"))
+        self.assertEqual((entries["111"]["scaling"], entries["222"]["volume"]), ("fit", 10))
+        self.assertEqual(marker.read()["classes"], [])
+
+    def test_a_status_that_fails_inside_sync_sends_nothing_and_leaves_the_change_pending(self) -> None:
+        for status_class, reason in (("uncertain", "unresponsive"), ("away", "away")):
+            with self.subTest(engine=reason):
+                self._fresh()
+                with self.engine(None, status_class) as rec:
+                    rec.statuses.append((status(), "ok"))
+                    outcome = push.run_change(("settings",), lambda: settings.update({"ENGINE_VOLUME": 30}),
+                                              [("live", "ENGINE_VOLUME")])
+                self.assertEqual(outcome, push.Outcome("pending", reason=reason))
+                self.assertEqual([verb for verb, _a, _k in rec.calls], ["status", "status"])
+                self.assertEqual(settings.load()["ENGINE_VOLUME"], 30)
+                self.assertEqual(marker.read()["classes"], ["BUNDLE"])
 
     def test_a_death_around_the_store_write_leaves_the_marker_for_the_next_sync(self) -> None:
         for job, stored in (("before", 15), ("after", 40)):

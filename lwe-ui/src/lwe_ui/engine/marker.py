@@ -5,8 +5,9 @@ The file holds {"version": 1, "generation": N, "classes": [...], "sent": {"pid":
 "playlists": [...]}}. BUNDLE means the engine needs the full sync from the store, and CURRENT
 that the wallpaper on screen also needs a re-show. sent lists the playlists a window run has
 already transferred in this generation to that engine pid. A writer raises the generation of
-the marker; ensure makes a fresh one only when no marker exists; a clear keeps it. So a
-generation value never repeats, and a clear succeeds only for the generation its caller read.
+the marker; ensure makes a fresh one when no marker exists and raises it when it adds a class
+the marker did not hold; a clear keeps it. So a generation value never repeats, and a clear
+succeeds only for the generation its caller read.
 Every read and write holds the marker lock, and every write is an atomic replace followed by
 an fsync of the directory. Plain Python, no Qt import.
 """
@@ -16,7 +17,7 @@ import json
 import os
 import time
 from collections.abc import Iterable, Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import Any
 
@@ -110,18 +111,17 @@ def writing(classes: Iterable[str]) -> Iterator[tuple[int, bool]]:
 
 def ensure(classes: Iterable[str]) -> int:
     """With no marker (no file, or no classes), make a fresh generation as writing() does,
-    with `classes`; with one, add `classes` and keep the generation. Returns the
-    generation."""
+    with `classes`. With one, a class it does not hold raises the generation and empties sent,
+    as writing() does, so a run that read the older generation cannot clear it; classes it
+    already holds keep the generation. Returns the generation."""
     with lock.held("marker"):
         state = _load()
-        if not state["classes"]:
-            generation = _fresh(state)
-            _write(_state(generation, _merged((), classes)))
-            return generation
         merged = _merged(state["classes"], classes)
-        if merged != state["classes"]:
-            _write({**state, "classes": merged})
-        return state["generation"]
+        if state["classes"] and merged == state["classes"]:
+            return state["generation"]
+        generation = _fresh(state)
+        _write(_state(generation, merged))
+        return generation
 
 
 def generation() -> int | None:
@@ -133,14 +133,21 @@ def generation() -> int | None:
 
 def clear(generation: int) -> bool:
     """Only while the marker's generation is `generation`: no classes, an empty sent, the
-    generation kept. Returns whether the generation matched."""
+    generation kept. Returns whether the generation matched. A failed write puts the previous
+    record back, best effort, and raises OSError, so a failed clear never leaves a visibly
+    cleared marker."""
     with lock.held("marker"):
         state = _load()
         if not _matches(state, generation):
             return False
         cleared = _state(generation, ())
         if cleared != state:
-            _write(cleared)
+            try:
+                _write(cleared)
+            except OSError:
+                with suppress(OSError):
+                    _write(state)
+                raise
         return True
 
 

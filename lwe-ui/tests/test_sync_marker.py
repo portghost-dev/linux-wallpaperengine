@@ -1,13 +1,16 @@
 """The sync marker, <state_dir>/panel/sync-pending, and its lock.
 
 The marker lock ranks after sync, and a thread inside tags.held() or meta.held() writes that
-store without blocking. A writer's marker step raises the generation, empties sent and keeps
-the lock across its body, so while a child process is inside it a generation read gets
-StoreBusy after about 2 s. ensure keeps an existing generation and makes a new one after a
-clear; a clear with a stale generation changes nothing; a malformed file, one with another
-version and an empty one read as BUNDLE and CURRENT and are rewritten. A window run records a
-sent playlist only for its generation and pid, and another pid empties the list at a run's
-start. Every child process gets an environment built from scratch.
+store without blocking; held() takes the mutex before the file lock, so a thread waiting for the
+mutex leaves the file lock free. A writer's marker step raises the generation, empties sent and
+keeps the lock across its body, so while a child process is inside it a generation read gets
+StoreBusy after about 2 s. ensure keeps the generation for classes the marker holds, raises it
+for a class it did not hold, and makes a new one after a clear; a clear with a stale generation
+changes nothing, and a clear whose directory fsync fails puts the record back and raises. Every
+marker write syncs the file, replaces it, then syncs the directory. A malformed file, one with
+another version and an empty one read as BUNDLE and CURRENT and are rewritten. A window run
+records a sent playlist only for its generation and pid, and another pid empties the list at a
+run's start. Every child process gets an environment built from scratch.
 
 Run: PYTHONPATH=src python3 tests/test_sync_marker.py
 """
@@ -15,6 +18,7 @@ import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -22,6 +26,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SRC = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(SRC))
@@ -102,6 +107,39 @@ class SyncMarkerTest(unittest.TestCase):
         self.assertEqual(tags.load(), [{"id": "111", "title": "t", "state": "good"}])
         self.assertEqual(meta.get("111"), {"favorite": True})
 
+    def test_held_waits_for_the_mutex_before_it_takes_the_file_lock(self) -> None:
+        for store, module in (("tags", tags), ("meta", meta)):
+            with self.subTest(store=store):
+                mutex, waiting, failed = module._WRITE_LOCK, threading.Event(), []
+
+                class Gate:
+                    def acquire(self, *args, **kwargs):
+                        waiting.set()
+                        return mutex.acquire(*args, **kwargs)
+
+                    def release(self):
+                        mutex.release()
+
+                def enter() -> None:
+                    try:
+                        with module.held():
+                            pass
+                    except BaseException as exc:
+                        failed.append(exc)
+                thread = threading.Thread(target=enter, daemon=True)
+                mutex.acquire()
+                try:
+                    with mock.patch.object(module, "_WRITE_LOCK", Gate()):
+                        thread.start()
+                        self.assertTrue(waiting.wait(10))
+                        with lock.held(store, wait_s=0):
+                            pass
+                finally:
+                    mutex.release()
+                thread.join(10)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(failed, [])
+
     def test_writing_raises_the_generation_and_empties_sent(self) -> None:
         before = time.time_ns()
         with marker.writing(("BUNDLE",)) as (first, existed):
@@ -116,17 +154,52 @@ class SyncMarkerTest(unittest.TestCase):
         self.assertEqual(marker.read(),
                          {"generation": second, "classes": ["BUNDLE", "CURRENT"], "sent": EMPTY})
 
-    def test_ensure_keeps_a_generation_and_makes_a_new_one_after_a_clear(self) -> None:
+    def test_ensure_keeps_the_generation_for_held_classes_and_raises_it_for_a_new_one(self) -> None:
         kept = marker.ensure(("BUNDLE",))
         self.assertTrue(marker.record_sent(kept, 4242, "main"))
-        self.assertEqual(marker.ensure(("CURRENT",)), kept)
-        self.assertEqual(marker.read(), {"generation": kept, "classes": ["BUNDLE", "CURRENT"],
+        self.assertEqual(marker.ensure(("BUNDLE",)), kept)
+        self.assertEqual(marker.read(), {"generation": kept, "classes": ["BUNDLE"],
                                          "sent": {"pid": 4242, "playlists": ["main"]}})
-        self.assertTrue(marker.clear(kept))
-        self.assertEqual(marker.read(), {"generation": kept, "classes": [], "sent": EMPTY})
+        raised = marker.ensure(("CURRENT",))
+        self.assertEqual(raised, kept + 1)
+        self.assertEqual(marker.read(), {"generation": raised, "classes": ["BUNDLE", "CURRENT"], "sent": EMPTY})
+        self.assertEqual(marker.ensure(("BUNDLE", "CURRENT")), raised)
+        self.assertFalse(marker.clear(kept))
+        self.assertTrue(marker.clear(raised))
+        self.assertEqual(marker.read(), {"generation": raised, "classes": [], "sent": EMPTY})
         fresh = marker.ensure(("BUNDLE",))
-        self.assertEqual(fresh, kept + 1)
+        self.assertEqual(fresh, raised + 1)
         self.assertEqual(marker.read(), {"generation": fresh, "classes": ["BUNDLE"], "sent": EMPTY})
+
+    def test_a_marker_write_syncs_the_file_replaces_it_then_syncs_the_directory(self) -> None:
+        events: list[str] = []
+        fsync, replace = os.fsync, os.replace
+
+        def synced(fd: int) -> None:
+            events.append("dir_fsync" if stat.S_ISDIR(os.fstat(fd).st_mode) else "file_fsync")
+            fsync(fd)
+
+        def replaced(src, dst) -> None:
+            events.append("replace")
+            replace(src, dst)
+        with mock.patch.object(os, "fsync", synced), mock.patch.object(os, "replace", replaced):
+            marker.ensure(("BUNDLE",))
+        self.assertEqual(events, ["file_fsync", "replace", "dir_fsync"])
+
+    def test_a_clear_whose_directory_fsync_fails_puts_the_record_back_and_raises(self) -> None:
+        generation = marker.ensure(("BUNDLE", "CURRENT"))
+        self.assertTrue(marker.record_sent(generation, 4242, "main"))
+        before = marker.read()
+        fsync = os.fsync
+
+        def failing(fd: int) -> None:
+            if stat.S_ISDIR(os.fstat(fd).st_mode):
+                raise OSError("injected directory fsync failure")
+            fsync(fd)
+        with mock.patch.object(os, "fsync", failing):
+            with self.assertRaises(OSError):
+                marker.clear(generation)
+        self.assertEqual(marker.read(), before)
 
     def test_a_clear_with_a_stale_generation_changes_nothing(self) -> None:
         stale = marker.ensure(("BUNDLE",))

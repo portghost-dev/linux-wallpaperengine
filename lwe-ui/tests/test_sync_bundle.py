@@ -8,10 +8,14 @@ the bundle leaves set-speed out, and a status with no speed gets it. A CURRENT r
 never comes keeps CURRENT, and set-speed with the speed read inside sync follows the show either
 way. A failed particle rebuild is a refusal that keeps the marker. A window run stops at its budget
 between playlists and records what it sent, the next window run of that generation and engine pid
-skips it, another pid empties the list, a stale generation records nothing, and a command run
+skips it, another pid empties the list, a stale generation records nothing, a refused transfer is
+never recorded, a started transfer runs to its last part past the budget, and a command run
 ignores both. sync_all makes a marker with a fresh generation when none exists, and a failed run
-keeps it. The engine is an api_client recorder with a scripted status unless a test names the
-socket server.
+keeps it; a writer that raises the generation during a run that ends all ok keeps the marker too.
+A reload's run re-shows whatever the marker holds when it starts, and beside an older drain it
+shows once and loses no CURRENT. Two drains never send at once, and an engine-only action holds
+sync. The engine is an api_client recorder with a scripted status unless a test names the socket
+server.
 
 Run: PYTHONPATH=src python3 tests/test_sync_bundle.py
 """
@@ -22,6 +26,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -33,7 +38,7 @@ sys.path.insert(0, str(SRC))
 
 from lwe_ui import api_client, version  # noqa: E402
 from lwe_ui.engine import marker, push  # noqa: E402
-from lwe_ui.storage import playlists, settings  # noqa: E402
+from lwe_ui.storage import lock, playlists, settings  # noqa: E402
 
 OK = {"id": 1, "ok": True, "status": "done", "result": {}}
 ORDER = ["playlist_set", "playlist_set", "schedule_set", "lanes_set", "set_fps", "set_parallax",
@@ -258,6 +263,18 @@ class SyncBundleTest(unittest.TestCase):
             self.assertEqual(outcome, push.Outcome("pending", reason="budget", recorded=0))
             self.assertEqual(marker.read()["sent"], {"pid": None, "playlists": []})
 
+    def test_a_refused_transfer_is_never_recorded_as_sent(self) -> None:
+        refusal = {"id": 1, "ok": False, "error": "unknown member"}
+        with self.engine(status()) as rec:
+            rec.answer("playlist_set", OK, refusal)
+            outcome = push.sync_all("window")
+        self.assertEqual(outcome, push.Outcome("refused", message="unknown member"))
+        self.assertEqual(marker.read()["sent"], {"pid": 4242, "playlists": ["main"]})
+        with self.engine(status()) as rec:
+            outcome = push.sync_all("window")
+        self.assertEqual(outcome, push.Outcome("applied"))
+        self.assertEqual(rec.playlists(), ["night"])
+
     def test_a_command_run_ignores_the_budget_and_the_list(self) -> None:
         settings.update({"SCHEDULE": "07:00=night;20:00=extra"})
         clock = Clock()
@@ -285,6 +302,145 @@ class SyncBundleTest(unittest.TestCase):
         self.assertIsInstance(generations[0], int)
         self.assertEqual(generations, [generations[0]] * 3)
         self.assertEqual(marker.read()["classes"], [])
+
+    def test_a_writer_that_raises_the_generation_during_an_ok_run_keeps_the_marker(self) -> None:
+        raised: list[int] = []
+
+        def raise_generation() -> None:
+            if not raised:
+                with marker.writing(("BUNDLE",)) as (generation, _existed):
+                    raised.append(generation)
+        with self.engine(status()) as rec:
+            rec.hooks["playlist_set"] = raise_generation
+            outcome = push.sync_all("command")
+        self.assertEqual(outcome, push.Outcome("applied"))
+        self.assertEqual(rec.verbs(), ORDER)
+        self.assertEqual(marker.read()["classes"], ["BUNDLE"])
+        self.assertEqual(marker.read()["generation"], raised[0])
+
+    def test_a_reload_beside_an_older_drain_shows_once_and_loses_no_current(self) -> None:
+        checked, added = threading.Event(), threading.Event()
+        errors: list[BaseException] = []
+        results: list[tuple] = []
+        holds, ensure = push._holds_current, marker.ensure
+
+        def held_current() -> bool:
+            answer = holds()
+            if threading.current_thread().name == "old-drain":
+                checked.set()
+                added.wait(10)
+            return answer
+
+        def ensured(classes) -> int:
+            generation = ensure(classes)
+            if threading.current_thread().name == "reload":
+                added.set()
+            return generation
+
+        def drain(classes) -> None:
+            try:
+                results.append((threading.current_thread().name, push.sync_all("command", classes)))
+            except BaseException as exc:
+                errors.append(exc)
+        with self.engine(status()) as rec, mock.patch.object(push, "_holds_current", held_current), \
+                mock.patch.object(marker, "ensure", ensured):
+            old = threading.Thread(target=drain, args=(("BUNDLE",),), name="old-drain")
+            reload = threading.Thread(target=drain, args=(("BUNDLE", "CURRENT"),), name="reload")
+            old.start()
+            self.assertTrue(checked.wait(10))
+            reload.start()
+            old.join(10)
+            reload.join(10)
+        self.assertEqual(errors, [])
+        self.assertEqual(sorted(name for name, _outcome in results), ["old-drain", "reload"])
+        self.assertEqual([outcome for _name, outcome in results], [push.Outcome("applied")] * 2)
+        self.assertEqual(rec.verbs().count("show"), 1)
+        self.assertEqual(marker.read()["classes"], [])
+
+    def test_a_reloads_run_reshows_whatever_the_marker_holds_when_it_starts(self) -> None:
+        ensure = marker.ensure
+
+        def cleared_by_another_run(classes) -> int:
+            generation = ensure(classes)
+            marker.clear(generation)
+            return generation
+        with self.engine(status()) as rec, mock.patch.object(marker, "ensure", cleared_by_another_run):
+            outcome = push.sync_all("command", ("BUNDLE", "CURRENT"))
+        self.assertEqual(outcome, push.Outcome("applied"))
+        self.assertEqual(rec.verbs().count("show"), 1)
+        with self.engine(status()):
+            ticket = push.save_change(("settings",), lambda: None, [("reload", None)], run="command")
+        marker.clear(ticket.generation)
+        with self.engine(status()) as rec:
+            outcome = push.deliver(ticket)
+        self.assertEqual(outcome, push.Outcome("applied"))
+        self.assertEqual(rec.verbs().count("show"), 1)
+
+    def test_two_drains_never_send_at_the_same_time(self) -> None:
+        first, resume, reached = threading.Event(), threading.Event(), threading.Event()
+        senders: list[str] = []
+        errors: list[BaseException] = []
+        held = lock.held
+
+        def watched(store: str, *args, **kwargs):
+            if store == "sync" and threading.current_thread().name == "B":
+                reached.set()
+            return held(store, *args, **kwargs)
+
+        def transfer() -> None:
+            senders.append(threading.current_thread().name)
+            if senders[-1] == "B":
+                reached.set()
+            if len(senders) == 1:
+                first.set()
+                resume.wait(10)
+
+        def drain() -> None:
+            try:
+                push.sync_all("command")
+            except BaseException as exc:
+                errors.append(exc)
+        with self.engine(status()) as rec, mock.patch.object(lock, "held", watched):
+            rec.hooks["playlist_set"] = transfer
+            a = threading.Thread(target=drain, name="A")
+            b = threading.Thread(target=drain, name="B")
+            a.start()
+            self.assertTrue(first.wait(10))
+            b.start()
+            self.assertTrue(reached.wait(10))
+            while_a_sends = list(senders)
+            resume.set()
+            a.join(10)
+            b.join(10)
+        self.assertEqual(errors, [])
+        self.assertEqual(while_a_sends, ["A"])
+        self.assertEqual(senders, ["A", "A", "B", "B"])
+
+    def test_an_engine_only_action_holds_sync(self) -> None:
+        busy: list[bool] = []
+
+        def probe() -> None:
+            try:
+                with lock.held("sync", wait_s=0):
+                    busy.append(False)
+            except lock.StoreBusy:
+                busy.append(True)
+        with push.engine_only():
+            thread = threading.Thread(target=probe)
+            thread.start()
+            thread.join(10)
+        self.assertEqual(busy, [True])
+
+    def test_a_started_transfer_runs_to_its_last_part_past_the_budget(self) -> None:
+        clock = Clock()
+        with mock.patch.object(push, "time", clock), \
+                mock.patch.object(push, "split_playlist_parts", lambda entries: [entries[:1], entries[1:]]), \
+                self.engine(status()) as rec, self.assertLogs("lwe_ui.engine.push", "WARNING"):
+            rec.hooks["playlist_set"] = lambda: clock.sleep(9)
+            outcome = push.sync_all("window")
+        parts = [(args[0], kwargs["part"], kwargs["of"]) for verb, args, kwargs in rec.calls if verb == "playlist_set"]
+        self.assertEqual(parts, [("main", 1, 2), ("main", 2, 2)])
+        self.assertEqual(outcome, push.Outcome("pending", reason="budget", recorded=1))
 
 
 if __name__ == "__main__":
