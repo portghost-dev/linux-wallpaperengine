@@ -328,10 +328,11 @@ CommandDispatcher::ParseOutcome CommandDispatcher::parse (const std::string& lin
 	if (!error.empty ()) {
 	    return { .command = std::nullopt, .errorResponse = failure (id, error) };
 	}
+    }
 
-	if (args.contains ("automatic") && !args["automatic"].is_boolean ()) {
-	    return { .command = std::nullopt, .errorResponse = failure (id, "args.automatic must be a boolean") };
-	}
+    if ((cmd == "show" || cmd == "next" || cmd == "prev") && args.contains ("automatic")
+	&& !args["automatic"].is_boolean ()) {
+	return { .command = std::nullopt, .errorResponse = failure (id, "args.automatic must be a boolean") };
     }
 
     if (cmd == "rotate-set") {

@@ -324,6 +324,36 @@ TEST_CASE ("the show verb takes automatic only as a boolean", "[dispatcher]") {
     }
 }
 
+TEST_CASE ("next and prev take automatic only as a boolean", "[dispatcher]") {
+    const std::string good[] = {
+	R"({"id":1,"cmd":"next","args":{"automatic":true}})",
+	R"({"id":1,"cmd":"next","args":{"automatic":false}})",
+	R"({"id":1,"cmd":"prev","args":{"automatic":true}})",
+	R"({"id":1,"cmd":"prev","args":{"automatic":false}})",
+    };
+
+    for (const auto& line : good) {
+	INFO ("input: " << line);
+	const auto outcome = CommandDispatcher::parse (line);
+	REQUIRE (outcome.command.has_value ());
+	CHECK (outcome.command->args["automatic"].is_boolean ());
+    }
+
+    const std::string bad[] = {
+	R"({"id":4,"cmd":"next","args":{"automatic":"yes"}})",
+	R"({"id":4,"cmd":"prev","args":{"automatic":"yes"}})",
+    };
+
+    for (const auto& line : bad) {
+	INFO ("input: " << line);
+	const auto outcome = CommandDispatcher::parse (line);
+	CHECK_FALSE (outcome.command.has_value ());
+	const auto response = json::parse (outcome.errorResponse, nullptr, false);
+	CHECK (response.is_object ());
+	CHECK (response.dump () == R"({"error":"args.automatic must be a boolean","id":4,"ok":false})");
+    }
+}
+
 TEST_CASE ("fit window args are validated on show and set-fit", "[dispatcher]") {
     const std::string good[] = {
 	R"({"id":1,"cmd":"show","args":{"id":"1","fit":{"zoom":1.0,"pan_x":0,"pan_y":0}}})",
