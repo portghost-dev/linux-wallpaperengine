@@ -236,8 +236,10 @@ MessageListener::~MessageListener () {
 	this->m_listenFd = -1;
     }
 
+    struct stat entry {};
+
     // only remove the socket file if this instance created it
-    if (this->m_ownsSocketFile) {
+    if (this->m_ownsSocketFile && lstat (this->m_socketPath.c_str (), &entry) == 0 && S_ISSOCK (entry.st_mode)) {
 	std::error_code ignored;
 	std::filesystem::remove (this->m_socketPath, ignored);
     }

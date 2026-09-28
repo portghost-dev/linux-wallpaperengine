@@ -111,9 +111,10 @@ now look right, and the ones that do not are how the work continues.
   it idle instead of restoring into a repeating failure.
 - Live property reload, a fullscreen-app policy handled by the engine itself
   (keep playing, pause, or free the outputs until the fullscreen window closes;
-  freeing needs Wayland), and a running-apps rule: while a listed process is up,
-  for example a local LLM that needs the VRAM, the engine pauses or stands down
-  on its own and comes back when the process exits. A stood-down engine is
+  stop frees the outputs only on the Wayland desktop and pauses elsewhere), and a
+  running-apps rule: while a listed process is up, for example a local LLM that
+  needs the VRAM, the engine pauses or, on the Wayland desktop, stands down on its
+  own and comes back when the process exits. A stood-down engine is
   honest about it: VRAM is freed and resident memory drops to roughly 60 MB
   until the outputs come back.
 - Console output from a misbehaving wallpaper is rate-limited so it cannot

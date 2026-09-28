@@ -65,7 +65,9 @@ CommandServer::~CommandServer () {
 	this->m_listenFd = -1;
     }
 
-    if (this->m_ownsSocketFile) {
+    struct stat entry {};
+
+    if (this->m_ownsSocketFile && lstat (this->m_socketPath.c_str (), &entry) == 0 && S_ISSOCK (entry.st_mode)) {
 	std::error_code ignored;
 	std::filesystem::remove (this->m_socketPath, ignored);
     }

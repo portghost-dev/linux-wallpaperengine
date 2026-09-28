@@ -69,8 +69,9 @@ The design drivers, in the order they shaped the system:
    and FBO at full size forever. The fork caps texture residency to what the display
    can show, pools composite buffers, compresses textures at ingest, and - when a
    fullscreen or listed app needs the machine - releases its outputs entirely (VRAM
-   freed, socket still answering) and takes them back on its own the moment the
-   claim clears. A release also evicts the process's clean library pages, so a
+   freed, socket still answering) where the driver can (the Wayland desktop; elsewhere
+   it pauses) and takes them back on its own the moment the claim clears. A release
+   also evicts the process's clean library pages, so a
    released engine reads ~60 MB in a process monitor (measured), not hundreds. Both policies
    live in the engine itself; no outside watcher is involved.
 4. **Parity with the Windows renderer is the point.** Scene lighting, 3D models,
@@ -226,7 +227,9 @@ Fullscreen, AppCondition }`, `WallpaperApplication.h::ReleaseReason`):
 - **`release-outputs` / `acquire-outputs` verbs** - explicit control. Release tears
   down GL first (while a context is still current) and then the layer surfaces;
   acquire rebuilds. Idempotent; a Verb hold cannot be downgraded by other sources
-  (WallpaperApplication.cpp::apiReleaseOutputs).
+  (WallpaperApplication.cpp::apiReleaseOutputs). On a driver that cannot release its
+  surfaces (anything but the Wayland desktop) release refuses before tearing anything
+  down, with "driver does not support releasing outputs".
 - **Deadman switch** - after the first `ping` is ever seen, if both pings and renders
   stop for `LWE_DEADMAN` seconds (default 300), outputs release themselves where the
   driver can release them (the Wayland desktop; elsewhere the engine logs that once and

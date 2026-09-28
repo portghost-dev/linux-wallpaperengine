@@ -89,6 +89,112 @@ mode_t folderMode (const std::filesystem::path& folder) {
     REQUIRE (stat (folder.c_str (), &info) == 0);
     return info.st_mode & 0777;
 }
+
+enum class Entry { Directory, Fifo, LinkToFile, LinkToSocket };
+
+const char* entryName (const Entry kind) {
+    switch (kind) {
+	case Entry::Directory:
+	    return "a directory";
+	case Entry::Fifo:
+	    return "a FIFO";
+	case Entry::LinkToFile:
+	    return "a symlink to a file";
+	default:
+	    return "a symlink to a socket";
+    }
+}
+
+void makeEntry (const Entry kind, const std::filesystem::path& folder, const std::filesystem::path& path) {
+    switch (kind) {
+	case Entry::Directory:
+	    std::filesystem::create_directory (path);
+	    break;
+	case Entry::Fifo:
+	    REQUIRE (mkfifo (path.c_str (), 0600) == 0);
+	    break;
+	case Entry::LinkToFile:
+	    writeFile (folder / "target.txt", "target text\n");
+	    std::filesystem::create_symlink (folder / "target.txt", path);
+	    break;
+	case Entry::LinkToSocket:
+	    leaveStaleSocket (folder / "target.sock");
+	    std::filesystem::create_symlink (folder / "target.sock", path);
+	    break;
+    }
+}
+
+bool entryIntact (const Entry kind, const std::filesystem::path& folder, const std::filesystem::path& path) {
+    struct stat entry {};
+
+    if (lstat (path.c_str (), &entry) != 0) {
+	return false;
+    }
+
+    switch (kind) {
+	case Entry::Directory:
+	    return S_ISDIR (entry.st_mode);
+	case Entry::Fifo:
+	    return S_ISFIFO (entry.st_mode);
+	case Entry::LinkToFile:
+	    return S_ISLNK (entry.st_mode) && std::filesystem::read_symlink (path) == folder / "target.txt"
+		&& readFile (folder / "target.txt") == "target text\n";
+	default:
+	    return S_ISLNK (entry.st_mode) && std::filesystem::read_symlink (path) == folder / "target.sock"
+		&& isSocket (folder / "target.sock");
+    }
+}
+
+template <typename Listener> void checkRefusedAndLeft (const std::string& name) {
+    for (const auto kind : { Entry::Directory, Entry::Fifo, Entry::LinkToFile, Entry::LinkToSocket }) {
+	INFO (entryName (kind));
+	const ScratchFolder folder (name + "-" + std::to_string (static_cast<int> (kind)));
+	const auto path = folder.path / "s.sock";
+	makeEntry (kind, folder.path, path);
+	REQUIRE (entryIntact (kind, folder.path, path));
+
+	{
+	    Listener listener (path);
+	    CHECK_FALSE (listener.listen ());
+	    CHECK (listener.error () == path.string () + " exists and is not a socket; refusing to replace it");
+	}
+
+	CHECK (entryIntact (kind, folder.path, path));
+    }
+}
+
+template <typename Listener> void checkSavedOverSocketSurvivesExit (const std::string& name) {
+    {
+	const ScratchFolder folder (name + "-file");
+	const auto path = folder.path / "s.sock";
+
+	{
+	    Listener listener (path);
+	    REQUIRE (listener.listen ());
+	    REQUIRE (isSocket (path));
+	    writeFile (folder.path / "saved.tmp", "saved text\n");
+	    std::filesystem::rename (folder.path / "saved.tmp", path);
+	}
+
+	CHECK (isRegularFile (path));
+	CHECK (readFile (path) == "saved text\n");
+    }
+
+    {
+	const ScratchFolder folder (name + "-link");
+	const auto path = folder.path / "s.sock";
+
+	{
+	    Listener listener (path);
+	    REQUIRE (listener.listen ());
+	    leaveStaleSocket (folder.path / "target.sock");
+	    std::filesystem::create_symlink (folder.path / "target.sock", folder.path / "link.tmp");
+	    std::filesystem::rename (folder.path / "link.tmp", path);
+	}
+
+	CHECK (entryIntact (Entry::LinkToSocket, folder.path, path));
+    }
+}
 } // namespace
 
 TEST_CASE ("CommandServer refuses a path that holds a file that is not a socket", "[socket]") {
@@ -159,4 +265,32 @@ TEST_CASE ("MessageListener keeps the mode of a folder it did not create", "[soc
     MessageListener listener (folder.path / "web.sock");
     REQUIRE (listener.listen ());
     CHECK (folderMode (folder.path) == 0755);
+}
+
+TEST_CASE ("MessageListener sets 0700 on a folder it creates", "[socket]") {
+    const ScratchFolder folder ("helper-created");
+    const auto created = folder.path / "created";
+    const mode_t previous = umask (022);
+    MessageListener listener (created / "web.sock");
+    const bool listening = listener.listen ();
+    umask (previous);
+
+    REQUIRE (listening);
+    CHECK (folderMode (created) == 0700);
+}
+
+TEST_CASE ("CommandServer refuses a directory, a FIFO or a symlink at its path and leaves it", "[socket]") {
+    checkRefusedAndLeft<CommandServer> ("engine-kind");
+}
+
+TEST_CASE ("MessageListener refuses a directory, a FIFO or a symlink at its path and leaves it", "[socket]") {
+    checkRefusedAndLeft<MessageListener> ("helper-kind");
+}
+
+TEST_CASE ("CommandServer leaves a file or a symlink saved over its socket at exit", "[socket]") {
+    checkSavedOverSocketSurvivesExit<CommandServer> ("engine-exit");
+}
+
+TEST_CASE ("MessageListener leaves a file or a symlink saved over its socket at exit", "[socket]") {
+    checkSavedOverSocketSurvivesExit<MessageListener> ("helper-exit");
 }
