@@ -38,7 +38,7 @@ FAKE_ENGINE = """#!/bin/sh
 if [ "$1" = "--help" ]; then echo "usage: --api-socket"; exit 0; fi
 echo "LWE-PRESENT viewport=1x1 overlay=$LWE_OVERLAY_TEXT sock=$LWE_SOCKET bloom=${LWE_NOBLOOM:-unset}"
 echo "Could not parse puppet x: not an MDLV container" >&2
-if [ -n "$FAKE_SEGV" ]; then kill -SEGV $$; fi
+if [ -n "$FAKE_SEGV" ]; then ulimit -c 0; kill -SEGV $$; fi
 if [ -n "$FAKE_SLEEP" ]; then sleep 30; fi
 exit ${FAKE_EXIT:-0}
 """

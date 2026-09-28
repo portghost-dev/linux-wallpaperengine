@@ -372,7 +372,7 @@ def main() -> None:
         bx._resolve_outputs = lambda: []
         bx._bench_available = True
         bx._wid = "crashy"
-        bx._build_argv = lambda: ({}, ["/bin/sh", "-c", "kill -SEGV $$"])
+        bx._build_argv = lambda: ({}, ["/bin/sh", "-c", "ulimit -c 0; kill -SEGV $$"])
         bx.startTest()
         if not bx.property("isTesting"):
             _fail("real-proc startTest must mark isTesting before the engine crashes")
