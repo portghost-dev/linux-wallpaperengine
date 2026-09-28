@@ -109,6 +109,10 @@ static void validateRawPixelBytes (const Mipmap& mipmap, const Texture& header) 
 	    return;
     }
 
+    if (mipmap.width == 0 || mipmap.height == 0) {
+	sLog.exception ("Texture mipmap size ", mipmap.width, "x", mipmap.height, " has a zero dimension");
+    }
+
     const uint64_t pixels = static_cast<uint64_t> (mipmap.width) * mipmap.height;
 
     if (pixels > static_cast<uint64_t> (mipmap.uncompressedSize) / bytesPerPixel) {

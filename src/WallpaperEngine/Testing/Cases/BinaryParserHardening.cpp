@@ -60,12 +60,13 @@ std::string validTexture (uint32_t flags, int compressedSize, const std::string&
     return b;
 }
 
-std::string rawTexture (uint32_t format, uint32_t width, uint32_t height, const std::string& payload) {
+std::string
+rawTexture (uint32_t format, uint32_t width, uint32_t height, const std::string& payload, uint32_t flags = 0) {
     std::string b;
     magic (b, "TEXV0005");
     magic (b, "TEXI0001");
     u32 (b, format);
-    u32 (b, 0);
+    u32 (b, flags);
     u32 (b, width);
     u32 (b, height);
     u32 (b, width);
@@ -102,6 +103,30 @@ std::string rawGLTexture (uint32_t format, uint32_t width, uint32_t height, cons
     u32 (b, 0);
     u32 (b, 0);
     u32 (b, 1);
+    u32 (b, uint32_t (payload.size ()));
+    u32 (b, uint32_t (payload.size ()));
+    b += payload;
+    return b;
+}
+
+std::string fileImageTexture (uint32_t width, uint32_t height, const std::string& payload) {
+    std::string b;
+    magic (b, "TEXV0005");
+    magic (b, "TEXI0001");
+    u32 (b, TextureFormat_ARGB8888);
+    u32 (b, 0);
+    u32 (b, width);
+    u32 (b, height);
+    u32 (b, width);
+    u32 (b, height);
+    u32 (b, 0);
+    magic (b, "TEXB0003");
+    u32 (b, 1);
+    u32 (b, FIF_PNG);
+    u32 (b, 1);
+    u32 (b, width);
+    u32 (b, height);
+    u32 (b, 0);
     u32 (b, uint32_t (payload.size ()));
     u32 (b, uint32_t (payload.size ()));
     b += payload;
@@ -266,5 +291,47 @@ TEST_CASE ("TextureParser refuses raw payloads smaller than their pixels and emp
 
     SECTION ("a valid small texture still loads") {
 	REQUIRE_NOTHROW (TextureParser::parse (*reader (rawTexture (TextureFormat_R8, 2, 2, std::string (4, '\0')))));
+    }
+}
+
+TEST_CASE ("TextureParser refuses a zero pixel dimension and keeps its exemptions and its wide size math") {
+    SECTION ("a raw R8 mip 0 pixels wide is refused") {
+	REQUIRE_THROWS_WITH (
+	    TextureParser::parse (*reader (rawTexture (TextureFormat_R8, 0, 4, ""))),
+	    ContainsSubstring ("has a zero dimension")
+	);
+    }
+
+    SECTION ("a raw R8 mip 0 pixels high is refused") {
+	REQUIRE_THROWS_WITH (
+	    TextureParser::parse (*reader (rawTexture (TextureFormat_R8, 4, 0, ""))),
+	    ContainsSubstring ("has a zero dimension")
+	);
+    }
+
+    SECTION ("a raw-GL RG88 mip 0 pixels wide is refused") {
+	REQUIRE_THROWS_WITH (
+	    TextureParser::parse (*reader (rawGLTexture (TextureFormat_RG88, 0, 4, ""))),
+	    ContainsSubstring ("has a zero dimension")
+	);
+    }
+
+    SECTION ("a 65536x65536 R8 mip with a 16-byte payload is refused") {
+	REQUIRE_THROWS_WITH (
+	    TextureParser::parse (*reader (rawTexture (TextureFormat_R8, 65536, 65536, std::string (16, '\0')))),
+	    ContainsSubstring ("smaller than 65536x65536 pixels at 1 bytes each")
+	);
+    }
+
+    SECTION ("a video-flagged raw texture with a short stream parses") {
+	REQUIRE_NOTHROW (
+	    TextureParser::parse (
+		*reader (rawTexture (TextureFormat_ARGB8888, 64, 64, std::string (16, '\0'), TextureFlags_Video))
+	    )
+	);
+    }
+
+    SECTION ("a file-image texture with short file data parses") {
+	REQUIRE_NOTHROW (TextureParser::parse (*reader (fileImageTexture (64, 64, std::string (16, '\0')))));
     }
 }

@@ -470,7 +470,7 @@ void CTexture::createGL () {
 
 	    if (glLevel == 0 && getenv ("LWE_MASKAUDIT") != nullptr
 		&& (this->m_header->format == TextureFormat_R8 || this->m_header->format == TextureFormat_RG88)
-		&& this->m_header->freeImageFormat == FIF_UNKNOWN && dataptr != nullptr) {
+		&& this->m_header->freeImageFormat == FIF_UNKNOWN && dataptr != nullptr && width > 0 && height > 0) {
 		const auto* px = static_cast<const uint8_t*> (dataptr);
 		const int ch = this->m_header->format == TextureFormat_RG88 ? 2 : 1;
 		uint64_t sum[2] = { 0, 0 };
