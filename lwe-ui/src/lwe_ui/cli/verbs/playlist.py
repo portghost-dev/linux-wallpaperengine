@@ -77,10 +77,9 @@ def _engine_first(ctx: Context) -> tuple[tuple[str, dict | None], int | None]:
     return first, _version(ctx, first)
 
 
-def _send(ctx: Context, slug: str, bind: bool, manual: bool = False) -> int | None:
-    """The playlist's parts, then lanes-set with its enabled state, with the playlist field when bind
-    and manual true when manual, all under the sync lock; the exit code of a request that did not end
-    ok, else None."""
+def _send(ctx: Context, slug: str, bind: bool) -> int | None:
+    """The playlist's parts, then lanes-set with its enabled state, with the playlist field when bind,
+    all under the sync lock; the exit code of a request that did not end ok, else None."""
     from ... import api_client
     from ...engine import push
     from ...engine.resolve import split_playlist_parts
@@ -93,7 +92,7 @@ def _send(ctx: Context, slug: str, bind: bool, manual: bool = False) -> int | No
                 break
         else:
             lane = {"id": "all", "playlist": slug, "enabled": enabled} if bind else {"id": "all", "enabled": enabled}
-            reply = api_client.lanes_set([{**lane, "manual": True} if manual else lane])
+            reply = api_client.lanes_set([lane])
     return _answered(ctx, reply)
 
 
@@ -267,9 +266,9 @@ def _switch(ctx: Context, word: str) -> int:
     """playlist <p>: the pick and one status read here (the version check and the schedule's
     state), then ACTIVE_PLAYLIST through the change runner, which binds p with manual. The
     playlist already playing, the engine's lane bound to it when status answers, gets push.rebind's one
-    manual lanes-set, so a held engine releases, with no store change; when only the store names p, as on
-    an engine whose lane is bound elsewhere or a new one that lacks it, p's transfer and then the manual
-    bind are sent under the sync lock with no store change."""
+    manual lanes-set, so a held engine releases, with no store change; a p the store already names, as on
+    an engine whose lane is bound elsewhere or a new one that lacks it, goes through the change runner too,
+    whose delivery sends the whole bundle to an engine not yet served before the manual bind."""
     from ...engine import push
     from ...storage import paths, playlists, settings
     from .. import select
@@ -297,16 +296,6 @@ def _switch(ctx: Context, word: str) -> int:
                               "outcome": None, "reason": ""})
         else:
             print(f"{title} is already playing.", file=ctx.out)
-        return DONE
-    if playlists.active_slug(validate=False) == pick.slug:
-        code = _send(ctx, pick.slug, bind=True, manual=True)
-        if code is not None:
-            return code
-        if ctx.json:
-            _print_json(ctx, {"playlist": pick.name, "setting": "playlist", "value": pick.name, "saved": False,
-                              "outcome": report.APPLIED, "reason": ""})
-        else:
-            print(f"Switched to {title}; the next wallpaper comes from it.{_takes_over(status)}", file=ctx.out)
         return DONE
     path = paths.settings_file()
     saved: list[bool] = []

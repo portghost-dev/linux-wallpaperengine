@@ -33,7 +33,8 @@ shows once. An engine that reuses the pid of one whose window bundle stopped at 
 playlists the old one took, so it is served even when it refuses a lanes-set naming a playlist it never
 received, and a writer during the last failed drain gets retries of its own, a served engine's as well, as
 does one between the poll's marker read and the drain's ensure, while a drain that finds sync busy keeps the
-generation its own ensure gave. After an uncertain first
+generation its own ensure gave and neither counts nor restarts the retries, and no writer lands between the drain's
+found generation and its ensure. A rebind that finds sync busy logs one warning. After an uncertain first
 sight, one change under a persistent refusal reloads once and no poll reloads again, and an uncertain
 deferred first sight followed by a build edit of another wallpaper shows once.
 A manual switch while the engine is away with the schedule on writes nothing. A switch to a playlist
@@ -1055,6 +1056,73 @@ class WindowSyncTest(unittest.TestCase):
             got.append((fourth, len(tickets), failures, healthy, marker.read()["classes"], fps77))
         self.assertEqual(got, [("refused", 1, 1, [True, False, False], [], True),
                                ("uncertain", 1, 1, [True, False, False], [], True)])
+
+    def test_a_poll_that_finds_sync_busy_neither_counts_nor_restarts_the_retries(self) -> None:
+        marker.ensure(("BUNDLE",))
+        self.backend._engine_pid_seen = 4242
+        clock = Clock()
+        with mock.patch.object(models, "monotonic", clock), self.engine(status()) as rec:
+            for step in range(3):
+                clock.now = 1000.0 + 100.0 * step
+                rec.answer("set_particles", REFUSED)
+                self.backend.status()
+            clock.now += 100.0
+            with self.held_elsewhere("sync"):
+                self.backend.status()
+            after_busy = self.backend._drain_failures
+            drains = 0
+            for _ in range(8):
+                clock.now += 50.0
+                rec.answer("set_particles", REFUSED)
+                sent = len(rec.calls)
+                self.backend.status()
+                drains += "lanes_set" in [verb for verb, _a, _k in rec.calls[sent:]]
+        self.assertEqual((after_busy, drains, self.backend._drain_failures), (3, 1, 4))
+
+    def test_no_writer_lands_between_the_drains_found_generation_and_its_ensure(self) -> None:
+        marker.ensure(("BUNDLE",))
+        settings.update({"ENGINE_FPS": 60})
+        self.backend._engine_pid_seen = 4242
+        clock = Clock()
+        writer: list = []
+        armed: list = []
+        real = marker.generation
+
+        def generation_then_writer():
+            found = real()
+            if armed and not writer:
+                def write() -> None:
+                    try:
+                        push.save_change(("settings",), lambda: settings.update({"ENGINE_FPS": 77}),
+                                         [("verb", "ENGINE_FPS")], run="command", status=("ok", status()))
+                        writer.append("saved")
+                    except lock.StoreBusy:
+                        writer.append("busy")
+                thread = threading.Thread(target=write, daemon=True)
+                thread.start()
+                thread.join(10)
+            return found
+        with mock.patch.object(models, "monotonic", clock), mock.patch.object(lock, "LOCK_WAIT_S", 0.2), \
+                mock.patch.object(marker, "generation", generation_then_writer), self.engine(status()) as rec:
+            for step in range(3):
+                clock.now = 1000.0 + 100.0 * step
+                rec.answer("set_particles", REFUSED)
+                self.backend.status()
+            clock.now += 100.0
+            armed.append(True)
+            rec.answer("schedule_set", "uncertain")
+            self.backend.status()
+            failures = self.backend._drain_failures
+        self.assertEqual((writer, failures, settings.load()["ENGINE_FPS"], marker.read()["classes"]),
+                         (["busy"], 4, 60, ["BUNDLE"]))
+
+    def test_a_rebind_that_finds_sync_busy_logs_one_warning(self) -> None:
+        with mock.patch.object(lock, "LOCK_WAIT_S", 0.2), self.engine(status()) as rec, self.held_elsewhere("sync"), \
+                self.assertLogs("lwe_ui.models", "WARNING") as logged:
+            self.backend.setActivePlaylist("main")
+        self.assertEqual((rec.verbs(), len(logged.output),
+                          logged.output[0].startswith("WARNING:lwe_ui.models:playlist pick not sent: Store busy")),
+                         ([], 1, True))
 
     def test_a_held_reshow_never_counts_against_the_drains_retries(self) -> None:
         self.backend._engine_pid_seen = 4242

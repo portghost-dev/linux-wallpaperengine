@@ -9,7 +9,8 @@ and no marker; with it off, the switch is saved and pending; an engine lost afte
 leaves it saved, pending and not made. The playlist already playing, the engine's lane bound to it, gets one
 lanes-set naming it with manual and nothing else, so an engine held after a refused restore releases, with
 nothing written; one the store names while the engine's lane is bound elsewhere, under the schedule or on a
-new engine that lacks it, gets its transfer and then the manual bind with nothing written. With the engine
+new engine that lacks it, goes through the change runner, so it gets its transfer and then the manual bind with no
+store line changed, and a held new engine gets its whole bundle first and is served. With the engine
 away the saved playlist is already playing, and one the lane is bound to while the store names another, the
 schedule off, is switched.
 playlist load binds the saved playlist without manual. A name shared by two files exits 1 listing both,
@@ -318,6 +319,10 @@ class PlaylistVerbTest(unittest.TestCase):
     write, read, snapshot = OrderIntervalTest.write, OrderIntervalTest.read, OrderIntervalTest.snapshot
     sent = staticmethod(OrderIntervalTest.sent)
 
+    def unmarked(self, snapshot: dict[str, bytes]) -> dict[str, bytes]:
+        """A snapshot without the sync marker, whose generation a change runner's switch raises."""
+        return {path: data for path, data in snapshot.items() if path != str(self.marker._file())}
+
     def four(self, settings: str = "ACTIVE_PLAYLIST=main\n") -> None:
         """Calm twice (alpha.conf and zeta.conf), Main and Night: numbers 1 to 4 by name, then file name."""
         self.write("playlists/alpha.conf", "NAME=Calm\nMEMBERS=111\n")
@@ -428,7 +433,7 @@ class PlaylistVerbTest(unittest.TestCase):
         self.assertEqual(self.sent(engine), [("playlist-set", "main", "shuffle", 900, 1, 1, 2),
                                              ("lanes-set", {"lanes": [{"id": "all", "playlist": "main",
                                                                        "enabled": True, "manual": True}]})])
-        self.assertEqual(self.snapshot(), before)
+        self.assertEqual((self.unmarked(self.snapshot()), self.marker.read()["classes"]), (self.unmarked(before), []))
 
     def test_the_saved_playlist_picked_on_an_engine_whose_lane_is_bound_elsewhere_is_uploaded_then_bound(
             self) -> None:
@@ -447,7 +452,25 @@ class PlaylistVerbTest(unittest.TestCase):
                                                                "manual": True}]})], True))
         self.assertEqual(control, ((0, "Main (3) is already playing.\n", ""),
                                    [("lanes-set", {"lanes": [{"id": "all", "playlist": "main", "manual": True}]})]))
-        self.assertEqual(self.snapshot(), before)
+        self.assertEqual((self.unmarked(self.snapshot()), self.marker.read()["classes"]), (self.unmarked(before), []))
+
+    def test_the_saved_playlist_picked_on_a_held_new_engine_gets_the_whole_bundle_before_the_manual_bind(self) -> None:
+        self.four()
+        self.marker.record_served(1, time.monotonic())
+        self.write("settings.conf", "ACTIVE_PLAYLIST=main\nSCHEDULE=07:00=main;20:00=night\nSCHEDULE_ENABLED=true\n")
+        engine = self.engine(served=False, restore_refused=True, schedule={"enabled": False},
+                             lanes=[{"id": "all", "playlist": "", "enabled": False}])
+        outcome = self.lwe("playlist", "main")
+        lanes = [lane for cmd, args in engine.calls if cmd == "lanes-set" for lane in args["lanes"]]
+        verbs = [cmd for cmd, _args in engine.calls if cmd != "status"]
+        from lwe_ui.engine import push
+        self.assertEqual((outcome, [cmd for cmd, *_rest in self.sent(engine)][:3], "schedule-set" in verbs, lanes,
+                          verbs[-1], releases(engine.calls)),
+                         ((0, SWITCHED.format("Main (3)"), ""), ["playlist-set", "playlist-set", "schedule-set"], True,
+                          [{"id": "all", "playlist": "main", "enabled": True},
+                           {"id": "all", "playlist": "main", "enabled": True, "manual": True}], "lanes-set", True))
+        self.assertEqual((self.marker.served(), push._unserved(push._engine(engine.status())),
+                          self.marker.read()["classes"]), (engine.fields["pid"], False, []))
 
     def test_the_saved_playlist_is_already_playing_while_away_and_a_lane_bound_elsewhere_is_switched(self) -> None:
         self.four()

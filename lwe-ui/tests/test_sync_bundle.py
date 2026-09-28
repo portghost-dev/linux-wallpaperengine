@@ -27,7 +27,8 @@ reload's and a build change's; an explicit show never does, and a user's playlis
 whether or not the schedule is on. A re-show the engine held sends no tail, takes back the owed CURRENT,
 serves the engine when the rest of the bundle ended ok and keeps the brake note for a command run only,
 not for one whose own switch released the engine; a command run that ended applied on an engine whose status
-reports restore_refused keeps the note too, once, and a window run or a refused one keeps none;
+reports restore_refused keeps the note too, once, and a window run, a refused one or one on an engine that
+reports restore_refused false keeps none;
 restore_refused in the status changes nothing the panel sends, and two quick restarts of a healthy engine get
 full bundles and no note. The start is taken once
 per status on the engine's clock, so after a suspend or a wall-clock step the same engine gets nothing
@@ -976,7 +977,8 @@ class SyncBundleTest(unittest.TestCase):
                 (41, "window", status(pid=5001, current="", restore_refused=True), {}),
                 (42, "command", status(pid=5002, restore_refused=True), {"show": HELD}),
                 (43, "command", status(pid=5003, current=""), {}),
-                (44, "command", status(pid=5004, current="", restore_refused=True), {"set_particles": refused})):
+                (44, "command", status(pid=5004, current="", restore_refused=True), {"set_particles": refused}),
+                (45, "command", status(pid=5005, current="", restore_refused=False), {})):
             with self.engine(st) as rec:
                 for verb, reply in answers.items():
                     rec.answer(verb, reply)
@@ -985,7 +987,7 @@ class SyncBundleTest(unittest.TestCase):
             got.append((run, outcome.kind, rec.verbs().count("show"), push.brake_notes()))
         self.assertEqual(got, [("command", "applied", 0, [push.BRAKED]), ("window", "applied", 0, []),
                                ("command", "applied", 1, [push.BRAKED]), ("command", "applied", 0, []),
-                               ("command", "refused", 0, [])])
+                               ("command", "refused", 0, []), ("command", "applied", 0, [])])
 
 
 if __name__ == "__main__":
