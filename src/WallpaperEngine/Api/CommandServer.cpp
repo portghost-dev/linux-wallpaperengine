@@ -99,7 +99,14 @@ bool CommandServer::listen () {
 	);
     }
 
-    if (std::filesystem::exists (this->m_socketPath, ec)) {
+    struct stat entry {};
+
+    if (lstat (path.c_str (), &entry) == 0) {
+	if (!S_ISSOCK (entry.st_mode)) {
+	    this->m_error = path + " exists and is not a socket; refusing to replace it";
+	    return false;
+	}
+
 	if (someoneIsListening (path)) {
 	    this->m_error = "another engine is already listening on " + path;
 	    return false;

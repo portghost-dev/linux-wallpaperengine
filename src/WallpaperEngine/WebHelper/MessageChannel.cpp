@@ -252,7 +252,7 @@ bool MessageListener::listen () {
     }
 
     std::error_code ec;
-    std::filesystem::create_directories (this->m_socketPath.parent_path (), ec);
+    const bool createdDir = std::filesystem::create_directories (this->m_socketPath.parent_path (), ec);
 
     if (ec) {
 	this->m_error = "cannot create socket directory: " + ec.message ();
@@ -260,11 +260,21 @@ bool MessageListener::listen () {
     }
 
     // 0700 on the directory is the outer control; the socket mode below is the inner one
-    std::filesystem::permissions (
-	this->m_socketPath.parent_path (), std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, ec
-    );
+    if (createdDir) {
+	std::filesystem::permissions (
+	    this->m_socketPath.parent_path (), std::filesystem::perms::owner_all,
+	    std::filesystem::perm_options::replace, ec
+	);
+    }
 
-    if (std::filesystem::exists (this->m_socketPath, ec)) {
+    struct stat entry {};
+
+    if (lstat (path.c_str (), &entry) == 0) {
+	if (!S_ISSOCK (entry.st_mode)) {
+	    this->m_error = path + " exists and is not a socket; refusing to replace it";
+	    return false;
+	}
+
 	if (someoneIsListening (path)) {
 	    this->m_error = "another web helper is already listening on " + path;
 	    return false;

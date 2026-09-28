@@ -645,7 +645,8 @@ if(BUILD_TESTING)
         src/WallpaperEngine/Testing/Cases/FlagValues.cpp
         src/WallpaperEngine/Testing/Cases/ArgvFlags.cpp
         src/WallpaperEngine/Testing/Cases/DebugSwitches.cpp
-        src/WallpaperEngine/Testing/Cases/HelpText.cpp)
+        src/WallpaperEngine/Testing/Cases/HelpText.cpp
+        src/WallpaperEngine/Testing/Cases/SocketListeners.cpp)
 endif()
 
 add_library(

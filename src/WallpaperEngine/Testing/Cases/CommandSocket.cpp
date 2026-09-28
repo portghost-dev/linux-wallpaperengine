@@ -2,7 +2,6 @@
 
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <optional>
 #include <string>
 #include <sys/socket.h>
@@ -131,7 +130,17 @@ TEST_CASE ("CommandServer reclaims a stale socket file", "[api]") {
     }
 
     std::filesystem::create_directories (path.parent_path ());
-    { std::ofstream orphan (path); }
+    {
+	const int orphan = socket (AF_UNIX, SOCK_STREAM, 0);
+	REQUIRE (orphan >= 0);
+
+	sockaddr_un addr {};
+	addr.sun_family = AF_UNIX;
+	std::strncpy (addr.sun_path, path.c_str (), sizeof (addr.sun_path) - 1);
+	const bool bound = bind (orphan, reinterpret_cast<sockaddr*> (&addr), sizeof (addr)) == 0;
+	close (orphan);
+	REQUIRE (bound);
+    }
     REQUIRE (std::filesystem::exists (path));
 
     CommandServer server (path);
