@@ -605,6 +605,26 @@ const std::vector<WallpaperApplication::WebLibraryEntry>& WallpaperApplication::
     return this->m_webLibrary;
 }
 
+namespace {
+constexpr std::uintmax_t WEB_PROJECT_MAX_BYTES = 4 * 1024 * 1024;
+
+const char* webProjectTypeName (const std::filesystem::file_type type) {
+    switch (type) {
+	case std::filesystem::file_type::directory:
+	    return "a directory";
+	case std::filesystem::file_type::fifo:
+	    return "a named pipe";
+	case std::filesystem::file_type::socket:
+	    return "a socket";
+	case std::filesystem::file_type::character:
+	case std::filesystem::file_type::block:
+	    return "a device";
+	default:
+	    return "of an unknown type";
+    }
+}
+} // namespace
+
 std::vector<WallpaperApplication::WebLibraryEntry> WallpaperApplication::enumerateWebBackgrounds () {
     // same roots and precedence as resolveLibraryBackground: lwe library, then Steam
     std::vector<std::filesystem::path> roots;
@@ -633,13 +653,49 @@ std::vector<WallpaperApplication::WebLibraryEntry> WallpaperApplication::enumera
 	    }
 
 	    const auto projectFile = entry.path () / "project.json";
-	    std::ifstream file (projectFile);
 
-	    if (!file.is_open ()) {
+	    std::error_code statError;
+	    const auto status = std::filesystem::status (projectFile, statError);
+
+	    if (statError || !std::filesystem::exists (status)) {
 		continue;
 	    }
 
-	    const std::string contents ((std::istreambuf_iterator<char> (file)), std::istreambuf_iterator<char> ());
+	    if (!std::filesystem::is_regular_file (status)) {
+		sLog.error (
+		    "Skipping ", entry.path ().string (), ": its project.json is ", webProjectTypeName (status.type ()),
+		    ", not a regular file"
+		);
+		continue;
+	    }
+
+	    std::error_code sizeError;
+	    const auto size = std::filesystem::file_size (projectFile, sizeError);
+
+	    if (sizeError) {
+		sLog.error (
+		    "Skipping ", entry.path ().string (), ": cannot size its project.json: ", sizeError.message ()
+		);
+		continue;
+	    }
+
+	    if (size > WEB_PROJECT_MAX_BYTES) {
+		sLog.error (
+		    "Skipping ", entry.path ().string (), ": its project.json is larger than 4 MiB (", size, " bytes)"
+		);
+		continue;
+	    }
+
+	    std::string contents;
+
+	    try {
+		std::ifstream file (projectFile);
+		contents.assign (std::istreambuf_iterator<char> (file), std::istreambuf_iterator<char> ());
+	    } catch (const std::exception& e) {
+		sLog.error ("Skipping ", entry.path ().string (), ": cannot read its project.json: ", e.what ());
+		continue;
+	    }
+
 	    WallpaperEngine::Data::JSON::JSON json;
 
 	    try {

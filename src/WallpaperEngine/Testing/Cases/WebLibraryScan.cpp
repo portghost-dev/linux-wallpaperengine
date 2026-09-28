@@ -1,12 +1,15 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
+#include <utility>
 #include <vector>
 
 #include "WallpaperEngine/Application/WallpaperApplication.h"
@@ -40,6 +43,15 @@ void write (const std::filesystem::path& path, const std::string& text) {
     std::filesystem::create_directories (path.parent_path ());
     std::ofstream (path) << text;
 }
+
+struct RemoveOnExit {
+    explicit RemoveOnExit (std::filesystem::path folder) : path (std::move (folder)) { }
+    ~RemoveOnExit () {
+	std::error_code error;
+	std::filesystem::remove_all (this->path, error);
+    }
+    const std::filesystem::path path;
+};
 } // namespace
 
 TEST_CASE ("a malformed project.json makes only that wallpaper unavailable", "[weblibrary]") {
@@ -81,4 +93,86 @@ TEST_CASE ("a malformed project.json makes only that wallpaper unavailable", "[w
 
     CHECK (mentions == 1);
     std::filesystem::remove_all (base);
+}
+
+TEST_CASE (
+    "project.json entries that are not readable regular files are skipped without stopping the boot", "[weblibrary]"
+) {
+    const auto base
+	= std::filesystem::temp_directory_path () / ("lwe-web-badfiles-test-" + std::to_string (::getpid ()));
+    std::filesystem::remove_all (base);
+    const RemoveOnExit cleanup (base);
+    const auto library = base / "data" / "lwe" / "wallpapers";
+    std::filesystem::create_directories (base / "home");
+
+    write (library / "good" / "project.json", R"({"type": "web", "workshopid": "4242"})");
+
+    // a symlink to a regular file inside the folder is fine (status resolves it, not symlink_status)
+    write (library / "slink" / "real.json", R"({"type": "web", "workshopid": "7777"})");
+    std::filesystem::create_symlink ("real.json", library / "slink" / "project.json");
+
+    std::filesystem::create_directories (library / "dir" / "project.json");
+
+    std::filesystem::create_directories (library / "fifo");
+    REQUIRE (::mkfifo ((library / "fifo" / "project.json").c_str (), 0644) == 0);
+
+    std::filesystem::create_directories (library / "devlink");
+    std::filesystem::create_symlink ("/dev/zero", library / "devlink" / "project.json");
+
+    std::filesystem::create_directories (library / "big");
+    { std::ofstream (library / "big" / "project.json"); }
+    std::filesystem::resize_file (library / "big" / "project.json", 5 * 1024 * 1024);
+
+    auto* errors = new std::ostringstream ();
+    sLog.addError (errors);
+
+    std::vector<WallpaperApplication::WebLibraryEntry> found;
+
+    {
+	const EnvGuard data ("XDG_DATA_HOME", (base / "data").string ());
+	const EnvGuard home ("HOME", (base / "home").string ());
+	REQUIRE_NOTHROW (found = WallpaperApplication::enumerateWebBackgrounds ());
+    }
+
+    const std::string lines = errors->str ();
+    errors->setstate (std::ios::badbit);
+
+    std::vector<std::string> ids;
+    for (const auto& entry : found) {
+	ids.push_back (entry.workshopId);
+    }
+    std::ranges::sort (ids);
+
+    REQUIRE (ids == std::vector<std::string> { "4242", "7777" });
+
+    const auto mentions = [&lines] (const std::filesystem::path& folder) {
+	size_t count = 0;
+	std::istringstream in (lines);
+	for (std::string line; std::getline (in, line);) {
+	    if (line.find (folder.string ()) != std::string::npos) {
+		count++;
+	    }
+	}
+	return count;
+    };
+
+    CHECK (mentions (library / "dir") == 1);
+    CHECK (mentions (library / "fifo") == 1);
+    CHECK (mentions (library / "devlink") == 1);
+    CHECK (mentions (library / "big") == 1);
+
+    const auto lineFor = [&lines] (const std::filesystem::path& folder) {
+	std::istringstream in (lines);
+	for (std::string line; std::getline (in, line);) {
+	    if (line.find (folder.string ()) != std::string::npos) {
+		return line;
+	    }
+	}
+	return std::string ();
+    };
+
+    CHECK (lineFor (library / "dir").find ("a directory, not a regular file") != std::string::npos);
+    CHECK (lineFor (library / "fifo").find ("a named pipe, not a regular file") != std::string::npos);
+    CHECK (lineFor (library / "devlink").find ("a device, not a regular file") != std::string::npos);
+    CHECK (lineFor (library / "big").find ("larger than 4 MiB") != std::string::npos);
 }
