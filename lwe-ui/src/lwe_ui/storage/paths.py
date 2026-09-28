@@ -101,6 +101,10 @@ def bench_log_file() -> Path:
     return log_dir("bench") / "bench.log"
 
 
+def command_bench_log_file() -> Path:
+    return log_dir("bench") / "command.log"
+
+
 def dev_slot_log_file(side: str) -> Path:
     return log_dir("developer") / f"{side}.log"
 

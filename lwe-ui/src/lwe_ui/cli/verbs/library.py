@@ -1,6 +1,7 @@
 """lwe list, workshop and scan print the library catalog and only read; lwe compress builds the
 engine's texture cache; lwe add brings wallpapers into the pool and lwe untrash lets trashed ones be
-imported again. None of them sends anything to the engine."""
+imported again; lwe bench runs one wallpaper in a test window of its own. None of them sends anything
+to the running engine."""
 from __future__ import annotations
 
 import json
@@ -303,6 +304,71 @@ def _untrash(ctx: Context, args: list[str]) -> int:
     return DONE
 
 
+_ENDINGS = {"closed": "the window was closed (exit code 0)", "stopped": "stopped by lwe"}
+
+
+def _bench(ctx: Context, args: list[str]) -> int:
+    if len(args) != 1 or args[0].startswith("-"):
+        return _refuse(ctx, "bench takes one wallpaper")
+    import os
+    import subprocess
+
+    from ... import placement
+    from ...engine import daemon_unit
+    from ...library import benchrun, catalog
+    from ...storage import paths, settings
+    from .. import select
+
+    try:
+        pick = select.wallpaper(args[0])
+    except select.PickError as exc:
+        return select.report(ctx, exc)
+    label = f"{pick.title} ({pick.ui_id})"
+    engine = folder = ""
+    if pick.source == "trashed":
+        message = f"{label} is in the trash; untrash it first"
+    elif not (os.environ.get("WAYLAND_DISPLAY") or os.environ.get("DISPLAY")):
+        message = "bench opens a window; no graphical session was found"
+    elif not (engine := daemon_unit.resolve_engine_bin()):
+        message = "the engine program was not found"
+    elif not (folder := catalog.render_dir(pick.ui_id)):
+        message = f"{label}: its files are missing"
+    else:
+        message = ""
+    if message:
+        ctx.error(message, "lwe: " + message)
+        return REFUSED
+    assets = str(settings.load().get("ASSETS_DIR") or paths.default_assets_dir())
+    geometry = placement.window_geometry("A", placement.layout()) or "0x0x1280x720"
+    argv = benchrun.bench_argv(engine, assets, geometry, folder, socket=False)
+    log_path = paths.command_bench_log_file()
+
+    def launch(*popen_args, **popen_kwargs) -> subprocess.Popen:
+        proc = subprocess.Popen(*popen_args, **popen_kwargs)
+        if not ctx.json:
+            print(f"Opened a test window for {label}; close it to see the summary.", file=ctx.out, flush=True)
+        return proc
+
+    summary = benchrun.run(argv, dict(os.environ), log_path, pick.title, pick.ui_id, launcher=launch)
+    if ctx.json:
+        print(json.dumps({
+            "id": pick.ui_id, "title": pick.title,
+            "first_frame_s": None if summary.first_frame_s is None else round(summary.first_frame_s, 3),
+            "ran_s": round(summary.ran_s, 3), "ended": summary.ended, "exit_code": summary.exit_code,
+            "signal": summary.signal, "fatal_line": summary.fatal_line, "log": str(log_path),
+        }, ensure_ascii=False, separators=(",", ":")), file=ctx.out)
+    else:
+        first = "none" if summary.first_frame_s is None else f"after {summary.first_frame_s:.1f} s"
+        ending = _ENDINGS.get(summary.ended) or (f"signal {summary.signal}" if summary.ended == "signal"
+                                                 else f"exit code {summary.exit_code}")
+        print(f"First frame: {first}", file=ctx.out)
+        print(f"Ran {summary.ran_s:.0f} s; {ending}", file=ctx.out)
+        if summary.fatal_line is not None:
+            print(f"Fatal line: {summary.fatal_line}", file=ctx.out)
+        print(f"Log: {log_path}", file=ctx.out)
+    return DONE if summary.first_frame_s is not None and summary.fatal_line is None else REFUSED
+
+
 VERBS = (
     Verb("list", _list, "Your library, numbered by title, with each wallpaper's id and alias.", "library"),
     Verb("workshop", _workshop, "Workshop downloads that are not in your pool yet, numbered, including ones "
@@ -314,4 +380,6 @@ VERBS = (
          "library"),
     Verb("untrash", _untrash, "Lifts that block so a wallpaper can be imported again; it does not bring "
          "deleted files back.", "library"),
+    Verb("bench", _bench, "Opens a test window beside your wallpaper and prints its log summary when you "
+         "close it.", "library"),
 )

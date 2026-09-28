@@ -32,6 +32,7 @@ from . import api_client
 from . import placement
 from . import texcomp
 from .dev import _assets_dir, _engine_bin, overlay_text, sample_exhibit
+from .library.benchrun import bench_argv
 from .storage import paths, records, settings, wizard
 from .storage.bench_verdict import BenchSession, is_fatal_line, is_first_frame_line
 
@@ -363,9 +364,7 @@ class WizardBridge(QObject):
             pass
         # NON-silent (no --silent) so the engine prints one LWE-PRESENT line per presented frame;
         # the socket is how the overlay text reaches the window while it runs.
-        argv = [_engine_bin(), "--assets-dir", _assets_dir(), "--fps", "30", "--scaling", "default",
-                "--no-audio-processing", "--disable-mouse", "--no-fullscreen-pause",
-                "--window", geo, "--api-socket", "--bg", d]
+        argv = bench_argv(_engine_bin(), _assets_dir(), geo, d, socket=True)
         try:
             (paths.bench_log_file()).write_text(
                 "=== bench " + self._wid + " ===\n" + " ".join(argv) + "\n", encoding="utf-8")
