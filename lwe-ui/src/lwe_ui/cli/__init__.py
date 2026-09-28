@@ -57,15 +57,16 @@ class _Cleaned:
         return getattr(self._stream, name)
 
 
-def _silence_stdout() -> None:
-    """Point stdout at /dev/null, so the flush at exit cannot fail on a closed pipe."""
-    try:
-        fd = sys.stdout.fileno()
-    except (AttributeError, ValueError, OSError):
-        return
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    os.dup2(devnull, fd)
-    os.close(devnull)
+def _silence_output() -> None:
+    """Point stdout and stderr at /dev/null, so the flush at exit cannot fail on a closed pipe."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            fd = stream.fileno()
+        except (AttributeError, ValueError, OSError):
+            continue
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, fd)
+        os.close(devnull)
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,16 @@ class Context:
 
 
 def main(argv: list[str], *, sender_stamp: str | None = None, cwd_entered: bool = False) -> int:
+    """The verb's exit code, or PIPE_CLOSED when a write or a flush on stdout or stderr meets a
+    closed pipe."""
+    try:
+        return _main(argv, sender_stamp, cwd_entered)
+    except BrokenPipeError:
+        _silence_output()
+        return PIPE_CLOSED
+
+
+def _main(argv: list[str], sender_stamp: str | None, cwd_entered: bool) -> int:
     from ..storage.lock import StoreBusy
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -120,8 +131,7 @@ def main(argv: list[str], *, sender_stamp: str | None = None, cwd_entered: bool 
         ctx.error(str(exc))
         return REFUSED
     except BrokenPipeError:
-        _silence_stdout()
-        return PIPE_CLOSED
+        raise
     except Exception as exc:
         one_line = " ".join(str(exc).splitlines())
         ctx.error(f"internal error: {type(exc).__name__}: {one_line}")

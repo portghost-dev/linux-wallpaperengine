@@ -165,8 +165,8 @@ class CliEntryTest(unittest.TestCase):
         shutil.rmtree(cls.root, True)
 
     @classmethod
-    def _run(cls, args: list, text: bool = True,
-             stdout: int = subprocess.PIPE) -> subprocess.CompletedProcess:
+    def _run(cls, args: list, text: bool = True, stdout: int = subprocess.PIPE,
+             stderr: int = subprocess.PIPE, io_encoding: str = "utf-8:strict") -> subprocess.CompletedProcess:
         home = cls.root / "home"
         env = {
             "HOME": str(home),
@@ -178,10 +178,10 @@ class CliEntryTest(unittest.TestCase):
             "PATH": str(home / "bin"),
             "PYTHONPATH": os.pathsep.join([str(cls.root / "poison"), str(SRC)]),
             "PYTHONDONTWRITEBYTECODE": "1",
-            "PYTHONIOENCODING": "utf-8:strict",
+            "PYTHONIOENCODING": io_encoding,
         }
         return subprocess.run(args, env=env, cwd=cls.root / "start", stdout=stdout,
-                              stderr=subprocess.PIPE, encoding="utf-8" if text else None, timeout=60)
+                              stderr=stderr, encoding="utf-8" if text else None, timeout=60)
 
     def _entry(self, *words: str) -> subprocess.CompletedProcess:
         return self._run([sys.executable, "-m", "lwe_ui", *words])
@@ -189,10 +189,11 @@ class CliEntryTest(unittest.TestCase):
     def _with_verbs(self, *words: str) -> subprocess.CompletedProcess:
         return self._run([sys.executable, "-c", RUN_WITH_VERBS, str(self.root / "verbs"), *words])
 
-    def _verb_bytes(self, *words: str | bytes,
-                    stdout: int = subprocess.PIPE) -> subprocess.CompletedProcess:
+    def _verb_bytes(self, *words: str | bytes, stdout: int = subprocess.PIPE, stderr: int = subprocess.PIPE,
+                    io_encoding: str = "utf-8:strict") -> subprocess.CompletedProcess:
         return self._run([sys.executable, "-c", RUN_WITH_VERBS, str(self.root / "verbs"), "--lwe", STAMP,
-                          str(self.root / "there"), *words], text=False, stdout=stdout)
+                          str(self.root / "there"), *words], text=False, stdout=stdout, stderr=stderr,
+                         io_encoding=io_encoding)
 
     def _normal_start(self, target: str, *argv: str) -> dict:
         r = self._run([sys.executable, "-c", NORMAL_START, target, *argv])
@@ -330,6 +331,16 @@ class CliEntryTest(unittest.TestCase):
         r = self._verb_bytes("say", b"x\xffy")
         self.assertEqual((r.returncode, r.stdout, r.stderr), (0, b"x\xef\xbf\xbdy\n", b""))
 
+    def test_output_is_utf8_under_a_latin1_io_encoding(self) -> None:
+        r = self._verb_bytes(b"x\xffy", io_encoding="latin-1:strict")
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (3, b"", b"lwe: x\xef\xbf\xbdy is not a command\n"))
+        r = self._verb_bytes("say", b"x\xffy", io_encoding="latin-1:strict")
+        self.assertEqual((r.returncode, r.stdout, r.stderr), (0, b"x\xef\xbf\xbdy\n", b""))
+
+    def test_a_lone_surrogate_that_stands_for_no_byte_cleans_to_one_replacement(self) -> None:
+        from lwe_ui import cli
+        self.assertEqual(cli.clean("a\ud800b\udfffc"), "a\ufffdb\ufffdc")
+
     def test_a_verb_that_calls_sys_exit_keeps_its_code(self) -> None:
         r = self._verb_bytes("leave")
         self.assertEqual((r.returncode, r.stdout, r.stderr), (5, b"", b""))
@@ -355,6 +366,17 @@ class CliEntryTest(unittest.TestCase):
                 finally:
                     os.close(write_end)
                 self.assertEqual((r.returncode, r.stderr), (141, b""))
+
+    def test_a_closed_error_pipe_ends_the_command_quietly_with_141(self) -> None:
+        for words in (["nosuchverb"], [], ["busy"], ["crash"]):
+            with self.subTest(words=words):
+                read_end, write_end = os.pipe()
+                os.close(read_end)
+                try:
+                    r = self._verb_bytes(*words, stderr=write_end)
+                finally:
+                    os.close(write_end)
+                self.assertEqual((r.returncode, r.stdout), (141, b""))
 
 
 if __name__ == "__main__":

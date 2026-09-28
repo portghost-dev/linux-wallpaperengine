@@ -156,6 +156,14 @@ class ValuesTest(unittest.TestCase):
         self.refused(self.v.parse_step, ("5", "+", "+5.5", "--5", ""), "takes +N or -N, N a whole number; got {word}")
         self.assertEqual(self.v.parse_number("-0.5", -1.0, 1.0), -0.5)
 
+    def test_a_digit_string_past_the_int_limit_is_refused(self) -> None:
+        digits = "9" * 4301
+        self.refused(lambda word: self.v.parse_whole(word, 0, 128), (digits,),
+                     "takes a whole number from 0 to 128; got {word}")
+        self.refused(self.v.parse_step, ("+" + digits,), "takes +N or -N, N a whole number; got {word}")
+        self.refused(lambda word: self.v.parse_duration(word, "m", 15, 599940), (digits, digits + "s"),
+                     "takes a whole number with s, m or h from 15s to 9999m (a bare number is minutes); got {word}")
+
     def test_times_and_numbers_print_so_they_type_back(self) -> None:
         self.assertEqual([self.v.format_time(m) for m in (0, 450, 1439)], ["00:00", "07:30", "23:59"])
         for minutes in (0, 450, 1439):

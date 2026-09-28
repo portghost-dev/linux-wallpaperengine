@@ -98,7 +98,10 @@ def _switch(invert: bool = False, toggle: bool = True) -> tuple[Callable[..., An
         return TOGGLE if form == TOGGLE else (form == "on") != invert
 
     def fmt(value: Any) -> str:
-        return "" if _empty(value) else ("on" if bool(value) != invert else "off")
+        if _empty(value):
+            return ""
+        on = value.strip().lower() in ("true", "1", "yes", "on") if isinstance(value, str) else bool(value)
+        return "on" if on != invert else "off"
 
     return parse, fmt
 

@@ -57,6 +57,13 @@ class ScheduleRowsTest(unittest.TestCase):
             schedule.set_field(rows, "night", "time", 21 * 60)
         self.assertEqual(schedule.format_rows(rows), text)
 
+    def test_day_range_takes_the_first_two_valid_times(self) -> None:
+        for text, expected in (("07:00=a;21:30=b", (420, 1290)), ("22:00=a;06:00=b", (1320, 360)),
+                               ("25:00=a;06:15=b;19:45=c", (375, 1185)), ("07:00=a", (480, 1200)),
+                               ("", (480, 1200))):
+            with self.subTest(text=text):
+                self.assertEqual(schedule.day_range(schedule.parse_rows(text)), expected)
+
     def test_is_day_at_matches_the_panel_rule_over_a_grid(self) -> None:
         from lwe_ui import models
         grid = sorted(set(range(0, 24 * 60, 20)) | {24 * 60 - 1})

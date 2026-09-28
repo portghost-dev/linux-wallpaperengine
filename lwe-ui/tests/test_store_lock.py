@@ -792,6 +792,34 @@ class StoreLockTest(unittest.TestCase):
                 self.assertLess(waited, budget * 1.5, f"the window thread waited {waited:.2f} s for {store}")
                 self.assertEqual(len(busy), 1, "the worker met the busy store as well")
 
+    def test_meta_and_tags_share_one_deadline_across_the_thread_mutex_and_the_file_lock(self) -> None:
+        from lwe_ui.storage import tags
+        budget = 0.8
+        cases = (("meta", meta._WRITE_LOCK, lambda: meta.modify("111", lambda entry: {"note": "window"})),
+                 ("tags", tags._WRITE_LOCK, lambda: tags.remove("111")))
+        for store, mutex, window_call in cases:
+            for hold_s, limit in ((0.4, 1.0), (1.6, 1.2)):
+                with self.subTest(store=store, hold_s=hold_s):
+                    taken, release = threading.Event(), threading.Event()
+
+                    def hold_mutex() -> None:
+                        with mutex:
+                            taken.set()
+                            release.wait(hold_s)
+                    with mock.patch.object(lock, "LOCK_WAIT_S", budget), self._held_elsewhere(store):
+                        holder = threading.Thread(target=hold_mutex)
+                        holder.start()
+                        try:
+                            self.assertTrue(taken.wait(10), "the holder never took the thread mutex")
+                            start = time.monotonic()
+                            with self.assertRaises(lock.StoreBusy):
+                                window_call()
+                            waited = time.monotonic() - start
+                        finally:
+                            release.set()
+                            holder.join(10)
+                    self.assertLess(waited, limit, f"the window thread waited {waited:.2f} s for {store}")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

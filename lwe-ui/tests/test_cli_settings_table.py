@@ -127,6 +127,8 @@ class SettingsTableTest(unittest.TestCase):
         by, wp = self.table.BY_NAME, self.table.WALLPAPER_BY_NAME
         self.assertIs(by["audioreactive"].parse("on"), False)
         self.assertEqual(by["audioreactive"].format(False), "on")
+        self.assertEqual([wp["texturecache"].format(v) for v in ("true", "false", True, False)], ["on", "off", "on", "off"])
+        self.assertEqual([by["audioreactive"].format(v) for v in ("false", "true")], ["on", "off"])
         self.assertEqual(by["mute"].parse("toggle"), self.table.TOGGLE)
         with self.assertRaises(self.values.UsageError):
             by["mousedefault"].parse("toggle")
@@ -153,6 +155,35 @@ class SettingsTableTest(unittest.TestCase):
         with self.assertRaises(self.values.UsageError):
             self.table.WALLPAPER_BY_NAME["speed"].parse("0")
 
+    def test_each_ranged_row_takes_its_edges_and_refuses_past_them(self) -> None:
+        by, wp = self.table.BY_NAME, self.table.WALLPAPER_BY_NAME
+        edges = (
+            (by["fps"], ("1", "480"), ("0", "481")),
+            (by["interval"], ("15s", "9999m"), ("14s", "10000m")),
+            (by["detectevery"], ("15s", "24h"), ("14s", "86401s")),
+            (by["watchdog"], ("0", "24h"), ("86401s",)),
+            (by["lightdimming"], ("0.01", "1000"), ("0.009", "1000.1")),
+            (by["lightfalloff"], ("0.5", "6"), ("0.49", "6.01")),
+            (by["audiogain"], ("0.1", "20"), ("0.09", "20.1")),
+            (by["volume"], ("0", "128"), ("129",)),
+            (wp["volume"], ("0", "128"), ("129",)),
+            (wp["speed"], ("0.1", "10"), ("0.09", "10.1")),
+            (wp["zoom"], ("1", "2"), ("0.99", "2.01")),
+            (wp["panx"], ("-1", "1"), ("-1.01", "1.01")),
+            (wp["pany"], ("-1", "1"), ("-1.01", "1.01")),
+            (wp["brightness"], ("0", "4"), ("-0.01", "4.01")),
+            (wp["contrast"], ("0", "4"), ("-0.01", "4.01")),
+            (wp["saturation"], ("0", "4"), ("-0.01", "4.01")),
+        )
+        for row, taken, refused in edges:
+            for word in taken:
+                with self.subTest(row=row.name, form=row.form, word=word):
+                    row.parse(word)
+            for word in refused:
+                with self.subTest(row=row.name, form=row.form, word=word):
+                    with self.assertRaises(self.values.UsageError):
+                        row.parse(word)
+
     def test_volume_takes_0_to_128_or_a_step(self) -> None:
         volume = self.table.BY_NAME["volume"]
         self.assertEqual((volume.parse("128"), type(volume.parse("40"))), (128, int))
@@ -161,6 +192,9 @@ class SettingsTableTest(unittest.TestCase):
         with self.assertRaises(self.values.UsageError) as caught:
             volume.parse("129")
         self.assertEqual(str(caught.exception), "takes a whole number from 0 to 128, +N or -N; got 129")
+        with self.assertRaises(self.values.UsageError) as caught:
+            self.table.WALLPAPER_BY_NAME["volume"].parse("+5")
+        self.assertEqual(str(caught.exception), "takes a whole number from 0 to 128; got +5")
 
     def test_receipts(self) -> None:
         r = self.report
@@ -199,6 +233,10 @@ class SettingsTableTest(unittest.TestCase):
         out = io.StringIO()
         r.emit(SimpleNamespace(json=False, out=out), r.receipt("volume", "40", True, "now", r.APPLIED))
         self.assertEqual(out.getvalue(), "volume 40: saved; applies now.\n")
+        for applies in ("now", "next wallpaper"):
+            with self.subTest(applies=applies):
+                with self.assertRaises(ValueError):
+                    r.receipt("volume", "40", False, applies)
 
     def test_every_reach_has_a_line_and_a_change_with_no_engine_side_claims_nothing_about_the_engine(self) -> None:
         r = self.report
@@ -228,6 +266,7 @@ class SettingsTableTest(unittest.TestCase):
         derive = self.table.derived_active_playlist
         self.assertEqual(derive(bound("night")), ("night", "engine"))
         self.assertEqual(derive(bound("gone")), ("day", "saved"))
+        self.assertEqual(derive(bound("../settings")), ("day", "saved"))
         self.assertEqual(derive(bound("night", enabled=False)), ("day", "saved"))
         self.assertEqual(derive(None), ("day", "saved"))
         self.assertEqual(files(), before)

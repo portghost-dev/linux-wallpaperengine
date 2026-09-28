@@ -269,7 +269,7 @@ def derived_active(status: dict[str, Any] | None) -> tuple[str | None, str]:
         if isinstance(schedule, dict) and schedule.get("enabled") and isinstance(lanes, list) and lanes \
                 and isinstance(lanes[0], dict):
             bound = str(lanes[0].get("playlist") or "")
-            if bound and paths.playlist_file(bound).exists():
+            if bound and paths.is_safe_wid(bound) and paths.playlist_file(bound).exists():
                 return bound, "engine"
     return playlists.active_slug(validate=True) or None, "saved"
 

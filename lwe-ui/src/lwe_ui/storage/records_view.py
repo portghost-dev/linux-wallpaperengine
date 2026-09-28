@@ -116,7 +116,8 @@ def purge_and_ungate(wid: str) -> bool:
     suppressed and can re-import. Wipes BOTH the suppression and the audit trail (the confirm
     must say so). Returns True if a record file was removed. When none was removed, for
     example with no file or the records store busy, the tags row is kept, one warning is
-    logged and it returns False."""
+    logged and it returns False. When the record was removed but the tags row cannot be dropped,
+    for example with the tags store busy, it returns True and the row still suppresses the item."""
     removed = records.purge(wid)
     if not removed:
         logging.getLogger(__name__).warning("record for %s not purged; its tags row is kept", wid)

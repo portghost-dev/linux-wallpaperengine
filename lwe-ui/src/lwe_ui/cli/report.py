@@ -43,7 +43,10 @@ _NOT_APPLIED = {
 
 def receipt(setting: str, value: str, saved: bool, applies: str, outcome: str | None = None,
             reason: str = "") -> dict[str, Any]:
-    """applies is the row's reach; outcome is None for a change with no engine request."""
+    """applies is the row's reach; outcome is None for a change with no engine request, which a now
+    or next wallpaper reach never is."""
+    if outcome is None and applies in ("now", "next wallpaper"):
+        raise ValueError(f"a receipt that applies {applies} needs an outcome")
     return {"setting": setting, "value": value, "saved": saved, "outcome": outcome, "applies": applies,
             "reason": reason}
 

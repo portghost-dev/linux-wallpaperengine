@@ -396,6 +396,17 @@ class TargetedWriteTest(unittest.TestCase):
         playlists.update("cr", {"NAME": "Renamed"})
         self.assertEqual((shown, playlists.members("cr")), ([], []))
 
+    def test_the_discovery_command_and_the_alias_claims_keep_a_lone_cr_inside_its_line(self) -> None:
+        from lwe_ui import discover_cli
+        from lwe_ui.storage import alias
+        settings.ensure_exists()
+        p = paths.settings_file()
+        shown = discover_cli._wallpapers_dir()
+        p.write_bytes((raw(p) + "ENGINE_FPS=30\rWALLPAPERS_DIR=/elsewhere\n").encode("utf-8"))
+        self.assertEqual(discover_cli._wallpapers_dir(), shown)
+        paths.wp_file("501").write_bytes(b"BG=501\nSPEED=2\rALIAS=foo\n")
+        self.assertNotIn("foo", alias.claims())
+
     def test_the_export_leaves_out_a_value_with_a_line_break_and_names_it(self) -> None:
         from lwe_ui.storage import backup
         settings.ensure_exists()

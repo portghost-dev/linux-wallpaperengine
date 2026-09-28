@@ -41,6 +41,14 @@ def _plain_number(text: str) -> float | None:
     return 0.0 if value == 0.0 else value
 
 
+def _int(digits: str) -> int | None:
+    """int() of a matched digit string, or None past the interpreter's limit on digits."""
+    try:
+        return int(digits)
+    except ValueError:
+        return None
+
+
 def parse_switch(word: str, toggle: bool = True) -> str:
     """on or off, or toggle where allowed; returns the word."""
     if word in (("on", "off", "toggle") if toggle else ("on", "off")):
@@ -51,16 +59,18 @@ def parse_switch(word: str, toggle: bool = True) -> str:
 
 def parse_whole(word: str, lo: int, hi: int) -> int:
     """ASCII digits only, then the range."""
-    if not _WHOLE.fullmatch(word) or not lo <= int(word) <= hi:
+    value = _int(word) if _WHOLE.fullmatch(word) else None
+    if value is None or not lo <= value <= hi:
         raise UsageError(f"takes a whole number from {lo} to {hi}; got {word}")
-    return int(word)
+    return value
 
 
 def parse_step(word: str) -> int:
     """+N or -N with ASCII digits; returns the signed step."""
-    if not _STEP.fullmatch(word):
+    value = _int(word) if _STEP.fullmatch(word) else None
+    if value is None:
         raise UsageError(f"takes +N or -N, N a whole number; got {word}")
-    return int(word)
+    return value
 
 
 def parse_number(word: str, lo: float, hi: float) -> float:
@@ -107,7 +117,8 @@ def parse_duration(word: str, bare: str, lo_s: int, hi_s: int) -> int:
     """A whole number with an optional lowercase s, m or h and nothing else; a bare number is in
     the unit bare names. Returns seconds, then the range."""
     match = _DURATION.fullmatch(word)
-    seconds = int(match[1]) * _UNIT_SECONDS[match[2] or bare] if match else None
+    count = _int(match[1]) if match else None
+    seconds = count * _UNIT_SECONDS[match[2] or bare] if count is not None else None
     if seconds is None or not lo_s <= seconds <= hi_s:
         raise UsageError(f"takes a whole number with s, m or h from {format_duration(lo_s)} to "
                          f"{format_duration(hi_s)} (a bare number is {_UNIT_NAMES[bare]}); got {word}")

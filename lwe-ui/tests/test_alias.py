@@ -113,6 +113,27 @@ class AliasTest(unittest.TestCase):
             self.assertEqual(self._raw(wid), {"BG": wid, "SPEED": "2.5"}, f"{wid}: the rest of the file")
         self.assertEqual(self._raw("301"), {"BG": "301", "ALIAS": "dusk"}, "the file the import leaves")
 
+    def test_an_alias_equal_to_an_id_the_archive_brings_is_dropped(self) -> None:
+        self._conf("301", "BG=301\n")
+        self._conf("moon", "BG=moon\n")
+        archive = self._archive({"wp/301.conf": "BG=301\nALIAS=moon\n"})
+        for wid in ("301", "moon"):
+            paths.wp_file(wid).unlink()
+        r = backup.import_from(archive)
+        self.assertEqual(r["errors"], [])
+        self.assertIn({"kind": "override-key", "id": "301:ALIAS", "reason": "moon is already a wallpaper id"},
+                      r["dropped"])
+        self.assertEqual(self._raw("301"), {"BG": "301"})
+
+    def test_a_file_the_archive_overwrites_no_longer_claims_its_alias(self) -> None:
+        self._conf("401", "BG=401\nALIAS=Night\n")
+        self._conf("402", "BG=402\n")
+        archive = self._archive({"wp/401.conf": "BG=401\nALIAS=Day\n", "wp/402.conf": "BG=402\nALIAS=Night\n"})
+        r = backup.import_from(archive)
+        self.assertEqual((r["errors"], [d for d in r["dropped"] if d["kind"] == "override-key"]), ([], []))
+        self.assertEqual((self._raw("401"), self._raw("402")),
+                         ({"BG": "401", "ALIAS": "Day"}, {"BG": "402", "ALIAS": "Night"}))
+
     def test_the_restore_checks_each_alias_again_when_it_writes(self) -> None:
         self._conf("206", "BG=206\n")
         archive = self._archive({"wp/206.conf": "BG=206\nALIAS=star\n"})
