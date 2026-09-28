@@ -647,6 +647,15 @@ class RestartStatusTest(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertEqual(self.pends(line + "\n", **{name: (value, "env")}), set())
 
+    def test_a_factor_line_reads_as_the_engine_s_atof_reads_it(self) -> None:
+        for text, engine in (("1_5", 1.0), ("0x2", 2.0), ("infx", 4.0), ("nanx", 1.0), ("١", 0.0),
+                             ("1.3", 1.2999999523162842)):
+            with self.subTest(text=text):
+                self.assertEqual(self.pends(f"LWE_SSFACTOR={text}\n", LWE_SSFACTOR=(engine, "env")), set())
+
+    def test_a_status_float_beyond_float32_does_not_raise(self) -> None:
+        self.assertEqual(self.pends("LWE_SSFACTOR=2\n", LWE_SSFACTOR=(1e39, "env")), {"SSFACTOR"})
+
     def test_a_float_compares_at_float32(self) -> None:
         self.assertEqual(self.pends("LWE_SSFACTOR=1.3\n", LWE_SSFACTOR=(1.2999999523162842, "env")), set())
 

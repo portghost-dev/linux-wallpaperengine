@@ -269,6 +269,17 @@ class TestEditorAgainstRealScene(unittest.TestCase):
         settings.update({"SSFACTOR": 0.5})
         self.assertEqual(e.globalDefaultFor("SSFACTOR"), "0.5")
 
+    def test_a_clamp_number_shows_as_the_engine_s_env_line_writes_it(self) -> None:
+        """clampValue and the global entry show a stored 1e-07 as 1e-07, not 0; 1.5, 0, 1 and 4 as themselves."""
+        from lwe_ui.storage import settings, wp
+        e = self.editor
+        for text in ("1e-07", "1.5", "0", "1", "4"):
+            with self.subTest(text=text):
+                wp.update_set(self.wid, {"SSFACTOR": text})
+                settings.update({"SSFACTOR": float(text)})
+                e.open(self.wid)
+                self.assertEqual((e.clampValue("SSFACTOR"), e.globalDefaultFor("SSFACTOR")), (text, text))
+
     def test_revert_restores_session_start_values(self) -> None:
         """Revert restores every marked key to its session-start value; marks clear."""
         e = self.editor

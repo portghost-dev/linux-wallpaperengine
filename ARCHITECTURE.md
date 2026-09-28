@@ -338,8 +338,9 @@ is to be the daemon API's reference client and the system's owner:
   restart-class engine settings live there, among them the resolution cap as two saved numbers,
   `SSFACTOR` for the scene and `CLAMPCOMPOSITES` for the effect buffers (`Resolution clamp` and
   `Effect clamp` on Engine > Advanced), each at most 4 with 0 or below off; a 1 writes no line, the
-  engine's default. A settings file that lacks a number reads it from its three-state
-  `RENDER_RESOLUTION` word: everything clamped is 1 and 1, composites exempt 1 and 0, and off 0 and 0.
+  engine's default. A settings file that lacks a number, or holds one that is not finite, reads it from
+  its three-state `RENDER_RESOLUTION` word: everything clamped is 1 and 1, composites exempt 1 and 0,
+  and off 0 and 0.
   The engine reads the file only at service start, so each restart-class row on Engine >
   Advanced carries a restart verb while the running engine reports in its status another value than it
   would read from the file on that row's keys (the layer, which status does not report, from its process

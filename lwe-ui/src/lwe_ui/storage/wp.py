@@ -6,6 +6,7 @@ on save so the file stays minimal and consumers can distinguish "unset" from "se
 """
 from __future__ import annotations
 
+import math
 import os
 import warnings
 import zipfile
@@ -170,14 +171,14 @@ def skip_ids(text: str) -> list[int]:
 
 def clamp_values(present: dict[str, Any] | None, wid: str) -> dict[str, tuple[float | None, str]]:
     """{clamp key: (value, source)}: the file's own number ("own"), an empty value as ("inherit"),
-    or for an absent key the number its RENDER_RESOLUTION word stands for ("RENDER_RESOLUTION").
+    or for an absent or non-finite key the number its RENDER_RESOLUTION word stands for ("RENDER_RESOLUTION").
     `present` is load_set's dict, or None to read it (raising on an unreadable file). Unclamped."""
     if present is None:
         present = load_set(wid)
     numbers = C.resolution_word_numbers(present.get("RENDER_RESOLUTION"))
     out: dict[str, tuple[float | None, str]] = {}
     for i, key in enumerate(C.CLAMP_KEYS):
-        if key in present:
+        if key in present and (present[key] == "" or math.isfinite(float(present[key]))):
             value = present[key]
             out[key] = (None, "inherit") if value == "" else (float(value), "own")
         elif numbers is not None:

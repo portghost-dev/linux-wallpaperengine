@@ -114,11 +114,10 @@ class SettingsBridge(QObject):
                 return True, n, ""
             if t == "float":
                 f = float(str(value).strip())
-                if key in C.CLAMP_KEYS:
-                    if not math.isfinite(f):
-                        return False, None, "That is not a number."
-                    if f <= 0.0:
-                        f = 0.0
+                if not math.isfinite(f):
+                    return False, None, "That is not a number."
+                if key in C.CLAMP_KEYS and f <= 0.0:
+                    f = 0.0
                 lo, hi = spec.get("min"), spec.get("max")
                 if lo is not None and f < lo:
                     return False, None, "That value is outside the allowed range."
@@ -142,7 +141,7 @@ class SettingsBridge(QObject):
                     return False, None, "That is not a folder."
                 return True, text, ""
             return True, str(value), ""
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return False, None, "That is not a number."
 
     def _validate_schedule(self, packed: str) -> tuple[bool, Any, str]:
@@ -427,7 +426,8 @@ class SettingsBridge(QObject):
     def importBackup(self, url: str) -> bool:
         """Open dialog accept: preflight, write through the schemas, refresh, receipt; then
         backup.settle, with a refusal or any write failure in the receipt as the failed verdict, all
-        inside backup.restoring()."""
+        inside backup.restoring(). A sync the engine refused or did not answer is a failure at this
+        door afterwards; the restore stays written."""
         local = self._local(url)
         if not local or not os.path.isfile(local):
             return self._fail("Configuration", "That file is not an LWE backup.")
@@ -447,13 +447,14 @@ class SettingsBridge(QObject):
                 for item in r.get(key, []):
                     log.info("restore %s: %s", key, json.dumps(item))
             self._receipt = r
+            outcome = None
             # the same refresh a settings edit gets, then the engine sees the new policy
             try:
                 self._backend.refresh()
                 self._backend.settingsChanged.emit()
                 self._backend.playlistsChanged.emit()
                 self._backend.themeRefreshRequested.emit()
-                push.sync_all("window", ("BUNDLE", "CURRENT"), defer_current=self._backend.delivery_due())
+                outcome = push.sync_all("window", ("BUNDLE", "CURRENT"), defer_current=self._backend.delivery_due())
             except Exception:
                 pass
             if any(f["kind"] == "engine-restart" for f in r["followups"]):
@@ -466,6 +467,8 @@ class SettingsBridge(QObject):
         self.changed.emit()
         self.truthRefreshed.emit()
         self.receiptChanged.emit()
+        if outcome is not None and outcome.kind in ("refused", "uncertain"):
+            return self._fail("Configuration", "The engine did not answer.")
         return True
 
     @Property(str, notify=receiptChanged)
@@ -478,10 +481,13 @@ class SettingsBridge(QObject):
 
     @Slot(result=bool)
     def resetConfig(self) -> bool:
-        if not bool(self._backend.resetConfig()):
+        outcome = self._backend.resetConfig()
+        if outcome is None:
             return self._fail("Configuration", "Settings could not be reset.")
         self.changed.emit()
         self.truthRefreshed.emit()
+        if outcome.kind in ("refused", "uncertain"):
+            return self._fail("Configuration", "The engine did not answer.")
         return True
 
     #: Interface scale detents: a release within three points of one settles on it.
@@ -550,7 +556,7 @@ class SettingsBridge(QObject):
             logging.getLogger(__name__).warning("exceptions list not applied: %s %s", outcome.kind,
                                                 outcome.reason or outcome.message or "")
         self.truthRefreshed.emit()
-        return True
+        return outcome.kind not in ("refused", "uncertain")
 
     @Slot(str, result=bool)
     def addException(self, app_id: str) -> bool:
@@ -596,7 +602,7 @@ class SettingsBridge(QObject):
             logging.getLogger(__name__).warning("app list not applied: %s %s", outcome.kind,
                                                 outcome.reason or outcome.message or "")
         self.truthRefreshed.emit()
-        return True
+        return outcome.kind not in ("refused", "uncertain")
 
     @Slot(str, result=bool)
     def addAppEntry(self, name: str) -> bool:

@@ -383,7 +383,7 @@ def _read(name: str, status: dict | None) -> tuple[Any, str, str | None]:
     loaded = settings.load()
     present = settings.load_set()
     value = loaded[row.key]
-    if row.key in present:
+    if row.key in present and (row.name not in ("resclamp", "effectclamp") or math.isfinite(present[row.key])):
         source = "settings.conf"
     elif row.name in ("resclamp", "effectclamp") and "RENDER_RESOLUTION" in present:
         source = "RENDER_RESOLUTION"

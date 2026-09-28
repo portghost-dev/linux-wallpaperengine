@@ -117,10 +117,10 @@ def load() -> dict[str, Any]:
     # the same clamp and enum snap a save applies, so a value edited by hand or written
     # by an older panel never reaches a consumer out of range
     out = _validate(out)
-    # an absent clamp key reads the file's word here: whole-file saves write what load returns
+    # an absent or non-finite clamp key reads the file's word here: whole-file saves write what load returns
     numbers = C.resolution_word_numbers(out["RENDER_RESOLUTION"]) or (1.0, 1.0)
     for key, number in zip(C.CLAMP_KEYS, numbers):
-        if key not in raw:
+        if key not in raw or not math.isfinite(out[key]):
             out[key] = number
     return out
 

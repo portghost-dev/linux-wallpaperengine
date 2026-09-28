@@ -158,6 +158,11 @@ def _fmt_dial(value: float) -> str:
     return text or "0"
 
 
+def _fmt_clamp(value: float) -> str:
+    """Shortest text that reads back as the same number, without a trailing ".0" (4e-07, 1.5, 4)."""
+    return repr(float(value)).removesuffix(".0")
+
+
 #: The env keys this generator OWNS. Every one but LWE_DEADMAN is resolved from settings on each
 #: run, so a hand-edit of one of these is transient by design - the settings store is its source.
 #: Anything NOT in this set is a foreign line and is preserved verbatim (see _foreign_lines).
@@ -325,7 +330,7 @@ def build_env_content(outputs: list[str] | None = None, existing: str | None = N
             continue
         value = max(0.0, min(4.0, value))
         if value != 1.0:
-            lines.append(f"{env_name}={_fmt_dial(value)}")
+            lines.append(f"{env_name}={_fmt_clamp(value)}")
 
     for skey, env_name in C.AUDIO_DIAL_ENV.items():
         try:
@@ -542,21 +547,36 @@ def _read_env_file() -> dict[str, str] | None:
     return parse_env(text.splitlines())
 
 
-_LEADING_NUMBER_RE = re.compile(r"\s*[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+_LEADING_NUMBER_RE = re.compile(
+    r"[ \t\n\v\f\r]*([+-]?)(?:(inf(?:inity)?)|(nan(?:\([0-9a-z_]*\))?)"
+    r"|0x((?:[0-9a-f]+\.?[0-9a-f]*|\.[0-9a-f]+)(?:p[+-]?[0-9]+)?)"
+    r"|((?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:e[+-]?[0-9]+)?))", re.ASCII | re.IGNORECASE)
 
 
 def _engine_factor(text: str | None) -> float:
-    """A clamp factor line as the engine reads it: absent or empty 1.0, atof's number, NaN 1.0, 0 to 4."""
+    """A clamp factor line as the engine reads it: absent or empty 1.0, else C atof, NaN 1.0, 0 to 4, float32."""
     if not text:
         return 1.0
-    try:
-        value = float(text)
-    except ValueError:
-        match = _LEADING_NUMBER_RE.match(text)
-        value = float(match.group(0)) if match else 0.0
+    match = _LEADING_NUMBER_RE.match(text)
+    value = 0.0
+    if match is not None:
+        sign, infinite, nan, hexa, decimal = match.groups()
+        if infinite:
+            value = math.inf
+        elif nan:
+            value = math.nan
+        elif hexa is not None:
+            try:
+                value = float.fromhex("0x" + hexa)
+            except OverflowError:
+                value = math.inf
+        else:
+            value = float(decimal)
+        if sign == "-":
+            value = -value
     if math.isnan(value):
         return 1.0
-    return 4.0 if value > 4.0 else 0.0 if value <= 0.0 else value
+    return _f32(4.0 if value > 4.0 else 0.0 if value <= 0.0 else value)
 
 
 def _engine_texcomp(text: str | None) -> bool:
@@ -585,8 +605,11 @@ _UNREAD = object()
 
 
 def _f32(value: float) -> float:
-    """`value` as the float32 the engine holds it in."""
-    return struct.unpack("f", struct.pack("f", value))[0]
+    """`value` as the float32 the engine holds it in; a finite value beyond float32's range is an infinity."""
+    try:
+        return struct.unpack("f", struct.pack("f", value))[0]
+    except OverflowError:
+        return math.copysign(math.inf, value)
 
 
 def _knob_pends(name: str, wanted: dict[str, str], config: dict) -> bool:

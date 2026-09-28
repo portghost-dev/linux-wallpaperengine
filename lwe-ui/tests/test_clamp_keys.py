@@ -142,6 +142,31 @@ class ClampKeysTest(unittest.TestCase):
                 self.assertEqual({k: args[k] for k in ("ssfactor", "clampcomposites") if k in args}, want)
                 self.assertNotIn("res", args)
 
+    def test_a_tiny_or_a_long_number_keeps_its_own_digits_in_the_env_and_the_show(self) -> None:
+        for body, line in (("SSFACTOR=0.0000004\n", "LWE_SSFACTOR=4e-07\n"),
+                           ("SSFACTOR=1.0000004\n", "LWE_SSFACTOR=1.0000004\n")):
+            with self.subTest(body=body):
+                self._settings(body)
+                self.assertIn(line, daemon_unit.build_env_content(outputs=["DP-1"]))
+        paths.wp_file("321").write_text("BG=321\nSSFACTOR=0.0000004\n", encoding="utf-8")
+        _engine_wid, args = resolve.resolve_show_args("321")
+        self.assertEqual(args["ssfactor"], 4e-07)
+
+    def test_a_number_that_is_not_finite_reads_as_absent_everywhere(self) -> None:
+        for value in ("inf", "-inf", "nan"):
+            for word, number, source in (("", 1.0, "inherit"),
+                                         ("RENDER_RESOLUTION=wallpaper\n", 0.0, "RENDER_RESOLUTION")):
+                with self.subTest(value=value, word=word):
+                    self._settings(f"{word}SSFACTOR={value}\n")
+                    self.assertEqual(self._clamps()[0], number)
+                    env = daemon_unit.build_env_content(outputs=["DP-1"])
+                    self.assertEqual("LWE_SSFACTOR=" in env, number != 1.0)
+                    paths.wp_file("331").write_text(f"BG=331\n{word}SSFACTOR={value}\n", encoding="utf-8")
+                    own = wp.clamp_values(None, "331")["SSFACTOR"]
+                    self.assertEqual(own, (None, source) if source == "inherit" else (number, source))
+                    _engine_wid, args = resolve.resolve_show_args("331")
+                    self.assertEqual(args.get("ssfactor"), None if source == "inherit" else number)
+
     def test_clamp_text_that_is_not_a_number_reads_as_the_inherit_marker(self) -> None:
         for wid, body, want in (("311", "SSFACTOR=abc\n", {}),
                                 ("312", "RENDER_RESOLUTION=sharpfx\nSSFACTOR=abc\n", {"clampcomposites": 0.0})):

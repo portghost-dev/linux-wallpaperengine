@@ -256,6 +256,60 @@ class BridgeSyncTest(unittest.TestCase):
         self.assertEqual(failures, [(["ENGINE_VOLUME"], "The engine did not answer.")])
         self.assertEqual(settings.load()["ENGINE_VOLUME"], 44, "the value stays saved")
 
+    def test_a_reset_the_engine_refused_is_a_failure_and_an_away_one_succeeds(self) -> None:
+        page = settings_bridge.SettingsBridge(self.backend)
+        failures: list = []
+        page.commitFailed.connect(lambda keys, reason: failures.append((list(keys), reason)))
+        with self.engine(status()) as rec:
+            rec.answer("set_particles", {"id": 1, "ok": False, "error": "rebuild failed: out of memory"})
+            self.assertFalse(page.resetConfig())
+        self.assertIn("set_particles", rec.verbs())
+        self.assertEqual(failures, [(["Configuration"], "The engine did not answer.")])
+        with self.engine(None, "away"):
+            self.assertTrue(page.resetConfig())
+        self.assertEqual(len(failures), 1)
+
+    def test_an_import_the_engine_refused_is_a_failure_and_its_restore_stays_written(self) -> None:
+        page = settings_bridge.SettingsBridge(self.backend)
+        failures: list = []
+        page.commitFailed.connect(lambda keys, reason: failures.append((list(keys), reason)))
+        order: list = []
+        page.receiptChanged.connect(lambda: order.append("receipt"))
+        page.commitFailed.connect(lambda keys, reason: order.append("failed"))
+        settings.update({"ENGINE_FPS": 90})
+        archive = self.home / "fps-90.lwebackup"
+        self.assertEqual(backup.export_to(archive)["errors"], [])
+        settings.update({"ENGINE_FPS": 30})
+        with self.engine(status()) as rec:
+            rec.answer("set_particles", REFUSED)
+            self.assertFalse(page.importBackup(str(archive)))
+        self.assertEqual(failures, [(["Configuration"], "The engine did not answer.")])
+        self.assertEqual(order, ["receipt", "failed"], "the failure comes after the receipt")
+        self.assertEqual(settings.load()["ENGINE_FPS"], 90, "the restore stays written")
+        self.assertFalse((paths.state_dir() / "backups" / "recovery.json").exists(),
+                         "settle had the stores' verdict, not the sync's")
+        with self.engine(None, "away"):
+            self.assertTrue(page.importBackup(str(archive)))
+        self.assertEqual(len(failures), 1)
+
+    def test_an_exceptions_edit_the_engine_refused_is_a_failure_and_an_away_one_succeeds(self) -> None:
+        page = settings_bridge.SettingsBridge(self.backend)
+        with self.engine(status()) as rec:
+            rec.answer("set_fullscreen_ignore", REFUSED)
+            self.assertFalse(page.addException("mpv"))
+        self.assertIn("mpv", page.exceptions(), "the list stays saved")
+        with self.engine(None, "away"):
+            self.assertTrue(page.removeException("mpv"))
+
+    def test_an_app_list_edit_the_engine_refused_is_a_failure_and_an_away_one_succeeds(self) -> None:
+        page = settings_bridge.SettingsBridge(self.backend)
+        with self.engine(status()) as rec:
+            rec.answer("set_app_conditions", REFUSED)
+            self.assertFalse(page.addAppEntry("mpv"))
+        self.assertIn("mpv", page.appEntries(), "the list stays saved")
+        with self.engine(None, "away"):
+            self.assertTrue(page.removeAppEntry("mpv"))
+
     def test_an_engine_file_that_could_not_be_written_says_so(self) -> None:
         page = settings_bridge.SettingsBridge(self.backend)
         failures: list = []

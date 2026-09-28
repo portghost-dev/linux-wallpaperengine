@@ -46,9 +46,8 @@ def restart_line() -> str | None:
     except OSError:
         existing = None
     _, pending = daemon_unit.restart_state(env_text=daemon_unit.build_env_content([], existing))
-    keys = {"RENDER_RESOLUTION": ("SSFACTOR", "CLAMPCOMPOSITES")}
     names = [row.name for key, waits in pending.items() if waits for row in settings_table.ROWS
-             if row.form == settings_table.GLOBAL and row.key in keys.get(key, (key,))]
+             if row.form == settings_table.GLOBAL and row.key == key]
     return f"{', '.join(names)}: waiting for lwe service restart." if names else None
 
 

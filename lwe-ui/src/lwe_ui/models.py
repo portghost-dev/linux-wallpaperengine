@@ -1342,9 +1342,10 @@ class Backend(QObject):
     _RESET_PRESERVED = ("ENGINE_BIN", "ASSETS_DIR",
                         "WALLPAPERS_DIR", "WORKSHOP_DIR", "STEAM_DIR")
 
-    @Slot(result=bool)
-    def resetConfig(self) -> bool:
-        """Reset settings.conf to defaults (playlists/tags/wp confs are left alone).
+    @Slot(result="QVariant")
+    def resetConfig(self) -> Any:
+        """Reset settings.conf to defaults (playlists/tags/wp confs are left alone); the run's Outcome,
+        or None when nothing was saved.
 
         Load current -> build defaults -> carry the preserved set forward -> save.
         """
@@ -1361,12 +1362,13 @@ class Backend(QObject):
             except Exception as exc:
                 logging.getLogger(__name__).warning("engine env file not rebuilt after the reset: %s", exc)
         try:
-            self._note(push.run_change(("settings", "env"), write, [("reload", None)],
-                                       defer_current=self.delivery_due()), schedule=True)
+            outcome = push.run_change(("settings", "env"), write, [("reload", None)],
+                                      defer_current=self.delivery_due())
+            self._note(outcome, schedule=True)
         except Exception:
-            return False
+            return None
         self.settingsChanged.emit()
-        return True
+        return outcome
 
     def _autostart_file(self) -> str:
         base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")

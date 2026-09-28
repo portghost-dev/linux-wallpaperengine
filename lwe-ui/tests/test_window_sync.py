@@ -1039,7 +1039,7 @@ class WindowSyncTest(unittest.TestCase):
     def test_a_settings_reset_sends_the_bundle_with_one_reshow_and_rewrites_engine_env(self) -> None:
         wp.write_keys("111", {"BG": "111", "SKIP": "7"})
         with self.engine(status(speed=0.0)) as rec:
-            self.assertTrue(self.backend.resetConfig())
+            self.assertEqual(self.backend.resetConfig().kind, "applied")
         verbs = rec.verbs()
         self.assertEqual(verbs.count("show"), 1)
         self.assertEqual(verbs[verbs.index("show"):], ["show", "set_tuning", "set_skip", "set_speed"])

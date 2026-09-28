@@ -112,7 +112,7 @@ def _test_reset_preserves_the_path_keys(b) -> None:
                 "ENGINE_VOLUME": 77})
     settings.save(cur)
 
-    assert b.resetConfig() is True
+    assert b.resetConfig().kind == "pending"
     after = settings.load()
     for key, want in (("WALLPAPERS_DIR", "/data/walls"), ("WORKSHOP_DIR", "/data/ws"),
                       ("ASSETS_DIR", "/data/assets"), ("STEAM_DIR", "/data/steam"),
@@ -283,6 +283,39 @@ def _test_a_clamp_number_saves_through_write_env_or_is_refused(sb) -> None:
         daemon_unit.write_env, daemon_unit.write_files = real_env, real_files
     assert "write_env" in calls and "write_files" not in calls, calls
     print("OK a clamp number saves through write_env alone; 0 or below saves 0; 5, nan and inf are refused")
+
+
+def _test_every_float_door_refuses_a_number_that_is_not_finite(sb) -> None:
+    """Every float key refuses nan and inf; saving 0 or below as 0 is the two clamp keys' rule alone."""
+    speed = settings.load()["ENGINE_TIMESCALE"]
+    assert sb.commit("ENGINE_TIMESCALE", -1) is False
+    assert settings.load()["ENGINE_TIMESCALE"] == speed, "refused by its own bound, not saved as 0"
+    gain = settings.load()["ENGINE_AUDIO_GAIN"]
+    assert sb.commit("ENGINE_AUDIO_GAIN", -1) is True
+    assert settings.load()["ENGINE_AUDIO_GAIN"] == -1.0, "a float key without the clamp rule keeps -1, not 0"
+    for key in ("ENGINE_AUDIO_GAIN", "ENGINE_TIMESCALE"):
+        before = settings.load()[key]
+        for bad in ("nan", "inf", "-inf"):
+            assert sb.commit(key, bad) is False, (key, bad)
+        assert settings.load()[key] == before, key
+    settings.update({"ENGINE_AUDIO_GAIN": gain})
+    assert sb.commit("CLAMPCOMPOSITES", -1) is True
+    assert settings.load()["CLAMPCOMPOSITES"] == 0.0
+    assert sb.commit("CLAMPCOMPOSITES", "nan") is False
+    assert settings.load()["CLAMPCOMPOSITES"] == 0.0
+    print("OK every float key refuses nan and inf; 0 or below saves 0 on the clamp keys alone")
+
+
+def _test_an_int_door_refuses_a_number_that_is_not_finite(sb) -> None:
+    """An int key given inf, -inf or nan is refused with the not-a-number text and nothing written."""
+    fails = []
+    sb.commitFailed.connect(lambda keys, reason: fails.append((list(keys), reason)))
+    before = paths.settings_file().read_bytes()
+    for bad in ("inf", "-inf", "nan"):
+        assert sb.commit("ENGINE_FPS", bad) is False, bad
+        assert fails[-1] == (["ENGINE_FPS"], "That is not a number."), fails[-1]
+    assert paths.settings_file().read_bytes() == before, "a refused value writes nothing"
+    print("OK an int key refuses inf, -inf and nan with the not-a-number text")
 
 
 def _engine_status(hwdec: str) -> dict:
@@ -518,6 +551,8 @@ def main() -> None:
     _test_save_first_and_a_refused_verb_says_so(sb)
     _test_service_restart_keys_regenerate_the_env_file(sb)
     _test_a_clamp_number_saves_through_write_env_or_is_refused(sb)
+    _test_every_float_door_refuses_a_number_that_is_not_finite(sb)
+    _test_an_int_door_refuses_a_number_that_is_not_finite(sb)
     _test_restart_pending_and_restart_read_the_machine_never_the_sandbox(sb, b)
     _test_dial_seeding_ladder(sb)
     _test_exceptions_editor_uses_the_existing_blacklist(sb)

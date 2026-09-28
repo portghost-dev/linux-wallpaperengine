@@ -154,6 +154,16 @@ class GetConfigTest(unittest.TestCase):
         self.assertEqual(self.lwe("get", "effectclamp", "resclamp"), (0, "0\n1\n", ""))
         self.assertEqual(self.lwe("config", "effectclamp"), (0, "effectclamp  0  RENDER_RESOLUTION\n", ""))
 
+    def test_a_clamp_number_that_is_not_finite_reads_as_absent(self) -> None:
+        for body, number, source in (("SSFACTOR=inf\n", "1", "default"),
+                                     ("RENDER_RESOLUTION=wallpaper\nSSFACTOR=inf\n", "0", "RENDER_RESOLUTION")):
+            with self.subTest(body=body):
+                self.store("settings.conf", body)
+                problem = f"settings.conf line {body.count(chr(10))} SSFACTOR=inf (not a number from 0 to 4)"
+                self.assertEqual(self.lwe("get", "resclamp"), (0, f"{number}\n", f"invalid: {problem}\n"))
+                self.assertEqual(self.lwe("config", "resclamp"),
+                                 (0, f"resclamp  {number}  {source}  invalid: {problem}\n", ""))
+
     def test_an_engine_from_another_build_is_named_and_the_read_goes_on(self) -> None:
         self.playlists()
         self.store("settings.conf", "ACTIVE_PLAYLIST=main\nENGINE_VOLUME=40\n")

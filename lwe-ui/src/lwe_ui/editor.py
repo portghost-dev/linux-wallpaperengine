@@ -75,7 +75,7 @@ from .discovery import objects as objects_disc
 from .discovery import project as project_disc
 from .discovery import properties as properties_disc
 from .engine import push
-from .engine.daemon_unit import _fmt_dial
+from .engine.daemon_unit import _fmt_clamp
 from .models import resolve_fit
 from .storage import atomic, lock, meta, paths, settings, tier_a, wp
 from .wp_session import SESSION
@@ -990,7 +990,7 @@ class EditorBridge(QObject):
     def clampValue(self, key: str) -> str:
         """The clamp number this wallpaper's file gives `key`, its own or its word's; "" when it inherits."""
         value = wp.clamp_values(self._present, self._wid).get(str(key), (None, ""))[0]
-        return "" if value is None else _fmt_dial(value)
+        return "" if value is None else _fmt_clamp(value)
 
     @Slot(str, str, result=bool)
     def setClampValue(self, key: str, text: str) -> bool:
@@ -1211,7 +1211,7 @@ class EditorBridge(QObject):
         if key == "AUTOMUTE":
             return "on" if self._setting("AUTOMUTE_DEFAULT", True) else "off"
         if key in C.CLAMP_KEYS:
-            return _fmt_dial(float(self._setting(key, 1.0)))
+            return _fmt_clamp(float(self._setting(key, 1.0)))
         if key == "TEXCOMP":
             v = self._setting("ENGINE_TEXCOMP", True)
             return "on" if str(v).strip().lower() in ("1", "true", "yes", "on") else "off"

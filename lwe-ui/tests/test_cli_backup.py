@@ -589,6 +589,19 @@ class RestartLineTest(unittest.TestCase):
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(order, ["sync_all", "write_env", "restart_state"])
 
+    def test_the_restart_line_names_exactly_the_clamps_that_wait(self) -> None:
+        for changes, names in (({"SSFACTOR": 2.0}, "resclamp"),
+                               ({"SSFACTOR": 2.0, "CLAMPCOMPOSITES": 0.0}, "resclamp, effectclamp")):
+            with self.subTest(names=names):
+                self.settings.update(changes)
+                archive = HOME / f"clamps-{len(changes)}.lwebackup"
+                self.assertEqual(self.lwe("backup", "export", str(archive))[0], 0)
+                self.settings.update({"SSFACTOR": 1.0, "CLAMPCOMPOSITES": 1.0})
+                self.du.write_env()
+                code, out, err = self.lwe("backup", "import", str(archive))
+                self.assertEqual((code, err), (0, ""))
+                self.assertIn(f"\n{names}: waiting for lwe service restart.\n", out)
+
     def test_no_restart_line_when_no_engine_process_can_be_read(self) -> None:
         self.live = None
         code, out, err = self.lwe("backup", "import", str(self.archive))
