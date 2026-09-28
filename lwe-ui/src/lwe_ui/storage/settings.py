@@ -23,7 +23,7 @@ from .store import Store
 
 
 WINDOW_OVERRIDES = ("OVERRIDE_MUTE", "OVERRIDE_AUDIO_OFF", "OVERRIDE_PARALLAX_OFF", "OVERRIDE_MOUSE_OFF")
-OWNED_KEY = "WINDOW_OWNED_OVERRIDES"
+OWNED_KEY = "WINDOW_OWNS"
 
 _TRUE = ("true", "1", "yes", "on")
 _FALSE = ("false", "0", "no", "off", "")
