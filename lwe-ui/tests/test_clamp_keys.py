@@ -142,6 +142,16 @@ class ClampKeysTest(unittest.TestCase):
                 self.assertEqual({k: args[k] for k in ("ssfactor", "clampcomposites") if k in args}, want)
                 self.assertNotIn("res", args)
 
+    def test_clamp_text_that_is_not_a_number_reads_as_the_inherit_marker(self) -> None:
+        for wid, body, want in (("311", "SSFACTOR=abc\n", {}),
+                                ("312", "RENDER_RESOLUTION=sharpfx\nSSFACTOR=abc\n", {"clampcomposites": 0.0})):
+            with self.subTest(body=body):
+                paths.wp_file(wid).write_text(f"BG={wid}\n{body}", encoding="utf-8")
+                self.assertEqual(wp.load_set(wid)["SSFACTOR"], "")
+                self.assertEqual(wp.clamp_values(None, wid)["SSFACTOR"], (None, "inherit"))
+                _engine_wid, args = resolve.resolve_show_args(wid)
+                self.assertEqual({k: args[k] for k in ("ssfactor", "clampcomposites") if k in args}, want)
+
     def test_presence_stays_raw_and_a_revert_restores_absence(self) -> None:
         from lwe_ui.wp_session import SESSION
         body = "BG=401\nRENDER_RESOLUTION=sharpfx\n"

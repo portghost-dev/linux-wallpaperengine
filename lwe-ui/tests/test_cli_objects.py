@@ -111,6 +111,10 @@ class ObjectsTest(unittest.TestCase):
         self.assertEqual(_run("objects", SCENE, "PARTICLE"), (0, by_type, ""))
         self.assertEqual(_run("objects", SCENE, "rain"), (0, _lines(TREE[0], TREE[1], TREE[2], TREE[8]), ""))
 
+    def test_a_filter_matches_the_type_exactly(self) -> None:
+        self.assertEqual(_run("objects", SCENE, "part"), (0, "", ""))
+        self.assertEqual(_run("objects", SCENE, "part", as_json=True), (0, "[]\n", ""))
+
     def test_a_preset_reads_its_base_scene_with_its_own_skip(self) -> None:
         self.assertEqual(_run("objects", PRESET), (0, _lines(
             "1  image  Harbor",

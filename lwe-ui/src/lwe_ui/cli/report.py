@@ -4,7 +4,7 @@ applies, as one line of text or, under -j, one JSON object with the keys of RECE
 A change the engine takes at once ends in one of four outcomes: applied, pending, refused or
 uncertain. A receipt that is not applied names the next chances to apply, never a promise. A change
 with no engine request (restart, panel and panel-start reach) has no outcome and says when it
-applies.
+applies; one with no engine side at all (none reach) says that nothing more is needed.
 """
 from __future__ import annotations
 
@@ -28,6 +28,7 @@ _WHEN = {
     "restart": "takes effect at the next service restart (lwe service restart applies it)",
     "panel": "the panel reads it at its next scan",
     "panel start": "a running panel picks it up when it next starts",
+    "none": "nothing more is needed",
 }
 
 _NOT_APPLIED = {

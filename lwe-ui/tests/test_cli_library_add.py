@@ -146,6 +146,7 @@ def _stores() -> None:
     _preset("1400000020", "Tango Preset", "1400000001")
     _preset("1400000021", "Uniform Preset", "1400000022")
     _scene(WORKSHOP / "1400000022", "Victor Base", 22)
+    _scene(WORKSHOP / "1400000023", "Sierra\u0007Dunes", 23)
 
 
 def setUpModule() -> None:
@@ -198,6 +199,8 @@ def _commands() -> None:
     _run("download", ["-j", "add", "1400000002"])
     _FACTS["download"] = {"tag": _tag("1400000002"), "events": _events("1400000002"),
                           "copied": (LIB / "1400000002" / "scene.pkg").is_file(), "owners": _owners()}
+    _run("clean-title", ["add", "1400000023"])
+    _FACTS["clean-title"] = {(r["state"], r["title"]) for r in tags.load() if r["id"] == "1400000023"}
     _run("waiting", ["add", "1400000003"])
     _FACTS["waiting"] = {"tag": _tag("1400000003"), "events": _events("1400000003"), "owners": _owners()}
     _run("held", ["add", "1400000004"])
@@ -296,6 +299,10 @@ class AddTest(unittest.TestCase):
         self.assertEqual(facts["events"], [("approved", "workshop", "human")])
         self.assertTrue(facts["copied"])
         self.assertIn("1400000002", facts["owners"])
+
+    def test_approve_writes_the_title_the_importer_cleaned(self) -> None:
+        self.assertEqual(_RUNS["clean-title"].returncode, 0, _RUNS["clean-title"].stderr)
+        self.assertEqual(_FACTS["clean-title"], {("good", "SierraDunes")})
 
     def test_a_waiting_item_is_approved(self) -> None:
         r = _RUNS["waiting"]

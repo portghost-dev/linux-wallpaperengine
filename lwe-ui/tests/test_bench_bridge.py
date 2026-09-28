@@ -412,7 +412,16 @@ def main() -> None:
             app.processEvents()
         print("OK T14 real FailedToStart survives (no segfault) + resumes once")
 
-        print("\nALL test_bench_bridge state-machine checks passed (15/15)")
+        bv = make_bridge()
+        bv.open(pend_wid, "pending")
+        for typed, kept in ((200, 128), (-5, 0), (64, 64)):
+            bv.setVolume(typed)
+            saved = wp.load_set(pend_wid).get("VOLUME")
+            if saved != kept:
+                _fail(f"setVolume({typed}) must save VOLUME={kept} like the other volume doors, got {saved}")
+        print("OK setVolume keeps VOLUME within 0..128")
+
+        print("\nALL test_bench_bridge state-machine checks passed (16/16)")
     finally:
         for k, v in orig.items():
             if v is None:

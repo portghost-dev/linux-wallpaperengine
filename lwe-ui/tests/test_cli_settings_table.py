@@ -200,6 +200,16 @@ class SettingsTableTest(unittest.TestCase):
         r.emit(SimpleNamespace(json=False, out=out), r.receipt("volume", "40", True, "now", r.APPLIED))
         self.assertEqual(out.getvalue(), "volume 40: saved; applies now.\n")
 
+    def test_every_reach_has_a_line_and_a_change_with_no_engine_side_claims_nothing_about_the_engine(self) -> None:
+        r = self.report
+        for row in self.table.ROWS:
+            with self.subTest(name=row.name, form=row.form):
+                self.assertTrue(r.text(r.receipt(row.name, "x", True, row.reach)))
+        line = r.text(r.receipt("alias", "field", True, self.table.NO_ENGINE))
+        self.assertEqual(line, "alias field: saved; nothing more is needed.")
+        self.assertNotIn("engine", line)
+        self.assertNotIn("appl", line)
+
     def test_derived_active_playlist_follows_the_engine_only_while_its_schedule_binds_an_existing_file(self) -> None:
         config = HOME / ".config" / "lwe"
         (config / "playlists").mkdir(parents=True)

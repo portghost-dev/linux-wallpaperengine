@@ -553,7 +553,7 @@ class BenchBridge(QObject):
     @Slot(int)
     def setVolume(self, value: int) -> None:
         try:
-            self._draft["VOLUME"] = int(value)
+            self._draft["VOLUME"] = max(0, min(128, int(value)))
         except (TypeError, ValueError):
             self._draft["VOLUME"] = 0
         self._persist_draft({"VOLUME": self._draft["VOLUME"]})
