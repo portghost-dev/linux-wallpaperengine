@@ -92,6 +92,14 @@ def tree(render_dir: str, skip: Iterable[int], word: str | None = None) -> list[
     return rows
 
 
+def part(render_dir: str, objid: int) -> dict | None:
+    """The first part of the render folder's scene whose id is objid, as discovery.objects.extract
+    records it, or None."""
+    if not render_dir:
+        return None
+    return next((p for p in objects.extract(render_dir) if p["objid"] == str(objid)), None)
+
+
 def knobs(wid: str) -> list[dict]:
     """The properties of the wallpaper's render folder's project.json, each as {name, label, kind,
     value, yours, options, min, max, step}: value is the wallpaper's own PROP_<name> when its conf
