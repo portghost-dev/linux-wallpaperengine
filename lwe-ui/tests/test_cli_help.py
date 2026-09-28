@@ -1,6 +1,6 @@
 """lwe help: each screen through cli.main in this process, byte for byte against the fixture screens
 in tests/fixtures/help (help resclamp still prints its fixed page), a page made from every command, setting
-and per-wallpaper row, three of them pinned in tests/fixtures/help/pages, and help --debug through a
+and per-wallpaper row, five of them pinned in tests/fixtures/help/pages, and help --debug through a
 fake engine named by ENGINE_BIN.
 
 The environment is rebuilt from nothing before any lwe_ui import: HOME, the XDG folders, the engine
@@ -150,10 +150,12 @@ class CliHelpTest(unittest.TestCase):
         self.assertEqual(self._help("playlist")[1], help_pages.command_page(playlist))
         self.assertEqual(self._help("fullscreen")[1], help_pages.setting_page(fullscreen))
 
-    def test_three_generated_pages_are_pinned(self) -> None:
-        for topic in ("pause", "volume", "hide"):
+    def test_five_generated_pages_are_pinned(self) -> None:
+        for topic, words in (("pause", ["pause"]), ("volume", ["volume"]), ("hide", ["hide"]),
+                             ("properties", ["wallpaper", "...", "properties"]),
+                             ("objects", ["wallpaper", "...", "objects"])):
             with self.subTest(topic=topic):
-                code, out, err = self._help(topic)
+                code, out, err = self._help(*words)
                 self.assertEqual((code, err), (0, ""))
                 self.assertEqual(out.encode("utf-8"), (FIXTURES / "pages" / f"{topic}.txt").read_bytes())
 

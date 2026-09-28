@@ -141,6 +141,7 @@ def setUpModule() -> None:
     _RUNS["again"] = _child(["compress", "1100000001"], stub)
     _RUNS["all"] = _child(["compress", "--all"], stub)
     _CACHES["all"] = _cache()
+    _RUNS["all-json"] = _child(["-j", "compress", "--all"], stub)
     _RUNS["trashed"] = _child(["compress", "1100000009"], stub)
     for name, words in (("bare", ["compress"]), ("both", ["compress", "--all", "1"]),
                         ("option", ["compress", "--fast", "1"])):
@@ -308,6 +309,15 @@ class CompressTest(unittest.TestCase):
             "Juliet (1100000011)          files missing, nothing to compress",
             "Compressed 1 of 8 wallpapers. Textures 0 MB before, 0 MB after. The cache adds 0 MB on disk."])
         self.assertNotIn("1100000008", {owner for _size, owner in _CACHES["all"].values()})
+
+    def test_a_run_that_wrote_nothing_while_a_texture_failed_is_failed(self) -> None:
+        text, as_json = _RUNS["all"], _RUNS["all-json"]
+        self.assertEqual((text.returncode, as_json.returncode), (0, 0), "texture failures keep exit 0")
+        self.assertIn("Bravo (1100000002)           textures 0 MB before, 0 MB after; 1 texture failed",
+                      text.stdout.splitlines())
+        bravo = next(w for w in json.loads(as_json.stdout)["wallpapers"] if w["id"] == "1100000002")
+        self.assertEqual(bravo, {"id": "1100000002", "title": "Bravo", "result": "failed", "bytes_before": 0,
+                                 "bytes_after": 0, "failed": 1, "disk_bytes": 0})
 
     def test_an_unreadable_package_is_named_and_skipped_and_the_rest_go_on(self) -> None:
         r = _RUNS["unreadable"]

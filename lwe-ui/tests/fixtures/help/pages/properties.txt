@@ -1,0 +1,6 @@
+wallpaper <wallpaper> properties
+
+Lists the knobs the wallpaper's author added, with their values and
+choices. A value marked (yours) is set in the wallpaper's own file,
+which includes the values an import copied from a preset. Replaces the
+name props.

@@ -255,14 +255,18 @@ COMMANDS: tuple[dict[str, str], ...] = (
         "grp": "One wallpaper",
         "name": "wallpaper ... properties",
         "form": "wallpaper <wallpaper> properties",
-        "what": "Lists the knobs the wallpaper's author added, with their values and choices. Replaces the name props.",
+        "what": "Lists the knobs the wallpaper's author added, with their values and choices. A value marked "
+                "(yours) is set in the wallpaper's own file, which includes the values an import copied from a "
+                "preset. Replaces the name props.",
         "note": "",
     },
     {
         "grp": "One wallpaper",
         "name": "wallpaper ... objects",
         "form": "wallpaper <wallpaper> objects [<filter>]",
-        "what": "Lists the wallpaper's parts as a tree: each part's id, type and name, and whether its author or you hid it. It reads the wallpaper's files, so it works for any wallpaper. A filter word narrows it: a type such as particle, or part of a name such as rain.",
+        "what": "Lists the wallpaper's parts as a tree: each part's id, type and name, and whether its author or you hid it. It reads the wallpaper's files, so it works for any wallpaper. A filter word narrows it: a type such as particle, or part of a name such as rain. "
+                "The depth comes from a walk that shows a part whose parent is missing, or that repeats in a "
+                "parent cycle, as a root, while -j's parent still names the parent the scene gives.",
         "note": "",
     },
     {

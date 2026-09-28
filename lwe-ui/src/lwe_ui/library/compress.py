@@ -22,8 +22,9 @@ class Result(NamedTuple):
 
 def compress_one(row: catalog.Row, *, folder: str | None = None) -> Result:
     """Encode the uncached textures in folder, by default the one the row renders from (a preset's
-    base), owned by that folder. kind is "compressed", "already", "nothing", "missing" or
-    "unreadable" (the package could not be read, so nothing was written)."""
+    base), owned by that folder. kind is "compressed", "already", "nothing", "missing",
+    "unreadable" (the package could not be read, so nothing was written) or "failed" (no texture
+    was written while at least one failed)."""
     d = catalog.render_dir(row.id) if folder is None else folder
     if not d:
         return Result("missing", 0, 0, 0, 0)
@@ -38,8 +39,8 @@ def compress_one(row: catalog.Row, *, folder: str | None = None) -> Result:
         return Result("nothing", 0, 0, 0, 0)
     if done["total"] == 0:
         return Result("already", 0, 0, 0, 0)
-    return Result("compressed", measure["bytes_before"], measure["bytes_after"], done["failed"],
-                  measure["disk_bytes"])
+    kind = "failed" if done["encoded"] == 0 and done["failed"] > 0 else "compressed"
+    return Result(kind, measure["bytes_before"], measure["bytes_after"], done["failed"], measure["disk_bytes"])
 
 
 def size(b: int) -> str:
@@ -54,7 +55,7 @@ def row_line(row: catalog.Row, text: str) -> str:
 
 
 def result_text(row: catalog.Row, result: Result) -> str:
-    if result.kind == "compressed":
+    if result.kind in ("compressed", "failed"):
         text = f"textures {size(result.before)} before, {size(result.after)} after"
         if result.failed == 1:
             text += "; 1 texture failed"

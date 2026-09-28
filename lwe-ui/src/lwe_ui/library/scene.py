@@ -7,6 +7,8 @@ the editor's object and property caches stay as they are.
 """
 from __future__ import annotations
 
+import json
+import math
 import re
 from collections.abc import Iterable
 
@@ -15,11 +17,14 @@ from ..storage import wp
 from . import catalog
 
 _DIGITS = re.compile(r"[0-9]+")
+_INTEGER = re.compile(r"[+-]?[0-9]{1,18}")
+_NUMBER = re.compile(r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 
 
 def skip_ids(text: str) -> list[int]:
-    """The ASCII-digit tokens of a SKIP value as ints; every other token is dropped."""
-    return [int(tok) for tok in str(text).split() if _DIGITS.fullmatch(tok)]
+    """The part ids of a SKIP value that the engine takes (storage/wp.py::skip_ids); every other token
+    is dropped."""
+    return wp.skip_ids(text)
 
 
 def _parents(parts: list[dict]) -> list[int | None]:
@@ -100,10 +105,31 @@ def part(render_dir: str, objid: int) -> dict | None:
     return next((p for p in objects.extract(render_dir) if p["objid"] == str(objid)), None)
 
 
+def _typed(kind: str, value: object, authored: object) -> object:
+    """A knob's value with one type per kind: a slider a number (an int when the author's value is an int
+    and the text a whole number, else a float), a bool true or false, anything else a string; a text that
+    does not read as its kind stays a string."""
+    if value is None or kind not in ("slider", "bool"):
+        return value if value is None or isinstance(value, str) else json.dumps(value)
+    if kind == "bool":
+        if isinstance(value, bool):
+            return value
+        word = str(value).strip().lower()
+        return True if word in ("true", "1") else False if word in ("false", "0") else str(value)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    text = str(value).strip()
+    if isinstance(authored, int) and not isinstance(authored, bool) and _INTEGER.fullmatch(text):
+        return int(text)
+    if _NUMBER.fullmatch(text) and len(text) <= 64 and math.isfinite(float(text)):
+        return float(text)
+    return str(value)
+
+
 def knobs(wid: str) -> list[dict]:
     """The properties of the wallpaper's render folder's project.json, each as {name, label, kind,
     value, yours, options, min, max, step}: value is the wallpaper's own PROP_<name> when its conf
-    carries one (yours true), else the author's value. Conditions are not evaluated."""
+    carries one (yours true), else the author's value, typed by _typed. Conditions are not evaluated."""
     folder = catalog.render_dir(wid)
     if not folder:
         return []
@@ -116,7 +142,7 @@ def knobs(wid: str) -> list[dict]:
             "name": name,
             "label": entry["label"],
             "kind": entry["kind"],
-            "value": own[name] if yours else entry["value"],
+            "value": _typed(entry["kind"], own[name] if yours else entry["value"], entry["value"]),
             "yours": yours,
             "options": entry.get("options"),
             "min": entry.get("min"),

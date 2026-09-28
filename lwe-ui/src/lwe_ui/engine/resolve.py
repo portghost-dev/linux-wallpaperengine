@@ -268,12 +268,7 @@ def resolve_show_args(wid: str) -> tuple[str, dict[str, Any]]:
     # alias kept so an older engine still reads a truthful boolean off the show
     args["fullscreen_pause"] = args["fullscreen_behavior"] != "off"
 
-    skips = []
-    for tok in str(conf.get("SKIP") or "").split():
-        try:
-            skips.append(int(tok))
-        except ValueError:
-            continue
+    skips = wp.skip_ids(conf.get("SKIP") or "")
     if skips:
         args["skip_objects"] = skips
 

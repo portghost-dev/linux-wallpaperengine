@@ -38,6 +38,7 @@ from lwe_ui.storage import paths, settings, tags  # noqa: E402
 FIXTURE = TESTS / "fixtures" / "cli" / "scene-objects"
 LIB = _ROOT / "lib"
 SCENE, PRESET, VIDEO, MISSING, LOOP = "1100000001", "1100000002", "1100000003", "1100000004", "1100000005"
+KNOBS, KNOBS_PRESET, KNOBS_ODD, SKIPS = "1100000006", "1100000007", "1100000008", "1100000009"
 
 TREE = [
     "1  image  Harbor",
@@ -78,6 +79,18 @@ def setUpModule() -> None:
         {"id": 24, "name": "Hanger", "image": "d.json", "parent": 22},
     ]})
     tags.set_state(LOOP, "Loops", "good")
+    _json_file(LIB / KNOBS / "project.json", {"title": "Knobs", "type": "scene", "file": "scene.json", "general": {
+        "properties": {"speedx": {"type": "slider", "text": "Speed", "value": 1, "min": 0, "max": 10, "step": 1},
+                       "flag": {"type": "bool", "text": "Flag", "value": False},
+                       "tint": {"type": "combo", "text": "Tint", "value": 2,
+                                "options": [{"label": "One", "value": 1}, {"label": "Two", "value": 2}]}}}})
+    _json_file(LIB / KNOBS / "scene.json", {"objects": []})
+    tags.set_state(KNOBS, "Knobs", "good")
+    paths.wp_file(KNOBS_PRESET).write_text(f"BG={KNOBS}\nPROP_speedx=5\nPROP_flag=true\nPROP_tint=1\n",
+                                           encoding="utf-8")
+    tags.set_state(KNOBS_PRESET, "Knobs Preset", "good")
+    paths.wp_file(KNOBS_ODD).write_text(f"BG={KNOBS}\nPROP_speedx=fast\nPROP_flag=maybe\n", encoding="utf-8")
+    tags.set_state(KNOBS_ODD, "Knobs Odd", "good")
 
 
 def _run(word: str, wid: str, *args: str, as_json: bool = False) -> tuple[int, str, str]:
@@ -177,10 +190,23 @@ class PropertiesTest(unittest.TestCase):
         self.assertEqual((code, err), (0, ""))
         knobs = json.loads(out)
         self.assertEqual([k["name"] for k in knobs], ["schemecolor", "rainamount", "showclock", "mood", "caption"])
-        self.assertEqual(knobs[1], {"name": "rainamount", "label": "Rain amount", "kind": "slider", "value": "0.8",
+        self.assertEqual(knobs[1], {"name": "rainamount", "label": "Rain amount", "kind": "slider", "value": 0.8,
                                     "yours": True, "options": None, "min": 0, "max": 1, "step": 0.1})
         self.assertEqual(knobs[3]["options"], [{"label": "Calm", "value": "calm"}, {"label": "Storm", "value": "storm"}])
         self.assertEqual((knobs[2]["value"], knobs[2]["yours"]), (True, False))
+
+    def test_json_gives_each_kind_one_type_whether_or_not_it_is_yours(self) -> None:
+        def values(wid: str) -> list:
+            code, out, err = _run("properties", wid, as_json=True)
+            self.assertEqual((code, err), (0, ""))
+            return [(k["name"], k["value"], k["yours"]) for k in json.loads(out)]
+
+        self.assertEqual(values(KNOBS), [("speedx", 1, False), ("flag", False, False), ("tint", "2", False)])
+        self.assertEqual(values(KNOBS_PRESET), [("speedx", 5, True), ("flag", True, True), ("tint", "1", True)])
+        self.assertEqual(values(KNOBS_ODD),
+                         [("speedx", "fast", True), ("flag", "maybe", True), ("tint", "2", False)])
+        self.assertEqual(_run("properties", KNOBS_PRESET)[1].splitlines()[0],
+                         "speedx  Speed: 5 (yours)  range 0 to 10, step 1")
 
     def test_no_properties_and_refusals(self) -> None:
         self.assertEqual(_run("properties", VIDEO), (0, "no properties\n", ""))
@@ -191,6 +217,16 @@ class PropertiesTest(unittest.TestCase):
 
 
 class ReadsOnlyTest(unittest.TestCase):
+    def test_one_token_rule_keeps_only_the_ids_the_engine_takes(self) -> None:
+        from lwe_ui.engine import resolve
+        from lwe_ui.storage import wp
+        huge = "1" + "0" * 4999
+        for text, ids in (("+5 \u0663 1_0 05 7", [5, 7]), ("-3", []), (huge, []), ("1000000 1000001", [1000000])):
+            with self.subTest(text=text[:24]):
+                self.assertEqual(scene.skip_ids(text), ids)
+                wp.update_set(SKIPS, {"SKIP": text})
+                self.assertEqual(resolve.resolve_show_args(SKIPS)[1].get("skip_objects", []), ids)
+
     def test_skip_ids_keeps_ascii_digit_tokens(self) -> None:
         self.assertEqual(scene.skip_ids("4 x 999 -1 +2 \u0663 0012\t7"), [4, 999, 12, 7])
 

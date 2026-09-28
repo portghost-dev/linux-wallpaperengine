@@ -1,0 +1,9 @@
+wallpaper <wallpaper> objects [<filter>]
+
+Lists the wallpaper's parts as a tree: each part's id, type and name,
+and whether its author or you hid it. It reads the wallpaper's files, so
+it works for any wallpaper. A filter word narrows it: a type such as
+particle, or part of a name such as rain. The depth comes from a walk
+that shows a part whose parent is missing, or that repeats in a parent
+cycle, as a root, while -j's parent still names the parent the scene
+gives.

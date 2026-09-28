@@ -147,6 +147,27 @@ def load_set(wid: str) -> dict[str, Any]:
     return load_set_path(paths.wp_file(wid))
 
 
+SKIP_ID_MAX = 1000000
+
+
+def skip_id(token: str) -> int | None:
+    """One SKIP token as the part id the engine's set-skip and show take, ASCII digits from 0 to
+    SKIP_ID_MAX, else None. The length is checked before int(), so no token can raise."""
+    text = str(token)
+    if not (text.isascii() and text.isdigit()):
+        return None
+    digits = text.lstrip("0") or "0"
+    if len(digits) > len(str(SKIP_ID_MAX)):
+        return None
+    value = int(digits)
+    return value if value <= SKIP_ID_MAX else None
+
+
+def skip_ids(text: str) -> list[int]:
+    """The part ids of a SKIP value that the engine takes, in order; every other token is dropped."""
+    return [value for value in map(skip_id, str(text or "").split()) if value is not None]
+
+
 def clamp_values(present: dict[str, Any] | None, wid: str) -> dict[str, tuple[float | None, str]]:
     """{clamp key: (value, source)}: the file's own number ("own"), an empty value as ("inherit"),
     or for an absent key the number its RENDER_RESOLUTION word stands for ("RENDER_RESOLUTION").
