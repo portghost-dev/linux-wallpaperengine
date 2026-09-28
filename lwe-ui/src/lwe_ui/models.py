@@ -335,6 +335,7 @@ class Backend(QObject):
     # the engine's own countdown in milliseconds, straight from a lanes-set reply, so the deck
     # anchors its clock to the engine at a pause or resume instead of guessing until the next poll
     rotationClock = Signal(int, int)
+    _restartSynced = Signal(object)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -372,6 +373,8 @@ class Backend(QObject):
         self._ready_timer = QTimer(self)
         self._ready_timer.setInterval(250)
         self._ready_timer.timeout.connect(self._ready_tick)
+        self._restart_thread: threading.Thread | None = None
+        self._restartSynced.connect(self._restart_synced)
         self._delivery_owners: set[Any] = set()
         # (monotonic, frames, pid) baseline for the measured frame rate. The engine
         # reports a CUMULATIVE frame count, so a rate needs two samples; the pid is
@@ -788,8 +791,8 @@ class Backend(QObject):
                 return False
             was_active = self.masterState() == "active"
         args = ["enable", "--now"] if on else ["disable", "--now"]
-        if on and not was_active:
-            self._record_bundle(None)
+        if on and not was_active and not self._record_bundle():
+            return False
         try:
             proc = subprocess.run(
                 ["systemctl", "--user", *args, self._master_service()],
@@ -803,12 +806,14 @@ class Backend(QObject):
 
     @Slot(result=bool)
     def restartMaster(self) -> bool:
-        """Queue a restart of the master service in place, so a change that reaches the
-        engine only through its env file lands now. The enable state is left as it is.
+        """Restart the master service in place, so a change that reaches the engine only through
+        its env file lands now. The enable state is left as it is.
 
-        Queued, not awaited: a stop can run to the unit's stop timeout before systemd
-        kills the engine, so the call returns before the engine has stopped. True means
-        the job was accepted; whether the engine is back up is read from the service."""
+        The restart runs on a worker that holds the sync lock from the owed bundle's record through
+        the queued restart, the wait for the new engine and its sync, so no other drain runs in
+        between; this call waits only for the restart to be queued. False when the record cannot be
+        written, the sync lock is busy or systemd refuses the job, with nothing launched in the first
+        two cases."""
         if _sandboxed():
             return False
         try:
@@ -818,30 +823,66 @@ class Backend(QObject):
             return False
         cls, before = push.read_status()
         old_pid = before.get("pid") if cls == "ok" and before else None
-        self._record_bundle(old_pid)
-        try:
-            proc = subprocess.run(
-                ["systemctl", "--user", "--no-block", "restart", self._master_service()],
-                capture_output=True, text=True, timeout=10, check=False)
-            self.statusChanged.emit()
-        except (OSError, subprocess.SubprocessError):
-            return False
-        if proc.returncode == 0:
-            self._bundle_when_ready(old_pid)
-        return proc.returncode == 0
+        launched, result = threading.Event(), {}
+        self._restart_thread = threading.Thread(target=self._restart_worker, args=(old_pid, launched, result),
+                                                daemon=True)
+        self._restart_thread.start()
+        launched.wait(30)
+        self.statusChanged.emit()
+        if "notice" in result:
+            self.notice.emit(result["notice"])
+        return result.get("ok", False)
 
-    def _record_bundle(self, old_pid: Any) -> None:
-        """Before a service start or restart launches: BUNDLE in the sync marker, tied to the engine
-        a restart replaces (old_pid), so a delivery to that engine cannot clear it."""
+    def _restart_worker(self, old_pid: Any, launched: threading.Event, result: dict) -> None:
+        """restartMaster's sequence under the sync lock; sets `launched` once the restart is queued or
+        refused, and hands the sync's outcome to the window through _restartSynced."""
         try:
-            marker.ensure(("BUNDLE",), replacing=old_pid if type(old_pid) is int else None)
+            with lock.held("sync"):
+                if not self._record_bundle(result):
+                    return
+                try:
+                    proc = subprocess.run(
+                        ["systemctl", "--user", "--no-block", "restart", self._master_service()],
+                        capture_output=True, text=True, timeout=10, check=False)
+                except (OSError, subprocess.SubprocessError):
+                    return
+                result["ok"] = proc.returncode == 0
+                launched.set()
+                if not result["ok"] or push.wait_ready(old_pid=old_pid, timeout_s=20.0) is None:
+                    return
+                try:
+                    self._restartSynced.emit(push.sync_all("window", defer_current=self.delivery_due()))
+                except OSError:
+                    pass
+        except lock.StoreBusy as exc:
+            result["notice"] = str(exc)
+        finally:
+            launched.set()
+
+    def _restart_synced(self, outcome: Any) -> None:
+        self._note(outcome, schedule=True)
+
+    def _record_bundle(self, result: dict | None = None) -> bool:
+        """Before a service start or restart launches: BUNDLE in the sync marker. False when it cannot
+        be written, StoreBusy included; the notice goes to `result` from the restart worker, else out
+        at once, and nothing launches."""
+        try:
+            marker.ensure(("BUNDLE",))
+            return True
+        except lock.StoreBusy as exc:
+            text = str(exc)
         except OSError as exc:
-            logging.getLogger(__name__).warning("sync marker not set: %s", exc)
+            text = f"The sync record could not be written ({exc}), so nothing was started."
+        if result is None:
+            self.notice.emit(text)
+        else:
+            result["notice"] = text
+        return False
 
     def _bundle_when_ready(self, old_pid: Any) -> None:
-        """The bundle of a service start or restart, after _record_bundle and the launch: a status
-        read every 250 ms for up to 20 s; the first ok status whose pid differs from old_pid runs
-        the window's sync, and no answer leaves the marker to the drain."""
+        """The bundle of a service start, after _record_bundle and the launch: a status read every
+        250 ms for up to 20 s; the first ok status whose pid differs from old_pid runs the window's
+        sync, and no answer leaves the marker to the drain."""
         self._ready_old_pid = old_pid
         self._ready_deadline = monotonic() + 20.0
         self._ready_timer.start()

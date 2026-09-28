@@ -586,17 +586,16 @@ class BridgeSyncTest(unittest.TestCase):
                 self.assertEqual((before, rec.verbs().count("show")), (0, 1))
                 self.assertEqual(marker.read()["classes"], [])
 
-    def test_a_drain_to_the_engine_a_restart_replaces_keeps_the_restart_record(self) -> None:
+    def test_a_launch_holds_sync_so_a_drain_in_between_ends_busy_and_the_record_stays(self) -> None:
         from lwe_ui.cli.verbs import service
         for action, old_pid, answer in (("restart", 4242, status(pid=4242)), ("start", None, None)):
             with self.subTest(action=action):
-                held = marker.read()
-                if held["generation"] is not None:
-                    (paths.panel_state_dir() / "sync-pending").unlink()
+                (paths.panel_state_dir() / "sync-pending").unlink(missing_ok=True)
                 drained = []
 
                 def launch(args):
-                    thread = threading.Thread(target=lambda: drained.append(push.sync_all("command")))
+                    thread = threading.Thread(target=lambda: drained.append(push.sync_all("command", wait_s=0.2)),
+                                              daemon=True)
                     thread.start()
                     thread.join(5)
                     return ""
@@ -605,8 +604,52 @@ class BridgeSyncTest(unittest.TestCase):
                         mock.patch.object(push, "wait_ready", side_effect=KeyboardInterrupt):
                     with self.assertRaises(KeyboardInterrupt):
                         service._launch([action, "lwe-engine.service"], old_pid)
-                self.assertEqual([o.kind for o in drained], ["applied" if answer else "pending"])
+                self.assertEqual([(o.kind, o.reason) for o in drained], [("pending", "busy")])
                 self.assertEqual(marker.read()["classes"], ["BUNDLE"])
+
+    def test_a_rejected_restart_leaves_an_ordinary_bundle_the_next_drain_clears(self) -> None:
+        from lwe_ui.cli.verbs import service
+        with mock.patch.object(service, "_call", side_effect=service._Stop("restart rejected")):
+            with self.assertRaises(service._Stop):
+                service._launch(["restart", "lwe-engine.service"], 4242)
+        self.assertEqual(marker.read()["classes"], ["BUNDLE"])
+        with self.engine(status(pid=4242)) as rec:
+            first = push.sync_all("command").kind
+            sent = len(rec.verbs())
+            for _ in range(3):
+                self.backend._drain()
+        self.assertEqual((first, marker.read()["classes"], self.backend._drain_failures), ("applied", [], 0))
+        self.assertGreater(sent, 0)
+        self.assertEqual(len(rec.verbs()), sent, "later polls send nothing")
+
+    def test_a_second_restart_during_a_restart_ends_busy_and_the_first_keeps_its_record(self) -> None:
+        from lwe_ui.cli.verbs import service
+        second = []
+        started = threading.Event()
+
+        def restart_again():
+            try:
+                service._launch(["restart", "lwe-engine.service"], 4242)
+                second.append("ran")
+            except lock.StoreBusy:
+                second.append("busy")
+            except BaseException:
+                second.append("ran")
+
+        def launch(args):
+            if not started.is_set():
+                started.set()
+                thread = threading.Thread(target=restart_again, daemon=True)
+                thread.start()
+                thread.join(5)
+            return ""
+
+        with mock.patch.object(lock, "LOCK_WAIT_S", 0.2), self.engine(status(pid=4242)), \
+                mock.patch.object(service, "_call", launch), \
+                mock.patch.object(push, "wait_ready", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                service._launch(["restart", "lwe-engine.service"], 4242)
+        self.assertEqual((second, marker.read()["classes"]), (["busy"], ["BUNDLE"]))
 
     def test_ready_tick_during_burst(self) -> None:
         bridge = editor.EditorBridge(self.backend)

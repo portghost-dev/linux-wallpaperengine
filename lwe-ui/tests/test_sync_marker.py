@@ -243,22 +243,15 @@ class SyncMarkerTest(unittest.TestCase):
         self.assertTrue(marker.record_sent(current, 5151, "night"))
         self.assertEqual(marker.sent_for(current, 5151), ["night"])
 
-    def test_a_restart_record_stays_until_a_delivery_to_another_engine(self) -> None:
-        generation = marker.ensure(("BUNDLE",), replacing=4242)
-        self.assertEqual((marker.read()["classes"], marker.read()["replaced"]), (["BUNDLE"], 4242))
-        for pid in (4242, None):
-            with self.subTest(pid=pid):
-                self.assertTrue(marker.clear(generation, pid=pid))
-                self.assertEqual((marker.read()["classes"], marker.read()["replaced"]), (["BUNDLE"], 4242))
-        with marker.writing(("CURRENT",)) as (generation, _):
-            pass
-        self.assertEqual(marker.read()["replaced"], 4242, "a writer keeps the tie")
-        self.assertTrue(marker.clear(generation, pid=5000))
-        self.assertEqual(marker.read()["classes"], [])
-        self.assertNotIn("replaced", marker.read())
-        generation = marker.ensure(("BUNDLE",))
-        self.assertNotIn("replaced", marker.read(), "a start records no pid")
-        self.assertTrue(marker.clear(generation, pid=4242))
+    def test_a_restart_record_is_an_ordinary_bundle_with_no_pid_tie(self) -> None:
+        with self.assertRaises(TypeError):
+            marker.ensure(("BUNDLE",), replacing=4242)
+        self.file.parent.mkdir(parents=True, exist_ok=True)
+        self.file.write_text(json.dumps({"version": 1, "generation": 7, "classes": ["BUNDLE"],
+                                         "sent": {"pid": None, "playlists": []}, "replaced": 4242}) + "\n",
+                             encoding="utf-8")
+        self.assertEqual(marker.read(), {"generation": 7, "classes": ["BUNDLE"], "sent": EMPTY})
+        self.assertTrue(marker.clear(7))
         self.assertEqual(marker.read()["classes"], [])
 
     def test_a_child_inside_writing_makes_generation_raise_store_busy(self) -> None:

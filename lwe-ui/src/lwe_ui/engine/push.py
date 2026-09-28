@@ -691,15 +691,11 @@ def _synced(stack: contextlib.ExitStack, wait_s: float, env: str | None) -> dict
 
 def _finish(run: _Run, env: str | None = None, keep_current: bool = False) -> Outcome:
     """Clear the marker when every request ended ok, CURRENT kept when `keep_current`, and name
-    the outcome. A restart's tied record is cleared only by a delivery to another engine pid."""
+    the outcome."""
     warning = None
     if run.all_ok and not run.stopped:
         try:
-            pid = run.status.get("pid")
-            if "replaced" in marker.read():
-                marker.clear(run.generation, ("CURRENT",) if keep_current else (),
-                             pid=pid if type(pid) is int else None)
-            elif keep_current:
+            if keep_current:
                 marker.clear(run.generation, ("CURRENT",))
             else:
                 marker.clear(run.generation)

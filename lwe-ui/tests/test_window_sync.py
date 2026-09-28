@@ -303,29 +303,104 @@ class WindowSyncTest(unittest.TestCase):
         self.assertEqual(settings.load()["ENGINE_VOLUME"], 30)
         self.assertEqual(marker.read()["classes"], ["BUNDLE"])
 
+    def _finish_restart(self) -> None:
+        worker = getattr(self.backend, "_restart_thread", None)
+        if worker is not None:
+            worker.join(30)
+            self.assertFalse(worker.is_alive())
+        _APP.processEvents()
+
+    def _competing_drain(self) -> str:
+        found = []
+        thread = threading.Thread(target=lambda: found.append(push.sync_all("command", wait_s=0.2)), daemon=True)
+        thread.start()
+        thread.join(5)
+        return f"{found[0].kind} {found[0].reason}" if found else "no answer"
+
     def test_the_switch_and_the_restart_row_record_the_bundle_before_they_launch(self) -> None:
         seen: list = []
 
         def run(args, **kwargs):
             if "enable" in args or "restart" in args:
-                seen.append((args[-2], marker.read()))
+                seen.append((args[-2], marker.read()["classes"], self._competing_drain() if "restart" in args else ""))
             return subprocess.CompletedProcess(args, 0, "inactive\n" if "is-active" in args else "", "")
 
         with mock.patch.object(models, "_sandboxed", lambda: False), \
-                mock.patch.object(models.subprocess, "run", run):
+                mock.patch.object(models.subprocess, "run", run), \
+                mock.patch.object(push, "wait_ready", return_value=status(pid=5000)):
             with self.engine(None, "away"):
                 self.assertTrue(self.backend.setMaster(True))
-            with self.engine(status(pid=4242)):
+            self.backend._ready_timer.stop()
+            with self.engine(status(pid=5000)) as rec:
                 self.assertTrue(self.backend.restartMaster())
-        self.backend._ready_timer.stop()
-        self.assertEqual([(verb, state["classes"], state.get("replaced")) for verb, state in seen],
-                         [("--now", ["BUNDLE"], None), ("restart", ["BUNDLE"], 4242)])
-        with self.engine(status(pid=4242)):
-            push.sync_all("window")
-        self.assertEqual(marker.read()["classes"], ["BUNDLE"], "a drain to the replaced engine keeps it")
-        with self.engine(status(pid=5000)):
-            push.sync_all("window")
+                self._finish_restart()
+        self.assertEqual(seen, [("--now", ["BUNDLE"], ""), ("restart", ["BUNDLE"], "pending busy")])
+        self.assertIn("lanes_set", rec.verbs())
+        self.assertEqual(marker.read()["classes"], [], "the restart's own sync to the new engine clears it")
+
+    def test_a_record_that_cannot_be_written_stops_both_window_launches(self) -> None:
+        launched: list = []
+        notices: list[str] = []
+        self.backend.notice.connect(notices.append)
+
+        def run(args, **kwargs):
+            if "enable" in args or "restart" in args:
+                launched.append(args)
+            return subprocess.CompletedProcess(args, 0, "inactive\n" if "is-active" in args else "", "")
+
+        for failure, text in ((OSError("marker disk full"),
+                               "The sync record could not be written (marker disk full), so nothing was started."),
+                              (lock.StoreBusy("Store busy: another writer holds marker.lock"),
+                               "Store busy: another writer holds marker.lock")):
+            with self.subTest(failure=type(failure).__name__):
+                notices.clear()
+                with mock.patch.object(models, "_sandboxed", lambda: False), \
+                        mock.patch.object(models.subprocess, "run", run), \
+                        mock.patch.object(marker, "ensure", side_effect=failure), self.engine(status()):
+                    results = [self.backend.setMaster(True), self.backend.restartMaster()]
+                    self._finish_restart()
+                self.assertEqual((results, launched, notices), ([False, False], [], [text, text]))
         self.assertEqual(marker.read()["classes"], [])
+
+    def test_a_restart_with_an_unanswered_old_engine_keeps_its_record_from_a_drain(self) -> None:
+        real_read = push.read_status
+        first = [True]
+        drains: list[str] = []
+
+        def read():
+            if first:
+                first.pop()
+                return "unresponsive", None
+            return real_read()
+
+        def run(args, **kwargs):
+            if "restart" in args:
+                drains.append(self._competing_drain())
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        with self.engine(status(pid=4242)), mock.patch.object(models, "_sandboxed", lambda: False), \
+                mock.patch.object(models.subprocess, "run", run), mock.patch.object(push, "read_status", read), \
+                mock.patch.object(push, "wait_ready", return_value=None):
+            self.assertTrue(self.backend.restartMaster())
+            self._finish_restart()
+        self.assertEqual((drains, marker.read()["classes"]), (["pending busy"], ["BUNDLE"]))
+
+    def test_a_refused_window_restart_leaves_a_bundle_the_next_poll_clears_once(self) -> None:
+        def run(args, **kwargs):
+            return subprocess.CompletedProcess(args, 1 if "restart" in args else 0, "", "Job failed")
+
+        with self.engine(status(pid=4242)) as rec, mock.patch.object(models, "_sandboxed", lambda: False), \
+                mock.patch.object(models.subprocess, "run", run):
+            self.assertFalse(self.backend.restartMaster())
+            self._finish_restart()
+            self.assertEqual(marker.read()["classes"], ["BUNDLE"])
+            self.backend._drain()
+            sent = len(rec.verbs())
+            for _ in range(5):
+                self.backend._drain()
+        self.assertEqual((marker.read()["classes"], self.backend._drain_failures), ([], 0))
+        self.assertGreater(sent, 0)
+        self.assertEqual(len(rec.verbs()), sent, "later polls send nothing")
 
     def test_the_service_switch_rebuilds_first_and_bundles_once_the_engine_answers(self) -> None:
         events: list = []
@@ -370,12 +445,16 @@ class WindowSyncTest(unittest.TestCase):
                 self.assertEqual(len(runs), 1, "one sync_all once the engine answers")
                 self.assertFalse(self.backend._ready_timer.isActive())
                 self.assertEqual(marker.read()["classes"], [])
-                with self.engine(status(pid=100)):
+                waited: list = []
+
+                def ready(old_pid=None, timeout_s=20.0):
+                    waited.append(old_pid)
+                    return status(pid=200)
+
+                with self.engine(status(pid=100)), mock.patch.object(push, "wait_ready", ready):
                     self.assertTrue(self.backend.restartMaster())
-                    self.backend._ready_tick()
-                self.assertEqual(len(runs), 1, "the old pid is not the restarted engine")
-                with self.engine(status(pid=200)):
-                    self.backend._ready_tick()
+                    self._finish_restart()
+                self.assertEqual(waited, [100], "the restart waits for an engine other than the old pid")
                 self.assertEqual(len(runs), 2, "the new pid runs the bundle")
                 self.assertFalse(self.backend._ready_timer.isActive())
 

@@ -65,24 +65,26 @@ def _rebuild() -> list[str]:
 
 
 def _launch(args: list[str], old_pid: int | None) -> tuple[list[str], int]:
-    """Record the owed bundle in the sync marker, tied to the engine a restart replaces (old_pid),
-    start or restart, wait for the engine and sync it; returns the outcome line and the exit code.
-    The record stays until a sync to another engine ends every request ok."""
+    """Hold the sync lock from the owed bundle's record through the start or restart, the wait for
+    the engine and its sync, so no other run can clear the record in between; returns the outcome
+    line and the exit code. A busy lock is StoreBusy, reported by cli.main. A crash, an interrupt,
+    a timeout or a refused launch releases the lock and leaves BUNDLE for the next drain."""
     from ...engine import marker, push
-    from ...storage.lock import StoreBusy
+    from ...storage import lock
     from .. import report
-    try:
-        marker.ensure(("BUNDLE",), replacing=old_pid)
-    except StoreBusy:
-        raise
-    except OSError as exc:
-        raise _Stop(f"The sync record could not be written ({exc}), so nothing was started.") from None
-    _call(args)
     not_taken = "The engine has not taken your saved configuration yet"
-    if push.wait_ready(old_pid=old_pid, timeout_s=READY_S) is None:
-        raise _Stop(f"The service started, but the engine did not answer within {READY_S} s; {LOG} shows why. "
-                    f"{not_taken}. {report.OPPORTUNITIES}")
-    outcome = push.sync_all("command")
+    with lock.held("sync"):
+        try:
+            marker.ensure(("BUNDLE",))
+        except lock.StoreBusy:
+            raise
+        except OSError as exc:
+            raise _Stop(f"The sync record could not be written ({exc}), so nothing was started.") from None
+        _call(args)
+        if push.wait_ready(old_pid=old_pid, timeout_s=READY_S) is None:
+            raise _Stop(f"The service started, but the engine did not answer within {READY_S} s; {LOG} shows why. "
+                        f"{not_taken}. {report.OPPORTUNITIES}")
+        outcome = push.sync_all("command")
     if outcome.kind == "pending" and outcome.reason == "version":
         raise _Stop(outcome.message or "The running engine is from another build.")
     line = {
