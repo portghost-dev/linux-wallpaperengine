@@ -23,6 +23,7 @@ import tempfile
 import threading
 import time
 import unittest
+import warnings
 from pathlib import Path
 from unittest import mock
 
@@ -57,11 +58,11 @@ class SettingSetTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         from lwe_ui import cli, version
         from lwe_ui.cli import help_text
-        from lwe_ui.cli.verbs import help as help_verb
+        from lwe_ui.cli import help_pages
         from lwe_ui.engine import daemon_unit
         from lwe_ui.storage import paths
         cls.cli, cls.stamp, cls.paths, cls.daemon_unit = cli, version.panel_stamp(), paths, daemon_unit
-        cls.help_text, cls.help_verb = help_text, help_verb
+        cls.help_text, cls.help_pages = help_text, help_pages
         cls.conf = paths.settings_file()
         cls.env_path = paths.config_dir() / daemon_unit.ENV_FILE_NAME
 
@@ -291,14 +292,36 @@ class SettingSetTest(unittest.TestCase):
         self.assertEqual(self.snapshot(), {})
         self.assertEqual(engine.calls, [])
 
+    def test_an_assets_folder_the_engine_service_cannot_carry_is_refused_before_saving(self) -> None:
+        self.store("ENGINE_LAYER=bottom\n")
+        self.seed_env()
+        folder = ROOT / "my assets"
+        folder.mkdir(exist_ok=True)
+        before = self.snapshot()
+        reason = (f"ASSETS_DIR {str(folder)!r} contains whitespace or quotes; the engine service cannot represent it - "
+                  "move the assets to a plain path or leave ASSETS_DIR empty for auto-discovery")
+        self.assertEqual(self.lwe("assetsfolder", str(folder)), (3, "", f"assetsfolder: {reason}\n"))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_a_write_keeps_the_store_s_snapped_value_warning_off_stderr(self) -> None:
+        self.store("ENGINE_FPS=abc\nENGINE_LAYER=bottom\n")
+        with warnings.catch_warnings():
+            warnings.simplefilter("always")
+            for words in (("layer", "top"), ("-j", "layer", "bottom"), ("reviewrequired", "off"), ("watchdog", "1m"),
+                          ("volume", "40"), ("debug", "audit", "on"), ("config", "unset", "layer")):
+                with self.subTest(words=words):
+                    code, _out, err = self.lwe(*words)
+                    self.assertEqual((code, err), (0, ""))
+
     def test_a_bare_setting_prints_its_help_page(self) -> None:
         engine = self.engine()
-        self.assertEqual(self.lwe("layer"), (0, "layer background | bottom | top | overlay\n", ""))
-        self.assertEqual(self.lwe("resclamp"), (0, self.help_text.RESCLAMP, ""))
+        layer = self.help_pages.page("layer")
+        self.assertEqual(self.lwe("layer"), (0, layer if layer.endswith("\n") else layer + "\n", ""))
         pages = {"layer": "the layer page\n"}
-        with mock.patch.object(self.help_verb, "page", pages.get, create=True):
+        with mock.patch.object(self.help_pages, "page", pages.get):
             self.assertEqual(self.lwe("layer"), (0, "the layer page\n", ""))
             self.assertEqual(self.lwe("detect"), (0, "detect manual | launch | timer | watch\n", ""))
+            self.assertEqual(self.lwe("resclamp"), (0, self.help_text.RESCLAMP, ""))
         self.assertEqual(self.snapshot(), {})
         self.assertEqual(engine.calls, [])
 

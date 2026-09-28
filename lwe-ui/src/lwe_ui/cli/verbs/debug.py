@@ -52,8 +52,11 @@ def _as_switch(row: debug_table.Row, value: str | None) -> str | None:
 
 
 def _write(variable: str, value: str | None) -> str:
+    import warnings
     from ...engine import daemon_unit
-    return daemon_unit.write_env({variable: value})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return daemon_unit.write_env({variable: value})
 
 
 def _show(ctx: Context, row: debug_table.Row) -> int:

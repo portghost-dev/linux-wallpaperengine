@@ -288,7 +288,9 @@ class OrderIntervalTest(unittest.TestCase):
 
     def test_bare_order_prints_its_help_and_config_order_runs_the_same_code(self) -> None:
         self.seed()
-        self.assertEqual(self.lwe("order"), (0, "order shuffle | sequential | static\n", ""))
+        from lwe_ui.cli import help_pages
+        page = help_pages.page("order")
+        self.assertEqual(self.lwe("order"), (0, page if page.endswith("\n") else page + "\n", ""))
         engine = self.engine()
         self.assertEqual(self.lwe("config", "order", "static"), (0, "Order of Main set to static.\n", ""))
         self.assertEqual(self.sent(engine), [("playlist-set", "main", "static", 900, 1, 1, 2), lanes(False)])

@@ -103,9 +103,9 @@ def _get(ctx: Context, args: list[str]) -> int:
 
 def _config(ctx: Context, args: list[str]) -> int:
     if args[:1] == ["unset"]:
-        return _unset(ctx, args[1:])
+        return _quietly(_unset, ctx, args[1:])
     if len(args) > 1:
-        return _config_set(ctx, args[0], args[1:])
+        return _quietly(_config_set, ctx, args[0], args[1:])
     if args and args[0] not in settings_table.BY_NAME:
         return _unknown(ctx, args[0], CONFIG_USAGE)
     names = args or [row["name"] for row in vocabulary.SETTINGS if row["name"] in settings_table.BY_NAME]
@@ -142,9 +142,8 @@ def _running_refusal(ctx: Context) -> int | None:
 
 def _help(ctx: Context, name: str) -> int:
     """A setting typed alone: its help page."""
-    from . import help as help_verb
-    page = getattr(help_verb, "page", None)
-    text = page(name) if callable(page) else None
+    from .. import help_pages
+    text = help_pages.page(name)
     if text is None:
         values = next(row["values"] for row in vocabulary.SETTINGS if row["name"] == name)
         text = help_text.RESCLAMP if name == "resclamp" else f"{name} {values}"
@@ -442,6 +441,10 @@ def _set(ctx: Context, name: str, args: list[str]) -> int:
         return _refuse(ctx, f"{name}: {exc}", REFUSED)
     if name in _FOLDERS and not os.path.isdir(value):
         return _refuse(ctx, f"{name} takes an existing folder; got {args[0]}", USAGE)
+    if name == "assetsfolder" and any(c in value for c in ' \t"\n'):
+        return _refuse(ctx, f"{name}: ASSETS_DIR {value!r} contains whitespace or quotes; the engine service "
+                            "cannot represent it - move the assets to a plain path or leave ASSETS_DIR empty "
+                            "for auto-discovery", USAGE)
     if name in _LINES:
         if name == "watchdog":
             return _line_write(ctx, name, str(value))
@@ -525,8 +528,17 @@ def _unset(ctx: Context, args: list[str]) -> int:
     return _receipt(ctx, name, _write(change))
 
 
+def _quietly(fn: Callable[..., int], *args: object) -> int:
+    """fn with the store's snapped-value warnings kept off stderr, as the reads keep them; config names
+    the line."""
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return fn(*args)
+
+
 def _setting_verb(name: str) -> Callable[[Context, list[str]], int]:
-    return lambda ctx, args: _set(ctx, name, args)
+    return lambda ctx, args: _quietly(_set, ctx, name, args)
 
 
 VERBS = (
