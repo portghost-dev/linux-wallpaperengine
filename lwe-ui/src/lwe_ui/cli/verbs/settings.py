@@ -153,16 +153,13 @@ def _help(ctx: Context, name: str) -> int:
 
 def _write(fn: Callable[[dict], dict], key: str) -> bool:
     """settings.modify(fn) under the settings lock, the one place every command write of a setting
-    passes; True when settings.conf changed. A session override named by `key` is taken over from
-    the window first, whether or not the value changes (settings.release_window_override)."""
-    from ...storage import lock, paths, settings
-    path = paths.settings_file()
+    passes; True when a setting's line changed. A session override named by `key` is taken from the
+    window in that same write, whether or not its value changes, so a write that fails takes nothing."""
+    from ...storage import lock, settings
     with lock.held("settings"):
-        if key in settings.WINDOW_OVERRIDES:
-            settings.release_window_override(key)
-        before = path.read_bytes() if path.exists() else None
-        settings.modify(fn)
-        return (path.read_bytes() if path.exists() else None) != before
+        before = settings.setting_lines()
+        settings.modify(fn, taken=(key,))
+        return settings.setting_lines() != before
 
 
 def _receipt(ctx: Context, name: str, saved: bool, env_state: str | None = None) -> int:

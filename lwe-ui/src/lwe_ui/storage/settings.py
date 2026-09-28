@@ -3,20 +3,19 @@
 Values are python-typed on load (bool/int/float/str per C.SETTINGS_SCHEMA) and serialized
 back as shell-safe KEY=value via tier_a. Validation clamps + warns; it never crashes.
 
-The window's session overrides (WINDOW_OVERRIDES) carry an owner note in panel state when the
-window sets them, written before the line. Every settings.conf write passes _write, which drops
-the note of each such key another write changes, and a command's explicit write of a key drops its
-note even when the value does not change (release_window_override); at quit the window clears only
-the keys whose note still matches.
+The window owns a session override (WINDOW_OVERRIDES) it turned on, and settings.conf names the
+keys it owns on one line (OWNED_KEY). Every settings.conf write passes _write, which decides that
+line and writes it in the same text as the values: a write that changes such a key ends its
+ownership, and so does a command or a backup import that sets it, even to the same value; a write
+that fails changes neither. At quit the window turns off what it still owns (clear_window_overrides).
 """
 from __future__ import annotations
 
-import logging
 import math
 import os
 import warnings
 import zipfile
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from .. import constants as C
 from . import atomic, foreign, lock, migrate, paths, tier_a
@@ -24,6 +23,7 @@ from .store import Store
 
 
 WINDOW_OVERRIDES = ("OVERRIDE_MUTE", "OVERRIDE_AUDIO_OFF", "OVERRIDE_PARALLAX_OFF", "OVERRIDE_MOUSE_OFF")
+OWNED_KEY = "WINDOW_OWNED_OVERRIDES"
 
 _TRUE = ("true", "1", "yes", "on")
 _FALSE = ("false", "0", "no", "off", "")
@@ -230,91 +230,82 @@ def _to_text(d: dict[str, Any]) -> dict[str, str]:
     return flat
 
 
-def _notes_file():
-    return paths.panel_state_dir() / "window-overrides.json"
+def _read_text() -> str:
+    try:
+        return paths.settings_file().read_bytes().decode("utf-8")
+    except OSError:
+        return ""
 
 
-def window_notes() -> dict[str, Any]:
-    """The window's owner notes: {session override key: the value the window wrote}; {} when none."""
-    notes = atomic.read_json(_notes_file(), {})
-    return {k: v for k, v in notes.items() if k in WINDOW_OVERRIDES} if isinstance(notes, dict) else {}
+def _owned(text: str) -> list[str]:
+    named = tier_a.parse(text).get(OWNED_KEY, "").split()
+    return [k for k in WINDOW_OVERRIDES if k in named]
 
 
-def _save_notes(notes: dict[str, Any]) -> None:
-    if notes:
-        atomic.atomic_write_json(_notes_file(), notes)
-    else:
-        _notes_file().unlink(missing_ok=True)
+def _session_values(text: str) -> dict[str, Any]:
+    raw = migrate_raw(tier_a.parse(text))
+    defaults = paths.default_settings()
+    return {k: _coerce(k, raw[k], C.SETTINGS_SCHEMA[k], []) if k in raw
+            else defaults.get(k, C.SETTINGS_SCHEMA[k]["default"]) for k in WINDOW_OVERRIDES}
 
 
-def _write(path: Any, text: str, before: dict[str, Any], owner: str | None = None) -> None:
-    """Write settings.conf atomically: the one place every settings write passes. A session
-    override whose value the write changes loses the window's owner note, so only a key the
-    window set and nobody changed since keeps one; `owner` is the key the window itself is
-    writing, whose fresh note stays. A note that cannot be dropped once the write committed is
-    logged and left: the value check at quit keeps a stale note harmless."""
-    atomic.atomic_write_text(path, text)
-    notes = window_notes()
-    if notes:
-        after = load()
-        kept = {k: v for k, v in notes.items() if k == owner or after.get(k) == before.get(k)}
-        if kept != notes:
-            try:
-                _save_notes(kept)
-            except OSError as exc:
-                logging.getLogger(__name__).warning("the window's owner notes could not be updated: %s", exc)
+def window_owned() -> list[str]:
+    """The session overrides the window owns, as settings.conf's OWNED_KEY line names them: the
+    keys it turned on that no write has changed and no command or import has set since."""
+    return _owned(_read_text())
+
+
+def setting_lines() -> dict[str, str] | None:
+    """settings.conf's assignments without the window's ownership line; None with no file."""
+    p = paths.settings_file()
+    if not p.exists():
+        return None
+    return {k: v for k, v in tier_a.parse(p.read_bytes().decode("utf-8")).items() if k != OWNED_KEY}
+
+
+def _write(path: Any, old: str, text: str, claim: str | None = None, taken: Iterable[str] = (),
+           always: bool = True) -> None:
+    """Write settings.conf atomically: the one place every settings write passes. The window's
+    ownership line goes into the same text, so the two cannot part: a session override stays
+    owned while this write keeps its value and does not name it in `taken` (a command's key, an
+    import's keys), and `claim`, the key the window itself writes, is owned after while it is on.
+    `old` is the text being replaced; with `always` false an unchanged text is not written."""
+    before, after = _session_values(old), _session_values(text)
+    owned = [k for k in _owned(old) if k not in taken and after[k] == before[k]]
+    if claim is not None and after[claim] is True:
+        owned.append(claim)
+    owned = [k for k in WINDOW_OVERRIDES if k in owned]
+    if owned != _owned(text):
+        text = tier_a.edit(text, {OWNED_KEY: " ".join(owned) or None}, path=path)
+    if always or text != old:
+        atomic.atomic_write_text(path, text)
 
 
 def set_window_override(key: str, value: bool) -> None:
     """The window's own write of a session override, under the settings lock: when the value
-    changes, its owner note first, then its line. A note that cannot be written refuses the change
-    with nothing written; a line that cannot be written takes its note back, best effort."""
+    changes, the line and the window's ownership of it in one write; a value already stored writes
+    nothing."""
     with lock.held("settings"):
         if load().get(key) == value:
             return
-        notes = window_notes()
-        _save_notes({**notes, key: value})
-        try:
-            modify(lambda _current: {key: value}, owner=key)
-        except BaseException:
-            try:
-                _save_notes(notes)
-            except OSError:
-                pass
-            raise
-
-
-def release_window_override(key: str) -> None:
-    """A command's explicit write of a session override takes it over from the window: under the
-    settings lock, the window's owner note of the key is dropped whether or not the value changes.
-    A note that cannot be dropped raises OSError before the command writes anything."""
-    with lock.held("settings"):
-        notes = window_notes()
-        if key in notes:
-            _save_notes({k: v for k, v in notes.items() if k != key})
+        modify(lambda _current: {key: value}, claim=key)
 
 
 def clear_window_overrides() -> list[str]:
-    """At the window's quit, under the settings lock: each session override whose owner note still
-    matches the stored value goes back to off and loses its note; a note that no longer matches is
-    left alone, and a note that cannot be removed is logged and left. Returns the keys turned off."""
+    """At the window's quit, under the settings lock: every session override the window owns goes
+    back to off and the window's ownership ends, in one write. Returns the keys turned off."""
     with lock.held("settings"):
-        current = load()
-        matched = {k: v for k, v in window_notes().items() if current.get(k) == v}
-        cleared = modify(lambda now: {k: False for k, v in matched.items() if v and now.get(k) == v})
-        try:
-            _save_notes({k: v for k, v in window_notes().items() if k not in matched})
-        except OSError as exc:
-            logging.getLogger(__name__).warning("the window's owner notes could not be updated: %s", exc)
-        return list(cleared)
+        owned = window_owned()
+        return list(modify(lambda now: {k: False for k in owned if now.get(k) is True}, taken=owned))
 
 
-def save(d: dict[str, Any]) -> None:
-    """Validate, serialize (bools as true/false), atomically write settings.conf."""
+def save(d: dict[str, Any], *, taken: Iterable[str] = ()) -> None:
+    """Validate, serialize (bools as true/false), atomically write settings.conf. `taken` names
+    the session overrides this write takes from the window (_write)."""
     valid = _validate(d)
     text = tier_a.serialize(_to_text(valid), header="lwe settings (Tier A) - managed by LWE Control Panel")
     with lock.held("settings"):
-        _write(paths.settings_file(), text, load())
+        _write(paths.settings_file(), _read_text(), text, taken=taken)
 
 
 def ensure_exists() -> None:
@@ -325,26 +316,27 @@ def ensure_exists() -> None:
                 save(paths.default_settings())
 
 
-def modify(fn: Callable[[dict[str, Any]], dict[str, Any] | None], owner: str | None = None) -> dict[str, Any]:
+def modify(fn: Callable[[dict[str, Any]], dict[str, Any] | None], *, claim: str | None = None,
+           taken: Iterable[str] = ()) -> dict[str, Any]:
     """Under the settings lock: load settings.conf fresh, pass it to fn, and apply the keys fn
     returns to the file's own lines: a value sets its key, None deletes it and every old name
     of it, every other line stays. A missing file is first written with the full defaults when
     fn returns a change. Returns those keys; the file is written only when its text changes.
-    `owner` is set only by the window's own session override write (_write)."""
+    `claim` (the window's own session override write) and `taken` (a command's key) reach _write."""
     with lock.held("settings"):
         p = paths.settings_file()
         current = load()
         changes = fn(current) or {}
-        if changes:
-            if not p.exists():
+        taken = tuple(taken)
+        if changes or taken:
+            if changes and not p.exists():
                 save(paths.default_settings())
-            text = p.read_bytes().decode("utf-8")
+            text = p.read_bytes().decode("utf-8") if p.exists() else ""
             flat: dict[str, str | None] = dict(_to_text(_validate(
                 {k: v for k, v in changes.items() if v is not None})))
             flat.update({k: None for k, v in changes.items() if v is None and k in C.SETTINGS_SCHEMA})
             new = tier_a.edit(text, migrate.with_old_names("settings", flat), path=p)
-            if new != text:
-                _write(p, new, current, owner)
+            _write(p, text, new, claim, taken, always=False)
         return changes
 
 
@@ -353,11 +345,11 @@ def update(changes: dict[str, Any]) -> dict[str, Any]:
     return modify(lambda _current: dict(changes))
 
 
-def replace(fn: Callable[[dict[str, Any]], dict[str, Any]]) -> None:
+def replace(fn: Callable[[dict[str, Any]], dict[str, Any]], *, taken: Iterable[str] = ()) -> None:
     """Whole-store write under the settings lock: fn receives a fresh load and returns the
-    complete settings to write."""
+    complete settings to write; `taken` as save takes it."""
     with lock.held("settings"):
-        save(fn(load()))
+        save(fn(load()), taken=taken)
 
 
 def clamp_unset_changes(current: dict[str, Any], key: str) -> dict[str, Any]:
@@ -442,8 +434,9 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
 
 
 def _backup_apply(plan: dict[str, Any], r: dict[str, Any]) -> bool:
+    restored = plan.get("settings") or {}
     try:
-        replace(lambda current: {**current, **(plan.get("settings") or {})})
+        replace(lambda current: {**current, **restored}, taken=[k for k in WINDOW_OVERRIDES if k in restored])
     except Exception as exc:
         r["errors"].append({"file": MEMBER, "reason": str(exc)})
         return False

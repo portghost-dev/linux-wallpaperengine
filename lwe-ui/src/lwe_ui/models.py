@@ -1183,25 +1183,27 @@ class Backend(QObject):
 
     @Slot(str, bool)
     def setSessionOverride(self, key: str, on: bool) -> None:
-        """Deck override icons: settings-persisted with the window's owner note, so quit clears
-        only what this window set."""
+        """Deck override icons: settings-persisted, the window's ownership in the same write
+        (settings.set_window_override), so quit clears only what this window set."""
         skey = self._SESSION_KEYS.get(key)
         if not skey:
             return
         self._set_setting(skey, bool(on), write=lambda: settings.set_window_override(skey, bool(on)))
 
     def restoreSessionOverrides(self) -> None:
-        """App quit: clear only the session overrides this window set that nobody changed since, the
-        keys whose owner note still matches (settings.clear_window_overrides), so a window exit
-        never undoes another door's choice."""
+        """App quit: the session overrides this window still owns go back to off
+        (settings.clear_window_overrides), so a window exit never undoes another door's choice. The
+        status is read first; then the settings lock is held from the read of the ownership through
+        the pending record and the write (push.save_change), and the push follows."""
         try:
-            notes, cur = settings.window_notes(), settings.load()
-            keys = [k for k, v in notes.items() if v and cur.get(k) == v]
-            if keys:
-                push.run_change(("settings",), settings.clear_window_overrides,
-                                [(push.SETTING_ROWS[k], k) for k in keys], defer_current=self.delivery_due())
-            elif notes:
-                settings.clear_window_overrides()
+            first = push.read_status()
+            with lock.held("settings"):
+                owned = settings.window_owned()
+                if not owned:
+                    return
+                ticket = push.save_change(("settings",), settings.clear_window_overrides,
+                                          [(push.SETTING_ROWS[k], k) for k in owned], status=first)
+            push.deliver(ticket, defer_current=self.delivery_due())
         except Exception:
             return
 
