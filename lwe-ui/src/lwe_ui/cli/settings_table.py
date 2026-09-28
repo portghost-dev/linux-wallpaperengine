@@ -7,7 +7,7 @@ A row's parse(word, cwd_entered=False) returns the value to store, or raises val
 its transaction; a volume step gives a Step; color gives its four numbers with the hue in radians,
 as engine-env holds it. format(value) prints a stored value in the words the setting takes, the hue
 in degrees; an empty per-wallpaper value, which inherits, prints as "". Top level imports stdlib only;
-derived_active_playlist imports the store when it is called.
+derived_active_playlist and read import the store when they are called.
 """
 from __future__ import annotations
 
@@ -321,3 +321,83 @@ def derived_active_playlist(status: dict | None) -> tuple[str | None, str]:
             if bound and paths.playlist_file(bound).exists():
                 return bound, "engine"
     return playlists.active_slug(validate=True) or None, "saved"
+
+
+def _saved_lines() -> dict[str, tuple[int, str, str]]:
+    """{key: (line number, the line as written, its value)} for the line of settings.conf that sets
+    each key, the last one when a key is set twice, an old name read under its new one."""
+    from ..storage import paths, settings, tier_a
+    try:
+        text = paths.settings_file().read_bytes().decode("utf-8")
+    except OSError:
+        return {}
+    out: dict[str, tuple[int, str, str]] = {}
+    for number, line in enumerate(text.split("\n"), 1):
+        for key, value in settings.migrate_raw(tier_a.parse(line)).items():
+            out[key] = (number, line.strip(), value)
+    return out
+
+
+def _engine_env() -> dict[str, str]:
+    """engine-env's variables as the generator's parser reads them; {} when there is no file."""
+    from ..engine import daemon_unit
+    from ..storage import paths
+    try:
+        text = (paths.config_dir() / daemon_unit.ENV_FILE_NAME).read_bytes().decode("utf-8")
+    except OSError:
+        return {}
+    return daemon_unit.parse_env(text.split("\n"))
+
+
+def read(name: str, status: dict | None) -> tuple[Any, str, str | None]:
+    """(the value in force, where it comes from, the saved line's problem or None) for one setting,
+    `status` being the engine's status or None. Saved values, never a running one but audiosmoothing's;
+    reads write nothing, and the store's warnings stay quiet since the problem names the line."""
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return _read(name, status)
+
+
+def _read(name: str, status: dict | None) -> tuple[Any, str, str | None]:
+    """read, with the store's warnings already silenced."""
+    from ..storage import playlists, settings
+    row = BY_NAME[name]
+    if row.place == STATUS:
+        if isinstance(status, dict) and status.get("audio_smooth") is not None:
+            return float(status["audio_smooth"]), "running", None
+        return None, "not running", None
+    if row.place == ENGINE_ENV:
+        raw = _engine_env().get(row.key)
+        try:
+            if row.name == "watchdog":
+                return (int(raw) if raw is not None else 300), "engine-env", None
+            numbers = tuple(float(part) for part in raw.split()) if raw is not None else (1.0, 1.0, 1.0, 0.0)
+            return (numbers if len(numbers) == 4 else (1.0, 1.0, 1.0, 0.0)), "engine-env", None
+        except ValueError:
+            return (300 if row.name == "watchdog" else (1.0, 1.0, 1.0, 0.0)), "engine-env", None
+    if row.place == PLAYLIST_FILE or row.name == "playlist":
+        slug, how = derived_active_playlist(status)
+        saved = playlists.load(slug) if slug else {}
+        if row.name == "playlist":
+            return saved.get("NAME", ""), "schedule" if how == "engine" else "settings.conf", None
+        return saved.get(row.key), f"playlists/{slug}.conf" if slug else "no active playlist", None
+    loaded = settings.load()
+    present = settings.load_set()
+    value = loaded[row.key]
+    if row.key in present:
+        source = "settings.conf"
+    elif row.name in ("resclamp", "effectclamp") and "RENDER_RESOLUTION" in present:
+        source = "RENDER_RESOLUTION"
+    else:
+        source = "default"
+    if row.key == "FULLSCREEN_BEHAVIOR" and value == "":
+        from ..engine.resolve import resolve_fullscreen_behavior
+        value = resolve_fullscreen_behavior(loaded)
+    problem = None
+    line = _saved_lines().get(row.key)
+    if line is not None:
+        reason = settings.check_raw(row.key, line[2])
+        if reason:
+            problem = f"settings.conf line {line[0]} {line[1]} ({reason})"
+    return value, source, problem

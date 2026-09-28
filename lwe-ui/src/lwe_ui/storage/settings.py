@@ -5,6 +5,7 @@ back as shell-safe KEY=value via tier_a. Validation clamps + warns; it never cra
 """
 from __future__ import annotations
 
+import math
 import os
 import warnings
 import zipfile
@@ -113,6 +114,44 @@ def load() -> dict[str, Any]:
         if key not in raw:
             out[key] = number
     return out
+
+
+def load_set() -> dict[str, Any]:
+    """{key: typed value} for the schema keys settings.conf carries, an old name read under its new
+    one, with no default filled in: a key's presence tells a saved value from the default."""
+    try:
+        text = paths.settings_file().read_bytes().decode("utf-8")
+    except OSError:
+        text = ""
+    raw = migrate_raw(tier_a.parse(text))
+    return {key: _coerce(key, raw[key], spec, []) for key, spec in C.SETTINGS_SCHEMA.items() if key in raw}
+
+
+def check_raw(key: str, text: str) -> str | None:
+    """None when settings.conf may hold `text` for `key`, else the reason: the type, a finite number
+    within the schema's range (a saved speed is 0.1 to 10), or one of the choices."""
+    spec = C.SETTINGS_SCHEMA[key]
+    kind, s = spec["type"], str(text).strip()
+    if kind in ("bool", "bool_or_empty"):
+        return None if s.lower() in _TRUE + _FALSE else "not on or off"
+    if kind in ("int", "int_or_empty", "float"):
+        if kind == "int_or_empty" and s == "":
+            return None
+        whole = kind != "float"
+        try:
+            value = int(s) if whole else float(s)
+        except ValueError:
+            return "not a whole number" if whole else "not a number"
+        lo, hi = spec.get("min"), spec.get("max")
+        if lo is not None and hi is not None and not lo <= value <= hi:
+            return f"not {'a whole number' if whole else 'a number'} from {lo:g} to {hi:g}"
+        return None if math.isfinite(value) else "not a finite number"
+    if kind in ("enum", "enum_or_empty"):
+        aliases = C.VALUE_ALIASES.get("settings", {}).get(key, {})
+        if (kind == "enum_or_empty" and s == "") or s in spec["choices"] or s in aliases:
+            return None
+        return "not one of " + ", ".join(spec["choices"])
+    return None
 
 
 def _validate(d: dict[str, Any], report: list | None = None) -> dict[str, Any]:
