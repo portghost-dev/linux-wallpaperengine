@@ -173,7 +173,8 @@ def update_set_path(path, changes: dict[str, Any]) -> None:
                 continue
             edits[key] = sval
         stem = Path(path).stem
-        new = tier_a.edit(text, edits, header=f"lwe wallpaper override {stem} (Tier A)")
+        new = tier_a.edit(text, migrate.with_old_names("overrides", edits),
+                          header=f"lwe wallpaper override {stem} (Tier A)", path=path)
         if new != text:
             atomic.atomic_write_text(path, new)
 
@@ -252,8 +253,9 @@ def sparsify_overrides() -> dict[str, list[str]]:
             if not removed:
                 continue
             try:
-                atomic.atomic_write_text(conf, tier_a.edit(text, dict.fromkeys(removed)))
-            except OSError:
+                atomic.atomic_write_text(conf, tier_a.edit(
+                    text, migrate.with_old_names("overrides", dict.fromkeys(removed)), path=conf))
+            except (OSError, ValueError):
                 continue
         report[wid] = removed
     return report

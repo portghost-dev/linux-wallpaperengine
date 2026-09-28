@@ -194,20 +194,20 @@ def ensure_exists() -> None:
 
 def modify(fn: Callable[[dict[str, Any]], dict[str, Any] | None]) -> dict[str, Any]:
     """Under the settings lock: load settings.conf fresh, pass it to fn, and apply the keys fn
-    returns to the file's own lines: a value sets its key, None deletes it, every other line
-    stays. A missing file is first written with the full defaults. Returns those keys; the
-    file is written only when its text changes."""
+    returns to the file's own lines: a value sets its key, None deletes it and every old name
+    of it, every other line stays. A missing file is first written with the full defaults when
+    fn returns a change. Returns those keys; the file is written only when its text changes."""
     with lock.held("settings"):
         p = paths.settings_file()
-        if not p.exists():
-            save(paths.default_settings())
-        text = p.read_bytes().decode("utf-8")
         changes = fn(load()) or {}
         if changes:
+            if not p.exists():
+                save(paths.default_settings())
+            text = p.read_bytes().decode("utf-8")
             flat: dict[str, str | None] = dict(_to_text(_validate(
                 {k: v for k, v in changes.items() if v is not None})))
             flat.update({k: None for k, v in changes.items() if v is None and k in C.SETTINGS_SCHEMA})
-            new = tier_a.edit(text, flat)
+            new = tier_a.edit(text, migrate.with_old_names("settings", flat), path=p)
             if new != text:
                 atomic.atomic_write_text(p, new)
         return changes

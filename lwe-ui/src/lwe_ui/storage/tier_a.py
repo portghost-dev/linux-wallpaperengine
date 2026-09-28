@@ -76,10 +76,48 @@ def serialize(data: dict[str, str], *, header: str | None = None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _lines(text: str) -> list[tuple[str, str]]:
+    """`text` as (line, ending) pairs, split on "\\n" only, the way bash reads lines. The ending
+    is "\\r\\n", "\\n", or "" for an unterminated last line; every other character stays inside
+    its line."""
+    parts = text.split("\n")
+    out = [(part[:-1], "\r\n") if part.endswith("\r") else (part, "\n") for part in parts[:-1]]
+    if parts[-1]:
+        out.append((parts[-1], ""))
+    return out
+
+
+def _opens_quote(value: str) -> bool:
+    """True when `value` leaves a quote open at the end of its line, read the way bash reads
+    quotes: single, double and $'...' quotes, a backslash escape outside single quotes, and a
+    comment from a # that starts a word."""
+    quote, i, word_start = "", 0, False
+    while i < len(value):
+        ch = value[i]
+        if quote == "'":
+            quote = "" if ch == "'" else quote
+        elif quote:
+            if ch == "\\":
+                i += 1
+            elif ch == quote[-1]:
+                quote = ""
+        elif ch == "\\":
+            i += 1
+        elif ch == "#" and word_start:
+            return False
+        elif ch == "$" and value[i + 1:i + 2] == "'":
+            quote, i = "$'", i + 1
+        elif ch in "'\"":
+            quote = ch
+        word_start = not quote and ch in " \t;&|()<>"
+        i += 1
+    return bool(quote)
+
+
 def parse(text: str) -> dict[str, str]:
     """shell-sourceable text -> dict[str,str]. Last assignment wins (matches `source`)."""
     out: dict[str, str] = {}
-    for line in text.splitlines():
+    for line, _ending in _lines(text):
         s = line.strip()
         if not s or s.startswith("#"):
             continue
@@ -99,33 +137,39 @@ def _assigned_key(line: str) -> str | None:
     return m.group(1) if m else None
 
 
-def edit(text: str, changes: dict[str, str | None], *, header: str | None = None) -> str:
+def edit(text: str, changes: dict[str, str | None], *, header: str | None = None,
+         path: object = None) -> str:
     """`text` with `changes` applied line by line. A value replaces the last assignment of its
     key in place, keeping that line's indentation and line ending, or is appended as a new
     line when the key has none; None deletes every assignment of the key. Every other line
-    stays as it was. `header` starts the text only when `text` is empty."""
-    lines = text.splitlines(keepends=True)
-    keys = [_assigned_key(line) for line in lines]
-    out: list[str | None] = list(lines)
+    stays as it was. `header` starts the text only when `text` is empty. A change that would
+    replace or delete a line whose value opens a quote the line does not close raises
+    ValueError naming the key and `path`: the rest of that value is on the lines after it."""
+    lines = _lines(text)
+    keys = [_assigned_key(line) for line, _ending in lines]
+    out: list[str | None] = [line + ending for line, ending in lines]
     tail: list[str] = []
     for key, value in changes.items():
         if not _KEY_RE.match(key):
             raise ValueError(f"invalid shell key: {key!r}")
         at = [i for i, k in enumerate(keys) if k == key]
+        for i in (at if value is None else at[-1:]):
+            if _opens_quote(_LINE_RE.match(lines[i][0].strip()).group(2)):
+                where = f" in {path}" if path else ""
+                raise ValueError(f"cannot edit {key}{where}: its value opens a quote that its line does not close")
         if value is None:
             for i in at:
                 out[i] = None
             continue
         assignment = f"{key}={quote(str(value))}"
         if at:
-            old = lines[at[-1]]
-            body = old.splitlines()[0]
-            out[at[-1]] = body[:len(body) - len(body.lstrip())] + assignment + old[len(body):]
+            line, ending = lines[at[-1]]
+            out[at[-1]] = line[:len(line) - len(line.lstrip())] + assignment + ending
         else:
             tail.append(assignment + "\n")
     kept = [line for line in out if line is not None]
     if not text and header:
         kept = [(f"# {ln}" if ln else "#") + "\n" for ln in header.splitlines()]
-    if tail and kept and kept[-1].splitlines()[0] == kept[-1]:
+    if tail and kept and not kept[-1].endswith("\n"):
         kept[-1] += "\n"
     return "".join(kept + tail)

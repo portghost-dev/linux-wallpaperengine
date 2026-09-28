@@ -53,9 +53,13 @@ def add_entry(text: str, entry: str) -> str:
     return text + entry + "\n"
 
 
-def remove_entry(text: str, entry: str) -> str:
-    """The list without every line that reads `entry` once stripped. Every other line stays."""
-    return "".join(line for line in text.splitlines(keepends=True) if line.strip() != entry)
+def remove_entry(text: str, entry: str, cap: int | None = None) -> str:
+    """The list without every line that reads `entry` once stripped, or once stripped and cut to
+    `cap` characters, the length a reader shows. Every other line stays."""
+    def matches(line: str) -> bool:
+        s = line.strip()
+        return s == entry or (cap is not None and s[:cap] == entry)
+    return "".join(line for line in text.splitlines(keepends=True) if not matches(line))
 
 
 def _entries(text: str, name: str = "", r: dict[str, Any] | None = None) -> str:

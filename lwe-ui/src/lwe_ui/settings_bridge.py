@@ -598,7 +598,7 @@ class SettingsBridge(QObject):
     @Slot(str, result=bool)
     def removeException(self, app_id: str) -> bool:
         entry = str(app_id).strip()
-        if not self._write_exceptions(lambda text: rules.remove_entry(text, entry)):
+        if not self._write_exceptions(lambda text: rules.remove_entry(text, entry, 128)):
             return self._fail("Exceptions", "The exceptions file could not be written.")
         return True
 
@@ -650,7 +650,7 @@ class SettingsBridge(QObject):
     @Slot(str, result=bool)
     def removeAppEntry(self, name: str) -> bool:
         entry = str(name).strip()
-        if not self._write_app_list(lambda text: rules.remove_entry(text, entry)):
+        if not self._write_app_list(lambda text: rules.remove_entry(text, entry, 64)):
             return self._fail("Apps", "The app list file could not be written.")
         return True
 

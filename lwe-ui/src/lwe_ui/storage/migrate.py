@@ -54,6 +54,17 @@ def apply_tables(store: str, raw: dict[str, Any]) -> tuple[dict[str, Any], list[
     return out, actions
 
 
+def with_old_names(store: str, changes: dict[str, Any]) -> dict[str, Any]:
+    """`changes` with each unset (None) extended to every old name RENAMES gives its key in this
+    store, so a line stored under an old name cannot outlive the unset."""
+    out = dict(changes)
+    for old, entry in C.RENAMES.get(store, {}).items():
+        new = entry[0] if isinstance(entry, (tuple, list)) else entry
+        if new in changes and changes[new] is None:
+            out.setdefault(old, None)
+    return out
+
+
 def coerce(spec: dict, raw: Any, dense: bool) -> tuple[str, Any, str]:
     """What this build can do with one stored value against its spec: ("ok", text, "")
     verbatim, ("clamp", bound, "") for a number outside the range, ("snap", default, "")

@@ -13,7 +13,9 @@ Run: export PYTHONPATH=src && python3 tests/test_api_shownow.py
 from __future__ import annotations
 
 import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
+import atexit
 import os
+import shutil
 import sys
 import tempfile
 import types
@@ -27,6 +29,7 @@ if _SRC not in sys.path:
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 _BOOT_HOME = tempfile.mkdtemp(prefix="lwe-apishow-boot-")
+atexit.register(shutil.rmtree, _BOOT_HOME, True)
 for _k, _sub in (("HOME", ""), ("XDG_CONFIG_HOME", "c"), ("XDG_STATE_HOME", "s"), ("XDG_DATA_HOME", "d")):
     os.environ[_k] = os.path.join(_BOOT_HOME, _sub) if _sub else _BOOT_HOME
 
@@ -49,11 +52,13 @@ assert models.api_client is _API, "stub did not intercept models' api_client imp
 class ApiShowNowTest(unittest.TestCase):
     def setUp(self) -> None:
         self._home = tempfile.mkdtemp(prefix="lwe-apishow-")
+        self.addCleanup(shutil.rmtree, self._home, True)
         os.environ["HOME"] = self._home
         os.environ["XDG_CONFIG_HOME"] = os.path.join(self._home, "c")
         os.environ["XDG_STATE_HOME"] = os.path.join(self._home, "s")
         os.environ["XDG_DATA_HOME"] = os.path.join(self._home, "d")
         os.environ["XDG_RUNTIME_DIR"] = tempfile.mkdtemp(prefix="lwe-rt-")
+        self.addCleanup(shutil.rmtree, os.environ["XDG_RUNTIME_DIR"], True)
 
         self.api_show_calls: list[str] = []
         _API.available = lambda: False
