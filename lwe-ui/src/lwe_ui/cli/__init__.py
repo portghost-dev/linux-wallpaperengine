@@ -25,13 +25,16 @@ USAGE = 3
 PIPE_CLOSED = 141
 
 _JSON_FLAGS = ("-j", "--json")
+_CONTROLS = {code: "?" for code in (*range(0x20), 0x7F) if code != ord("\n")}
 _NO_BYTE = re.compile(r"[\ud800-\udc7f\udd00-\udfff]")
 
 
 def clean(text: str) -> str:
-    """The text as the engine's formatter writes it: its original bytes read again as UTF-8, each
-    invalid sequence one U+FFFD; a lone surrogate that stands for no byte is one U+FFFD as well."""
-    return _NO_BYTE.sub("\ufffd", text).encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+    """The text as the engine writes it: its original bytes read again as UTF-8, each invalid sequence
+    one U+FFFD (a lone surrogate that stands for no byte is one U+FFFD as well), then every control
+    character below U+0020 but the newline, and U+007F, as "?", as in the engine's status lines."""
+    text = _NO_BYTE.sub("\ufffd", text).encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+    return text.translate(_CONTROLS)
 
 
 class _Cleaned:

@@ -7,8 +7,9 @@ exits 3; a verb module found on the verbs path is run and its exit code returned
 declaring one verb are refused, naming both; the handoff folder becomes the working directory; --tray
 inside a handoff is a command word; -j and --json are exact tokens; a verb or verb module that raises
 prints one internal error line and exits 1, while a verb's sys.exit passes through; a word that is
-not UTF-8 prints with U+FFFD where the engine prints it, in errors and in a verb's output; a closed
-output pipe ends the command with 141 and nothing on stderr. A start without --lwe calls app.main
+not UTF-8 prints with U+FFFD where the engine prints it, in errors and in a verb's output; a control
+character in a verb's output prints as "?" in text, while -j keeps json.dumps' escapes; a closed output
+pipe ends the command with 141 and nothing on stderr. A start without --lwe calls app.main
 with sys.argv intact and imports nothing from lwe_ui.cli, also through the console entry that
 pyproject.toml names.
 
@@ -30,6 +31,7 @@ FIRST_LINE = (SRC.parent.parent / "VERSION").read_bytes().decode("utf-8").split(
 STAMP = FIRST_LINE.removeprefix("\ufeff").strip(" \t\n\v\f\r")
 
 PROBE = '''
+import json
 import os
 import sys
 from lwe_ui.cli.registry import Verb
@@ -51,7 +53,9 @@ def crash(ctx, args):
 
 
 def say(ctx, args):
-    print(" ".join(args), file=ctx.out)
+    text = " ".join(args)
+    print(json.dumps({"said": text}, ensure_ascii=False, separators=(",", ":")) if ctx.json else text,
+          file=ctx.out)
     return 0
 
 
@@ -329,6 +333,17 @@ class CliEntryTest(unittest.TestCase):
     def test_a_verb_that_calls_sys_exit_keeps_its_code(self) -> None:
         r = self._verb_bytes("leave")
         self.assertEqual((r.returncode, r.stdout, r.stderr), (5, b"", b""))
+
+    def test_control_characters_print_as_question_marks_and_json_keeps_its_escapes(self) -> None:
+        title = "A\x1b]52;c;QUJD\x07B\rC\x7fD\tE"
+        with self.subTest(mode="text"):
+            r = self._verb_bytes("say", title)
+            self.assertEqual((r.returncode, r.stdout, r.stderr), (0, b"A?]52;c;QUJD?B?C?D?E\n", b""))
+        with self.subTest(mode="-j"):
+            r = self._verb_bytes("say", title, "-j")
+            self.assertEqual((r.returncode, r.stderr), (0, b""))
+            self.assertNotRegex(r.stdout[:-1], rb"[\x00-\x1f\x7f]")
+            self.assertEqual(json.loads(r.stdout), {"said": "A\x1b]52;c;QUJD\x07B\rC?D\tE"})
 
     def test_a_closed_output_pipe_ends_the_command_quietly_with_141(self) -> None:
         for words in (["flood"], ["say", "short"]):
