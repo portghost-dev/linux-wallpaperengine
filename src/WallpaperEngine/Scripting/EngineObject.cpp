@@ -68,21 +68,13 @@ JSValue engine_get_daytime (JSContext* ctx, JSValueConst this_val, int argc, JSV
 JSValue engine_stop_interval (
     JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
 ) {
-    if (argc != 1) {
-	return JS_ThrowTypeError (ctx, "invalid arguments");
-    }
-
     const auto it = engineInstances.find (magic);
 
     if (it == engineInstances.end ()) {
 	return JS_ThrowTypeError (ctx, "invalid object");
     }
 
-    int id = 0;
-
-    JS_ToInt32 (ctx, &id, argv[0]);
-
-    it->second->clearInterval (id);
+    it->second->clearInterval (ScriptTimers::stopTarget (ctx, argc, argv, func_data));
 
     return JS_UNDEFINED;
 }
@@ -90,21 +82,13 @@ JSValue engine_stop_interval (
 JSValue engine_stop_timeout (
     JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv, int magic, JSValueConst* func_data
 ) {
-    if (argc != 1) {
-	return JS_ThrowTypeError (ctx, "invalid arguments");
-    }
-
     const auto it = engineInstances.find (magic);
 
     if (it == engineInstances.end ()) {
 	return JS_ThrowTypeError (ctx, "invalid object");
     }
 
-    int id = 0;
-
-    JS_ToInt32 (ctx, &id, argv[0]);
-
-    it->second->clearTimeout (id);
+    it->second->clearTimeout (ScriptTimers::stopTarget (ctx, argc, argv, func_data));
 
     return JS_UNDEFINED;
 }

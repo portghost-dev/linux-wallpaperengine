@@ -318,14 +318,20 @@ static void logJSException (JSContext* ctx, const char* context) {
 	if (str) {
 	    sLog.error ("ScriptEngine [", context, "]: ", str);
 	    JS_FreeCString (ctx, str);
+	} else {
+	    JS_FreeValue (ctx, JS_GetException (ctx));
 	}
 	if (JS_IsObject (exc)) {
 	    JSValue stack = JS_GetPropertyStr (ctx, exc, "stack");
-	    if (!JS_IsUndefined (stack) && !JS_IsException (stack)) {
+	    if (JS_IsException (stack)) {
+		JS_FreeValue (ctx, JS_GetException (ctx));
+	    } else if (!JS_IsUndefined (stack)) {
 		const char* stackStr = JS_ToCString (ctx, stack);
 		if (stackStr) {
 		    sLog.error ("ScriptEngine [", context, "] stack: ", stackStr);
 		    JS_FreeCString (ctx, stackStr);
+		} else {
+		    JS_FreeValue (ctx, JS_GetException (ctx));
 		}
 	    }
 	    JS_FreeValue (ctx, stack);

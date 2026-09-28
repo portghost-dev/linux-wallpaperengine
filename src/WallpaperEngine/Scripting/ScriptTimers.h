@@ -19,6 +19,8 @@ public:
     void clearInterval (uint32_t id);
     void tick ();
 
+    static uint32_t stopTarget (JSContext* context, int argc, JSValueConst* argv, JSValueConst* data);
+
 private:
     struct Timeout {
 	JSValue callback;

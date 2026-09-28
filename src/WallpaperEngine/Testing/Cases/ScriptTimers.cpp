@@ -4,8 +4,10 @@
 #include <cstring>
 #include <map>
 #include <memory>
+#include <sstream>
 #include <string>
 
+#include "WallpaperEngine/Logging/Log.h"
 #include "WallpaperEngine/Scripting/ScriptTimers.h"
 
 using WallpaperEngine::Scripting::ScriptTimers;
@@ -112,6 +114,47 @@ JSValue clearInterval (JSContext* ctx, JSValueConst, int, JSValueConst* argv) {
     return JS_UNDEFINED;
 }
 
+JSValue stopTimer (JSContext* ctx, JSValueConst, int argc, JSValueConst* argv, int interval, JSValueConst* data) {
+    auto& fixture = fixtureOf (ctx);
+    const uint32_t id = ScriptTimers::stopTarget (ctx, argc, argv, data);
+
+    const std::string previous = fixture.phase;
+    fixture.phase = "clear";
+    if (interval) {
+	fixture.timers->clearInterval (id);
+    } else {
+	fixture.timers->clearTimeout (id);
+    }
+    fixture.phase = previous;
+
+    return JS_UNDEFINED;
+}
+
+JSValue engineTimer (JSContext* ctx, JSValueConst, int, JSValueConst* argv, int interval) {
+    auto& fixture = fixtureOf (ctx);
+    int delay = 0;
+    JS_ToInt32 (ctx, &delay, argv[1]);
+
+    const uint32_t id = interval ? fixture.timers->addInterval (argv[0], static_cast<uint64_t> (delay))
+				 : fixture.timers->addTimeout (argv[0], static_cast<uint64_t> (delay));
+    JSValue data[] = { JS_NewUint32 (ctx, id) };
+
+    return JS_NewCFunctionData (ctx, stopTimer, 2, interval, 1, data);
+}
+
+size_t linesWith (const std::string& lines, const std::string& text) {
+    size_t found = 0;
+    std::istringstream in (lines);
+
+    for (std::string line; std::getline (in, line);) {
+	if (line.find (text) != std::string::npos) {
+	    found++;
+	}
+    }
+
+    return found;
+}
+
 Fixture::Fixture () {
     runtime = JS_NewRuntime ();
     JS_SetRuntimeOpaque (runtime, this);
@@ -128,6 +171,16 @@ Fixture::Fixture () {
     JS_SetPropertyStr (context, global, "setInterval", JS_NewCFunction (context, setInterval, "setInterval", 2));
     JS_SetPropertyStr (context, global, "clearTimeout", JS_NewCFunction (context, clearTimeout, "clearTimeout", 1));
     JS_SetPropertyStr (context, global, "clearInterval", JS_NewCFunction (context, clearInterval, "clearInterval", 1));
+    const JSValue engine = JS_NewObject (context);
+    JS_SetPropertyStr (
+	context, engine, "setTimeout",
+	JS_NewCFunctionMagic (context, engineTimer, "setTimeout", 2, JS_CFUNC_generic_magic, 0)
+    );
+    JS_SetPropertyStr (
+	context, engine, "setInterval",
+	JS_NewCFunctionMagic (context, engineTimer, "setInterval", 2, JS_CFUNC_generic_magic, 1)
+    );
+    JS_SetPropertyStr (context, global, "engine", engine);
     JS_FreeValue (context, global);
 
     timers = std::make_unique<ScriptTimers> (context);
@@ -299,4 +352,134 @@ TEST_CASE ("Script timers stay sound when callbacks clear timers during tick") {
 	    CHECK (f.freedCount (tag) == 1);
 	}
     }
+}
+
+TEST_CASE ("A stop function cancels the timer it was returned for whatever it is called with") {
+    Fixture f;
+
+    f.run (
+	R"((() => {
+	    const a = sentinel (1);
+	    globalThis.stopA = engine.setInterval (() => ran (a), 0);
+	    const b = sentinel (2);
+	    globalThis.stopB = engine.setInterval (() => ran (b), 0);
+	    const c = sentinel (3);
+	    globalThis.stopC = engine.setTimeout (() => ran (c), 0);
+	}) ();)",
+	"script"
+    );
+
+    REQUIRE (f.freed.empty ());
+
+    f.run ("stopC ();", "script");
+    f.tick ();
+    f.run ("stopA ();", "script");
+    f.tick ();
+    f.run ("stopB (1);", "script");
+    f.tick ();
+
+    CHECK (f.runCount (3) == 0);
+    CHECK (f.freedPhase (3) == "clear");
+    CHECK (f.runCount (1) == 1);
+    CHECK (f.freedPhase (1) == "clear");
+    CHECK (f.runCount (2) == 2);
+    CHECK (f.freedPhase (2) == "clear");
+
+    JSValue bound = JS_NewUint32 (f.context, 5);
+    JSValue other = JS_NewUint32 (f.context, 9);
+
+    CHECK (ScriptTimers::stopTarget (f.context, 0, nullptr, &bound) == 5);
+    CHECK (ScriptTimers::stopTarget (f.context, 1, &other, &bound) == 5);
+}
+
+TEST_CASE ("A thrown value whose text or stack throws leaves no exception pending") {
+    Fixture f;
+    int sentinels = 0;
+
+    SECTION ("its text and its stack both throw strings") {
+	f.run (
+	    "setTimeout (() => { throw { toString () { throw \"s\"; }, get stack () { throw \"t\"; } }; }, 0);",
+	    "script"
+	);
+    }
+
+    SECTION ("its text and its stack both throw objects") {
+	f.run (
+	    R"(setTimeout (() => {
+		throw { s: sentinel (1), toString () { throw { s: sentinel (2) }; }, get stack () { throw { s: sentinel (3) }; } };
+	    }, 0);)",
+	    "script"
+	);
+	sentinels = 3;
+    }
+
+    SECTION ("its text throws and its stack reads") {
+	f.run (
+	    R"(setTimeout (() => { throw { s: sentinel (1), toString () { throw { s: sentinel (2) }; }, stack: "plain" }; }, 0);)",
+	    "script"
+	);
+	sentinels = 2;
+    }
+
+    SECTION ("its stack is a value whose text throws") {
+	f.run (
+	    R"(setTimeout (() => { throw { s: sentinel (1), stack: { toString () { throw { s: sentinel (2) }; } } }; }, 0);)",
+	    "script"
+	);
+	sentinels = 2;
+    }
+
+    f.tick ();
+
+    CHECK_FALSE (JS_HasException (f.context));
+
+    for (int tag = 1; tag <= sentinels; tag++) {
+	CHECK (f.freedCount (tag) == 1);
+    }
+}
+
+TEST_CASE ("An interval that clears itself and starts another before throwing is reported once") {
+    auto* errors = new std::ostringstream ();
+    sLog.addError (errors);
+    Fixture f;
+
+    f.run (
+	R"((() => {
+	    const s = sentinel (1);
+	    const next = () => { throw new Error ("again"); };
+	    const id = setInterval (() => { clearInterval (id); setInterval (next, 0); ran (s); throw new Error ("boom"); }, 0);
+	}) ();)",
+	"script"
+    );
+
+    for (int i = 0; i < 7; i++) {
+	f.tick ();
+    }
+
+    const std::string lines = errors->str ();
+    errors->setstate (std::ios::badbit);
+
+    CHECK (f.runCount (1) == 1);
+    CHECK (f.freedCount (1) == 1);
+    CHECK_FALSE (JS_HasException (f.context));
+    CHECK (linesWith (lines, "[engine.setInterval]: Error: boom") == 1);
+    CHECK (linesWith (lines, "[engine.setInterval]: Error: again") == 3);
+}
+
+TEST_CASE ("A throwing interval is reported three times and then no more") {
+    auto* errors = new std::ostringstream ();
+    sLog.addError (errors);
+    Fixture f;
+
+    f.run ("setInterval (() => { throw new Error (\"boom\"); }, 0);", "script");
+
+    for (int i = 0; i < 6; i++) {
+	f.tick ();
+    }
+
+    const std::string lines = errors->str ();
+    errors->setstate (std::ios::badbit);
+
+    CHECK (linesWith (lines, "[engine.setInterval]: Error: boom") == 3);
+    CHECK_FALSE (JS_HasException (f.context));
 }

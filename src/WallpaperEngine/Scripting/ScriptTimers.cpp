@@ -67,6 +67,14 @@ void ScriptTimers::clearTimeout (uint32_t id) {
     JS_FreeValue (this->m_context, callback);
 }
 
+uint32_t ScriptTimers::stopTarget (JSContext* context, int, JSValueConst*, JSValueConst* data) {
+    uint32_t id = 0;
+
+    JS_ToUint32 (context, &id, data[0]);
+
+    return id;
+}
+
 bool ScriptTimers::runTimerCallback (JSValueConst callback, const bool report, const char* context) {
     const JSValue result = JS_Call (this->m_context, callback, JS_NULL, 0, nullptr);
     const bool threw = JS_IsException (result);
