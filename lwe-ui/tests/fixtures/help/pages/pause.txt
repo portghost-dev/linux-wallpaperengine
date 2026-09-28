@@ -1,0 +1,4 @@
+pause [on|off|toggle]
+
+Pauses the playlist timer; pause off resumes it; toggle flips it, for a
+keybind. The animation keeps moving; speed 0 freezes it.

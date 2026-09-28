@@ -1,0 +1,4 @@
+wallpaper <wallpaper> hide <object id>
+wallpaper <wallpaper> unhide <object id>
+
+Hides or shows one part of the wallpaper, by the id objects prints.

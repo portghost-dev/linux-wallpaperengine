@@ -1,0 +1,7 @@
+volume <0-128|+N|-N>
+
+Wallpaper sound.
+
+Values: 0 to 128, +N, -N. Default 15. Applies: now.
+
+One wallpaper:  wallpaper <wallpaper> volume <value>

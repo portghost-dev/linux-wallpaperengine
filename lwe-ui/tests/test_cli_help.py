@@ -1,5 +1,7 @@
 """lwe help: each screen through cli.main in this process, byte for byte against the fixture screens
-in tests/fixtures/help, and help --debug through a fake engine named by ENGINE_BIN.
+in tests/fixtures/help (help resclamp still prints its fixed page), a page made from every command, setting
+and per-wallpaper row, three of them pinned in tests/fixtures/help/pages, and help --debug through a
+fake engine named by ENGINE_BIN.
 
 The environment is rebuilt from nothing before any lwe_ui import: HOME, the XDG folders, the engine
 socket and PATH all point into a scratch folder, so the fake engine that help --debug starts inherits
@@ -116,6 +118,44 @@ class CliHelpTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(out, "")
         self.assertEqual(err, "lwe help --debug: the engine did not print its switch list\n")
+
+    def test_every_row_gives_a_page_ending_in_one_newline_within_100_columns(self) -> None:
+        from lwe_ui.cli import help_pages, vocabulary
+        rows = ([(r["name"], help_pages.command_page, r) for r in vocabulary.COMMANDS]
+                + [(r["name"], help_pages.setting_page, r) for r in vocabulary.SETTINGS]
+                + [(r["name"], help_pages.wallpaper_page, r) for r in vocabulary.PER_WALLPAPER])
+        self.assertEqual(len(rows), 100)
+        for name, make, row in rows:
+            with self.subTest(row=name):
+                page = make(row)
+                self.assertTrue(page.endswith("\n") and not page.endswith("\n\n"))
+                self.assertLessEqual(max(len(line) for line in page.splitlines()), 100)
+
+    def test_a_topic_resolves_as_a_command_then_a_setting_then_a_wallpaper_word(self) -> None:
+        from lwe_ui.cli import help_pages, vocabulary
+        fixed = {"schedule": "schedule", "resclamp": "resclamp"}
+        topics = [r["name"] for r in vocabulary.COMMANDS if not r["name"].startswith("help")]
+        topics += [r["name"] for r in vocabulary.SETTINGS]
+        topics += [w for r in vocabulary.PER_WALLPAPER for w in r["name"].split(" / ")]
+        for topic in topics:
+            with self.subTest(topic=topic):
+                code, out, err = self._help(*topic.split(" "))
+                self.assertEqual((code, err), (0, ""))
+                if topic in fixed:
+                    self.assertEqual(out.encode("utf-8"), (FIXTURES / f"{fixed[topic]}.txt").read_bytes())
+                else:
+                    self.assertEqual(out, help_pages.page(topic))
+        playlist = [r for r in vocabulary.COMMANDS if r["name"] == "playlist"][0]
+        fullscreen = [r for r in vocabulary.SETTINGS if r["name"] == "fullscreen"][0]
+        self.assertEqual(self._help("playlist")[1], help_pages.command_page(playlist))
+        self.assertEqual(self._help("fullscreen")[1], help_pages.setting_page(fullscreen))
+
+    def test_three_generated_pages_are_pinned(self) -> None:
+        for topic in ("pause", "volume", "hide"):
+            with self.subTest(topic=topic):
+                code, out, err = self._help(topic)
+                self.assertEqual((code, err), (0, ""))
+                self.assertEqual(out.encode("utf-8"), (FIXTURES / "pages" / f"{topic}.txt").read_bytes())
 
     def test_an_unknown_topic_exits_3(self) -> None:
         code, out, err = self._help("nosuchtopic")

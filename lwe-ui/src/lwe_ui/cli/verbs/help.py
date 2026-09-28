@@ -1,9 +1,10 @@
-"""lwe help: the fixed help screens, and the engine's own switch list for help --debug."""
+"""lwe help: the fixed help screens, a page made from the vocabulary rows for every other command,
+setting and per-wallpaper word, and the engine's own switch list for help --debug."""
 from __future__ import annotations
 
 import subprocess
 
-from .. import DONE, REFUSED, USAGE, Context, help_text
+from .. import DONE, REFUSED, USAGE, Context, help_pages, help_text
 from ..registry import Verb
 
 _PAGES = {
@@ -46,7 +47,7 @@ def run(ctx: Context, args: list[str]) -> int:
     topic = " ".join(args)
     if topic == "--debug":
         return _debug(ctx)
-    page = _PAGES.get(topic)
+    page = _PAGES.get(topic) or help_pages.page(topic)
     if page is None:
         ctx.error(f"lwe help: no page for {topic}; lwe help lists every command and lwe help --all every setting")
         return USAGE
