@@ -14,15 +14,18 @@ the next drain re-shows. A refused wallpaper write sends nothing. A slider previ
 while sync is held elsewhere. The editor's global dial is saved before its set-tuning. A burst that
 spans another change's pending record bundles it before its own push. A burst goes out by itself
 600 ms after its last edit, a later edit restarting the delay. A live change or a first-sight bundle
-inside a burst's debounce leaves the re-show to the burst, which clears the marker. A backup restore
-records BUNDLE and CURRENT before its store writes. The engine is an api_client recorder with a
-scripted status; the child process gets an environment built from scratch.
+inside a burst's debounce leaves the re-show to the burst, which clears the marker, and so do a
+backup import and the readiness bundle of a service start. A backup restore records BUNDLE and
+CURRENT before its store writes and holds the marker until the last one ends, so a drain admitted
+before the first store write cannot clear it. The engine is an api_client recorder with a scripted
+status; the child process gets an environment built from scratch.
 
 Run: PYTHONPATH=src python3 tests/test_bridge_sync.py
 """
 import _sandbox  # noqa: F401  (pins the engine socket before any lwe_ui import)
 import contextlib
 import copy
+import dataclasses
 import os
 import shutil
 import subprocess
@@ -48,7 +51,7 @@ _APP = QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
 
 from lwe_ui import deck_popup, editor, models, settings_bridge, version  # noqa: E402
 from lwe_ui.engine import daemon_unit, marker, push  # noqa: E402
-from lwe_ui.storage import backup, lock, paths, playlists, settings, wp  # noqa: E402
+from lwe_ui.storage import backup, lock, paths, playlists, registry, settings, wp  # noqa: E402
 
 OK = {"id": 1, "ok": True, "status": "done", "result": {}}
 REFUSED = {"id": 1, "ok": False, "error": "no"}
@@ -301,7 +304,7 @@ class BridgeSyncTest(unittest.TestCase):
         steps: list = []
         receipt = {"counts": {}, "followups": [{"kind": "engine-restart"}]}
 
-        def sync_all(run, classes=("BUNDLE",), wait_s=2.0):
+        def sync_all(run, classes=("BUNDLE",), wait_s=2.0, defer_current=False):
             steps.append(("sync_all", run, tuple(classes)))
             return push.Outcome("applied")
         with mock.patch.object(backup, "preflight", lambda path: {}), \
@@ -483,6 +486,80 @@ class BridgeSyncTest(unittest.TestCase):
         self.assertEqual((settings.load()["ENGINE_FPS"], wp.load_set("111")["SCALING"], rec.verbs()),
                          (90, "fill", []))
         self.assertEqual(marker.read()["classes"], ["BUNDLE", "CURRENT"])
+
+    def _archive(self) -> Path:
+        """A backup holding ENGINE_FPS 90 and wallpaper 111 at SCALING fill, with the stores then at 30
+        and fit."""
+        wp.update_set("111", {"SCALING": "fill"})
+        settings.update({"ENGINE_FPS": "90"})
+        archive = self.home / "review.lwebackup"
+        self.assertFalse(backup.export_to(archive)["errors"])
+        wp.update_set("111", {"SCALING": "fit"})
+        settings.update({"ENGINE_FPS": "30"})
+        return archive
+
+    def test_restore_can_be_cleared_before_writes(self) -> None:
+        archive = self._archive()
+        original = registry.STORES
+        drained: list = []
+
+        def before_first_store(plan, receipt):
+            def drain() -> None:
+                try:
+                    drained.append(push.sync_all("command"))
+                except lock.StoreBusy as exc:
+                    drained.append(exc)
+            worker = threading.Thread(target=drain)
+            worker.start()
+            worker.join(5)
+            self.assertFalse(worker.is_alive(), "drain stuck")
+            return original[0].apply(plan, receipt)
+
+        first = dataclasses.replace(original[0], apply=before_first_store)
+        with self.engine(status()) as rec, mock.patch.object(registry, "STORES", (first, *original[1:])):
+            receipt = backup.apply(backup.preflight(archive))
+        self.assertFalse(receipt.get("refused"), receipt)
+        self.assertEqual((settings.load()["ENGINE_FPS"], wp.load_set("111")["SCALING"]), (90, "fill"))
+        self.assertEqual([args for verb, args, _k in rec.calls if verb == "set_fps"], [])
+        self.assertEqual(marker.read()["classes"], ["BUNDLE", "CURRENT"],
+                         "restore must remain recoverable if caller dies before its push")
+
+    def test_import_during_burst(self) -> None:
+        archive = self._archive()
+        for name in ("editor", "deck"):
+            with self.subTest(door=name):
+                bridge = (editor.EditorBridge(self.backend) if name == "editor"
+                          else deck_popup.DeckPopupBridge(self.backend))
+                if name == "editor":
+                    bridge.open("111")
+                    build = bridge.setScalingValue
+                else:
+                    bridge.syncCurrent("111")
+                    build = bridge.setScaling
+                page = settings_bridge.SettingsBridge(self.backend)
+                with self.engine(status()) as rec:
+                    self.assertTrue(build("stretch"))
+                    self.assertTrue(self.backend.delivery_due())
+                    self.assertTrue(page.importBackup(str(archive)))
+                    before = rec.verbs().count("show")
+                    bridge._reshow.stop()
+                    bridge._fire_reshow()
+                self.assertEqual((before, rec.verbs().count("show")), (0, 1))
+                self.assertEqual(marker.read()["classes"], [])
+
+    def test_ready_tick_during_burst(self) -> None:
+        bridge = editor.EditorBridge(self.backend)
+        bridge.open("111")
+        with self.engine(status()) as rec:
+            self.backend._bundle_when_ready(4000)
+            self.assertTrue(bridge.setScalingValue("fill"))
+            self.assertTrue(self.backend.delivery_due())
+            self.backend._ready_tick()
+            before = rec.verbs().count("show")
+            bridge._reshow.stop()
+            bridge._fire_reshow()
+        self.assertEqual((before, rec.verbs().count("show")), (0, 1))
+        self.assertEqual(marker.read()["classes"], [])
 
     def test_the_editors_global_dial_is_saved_before_its_set_tuning(self) -> None:
         ed = editor.EditorBridge(self.backend)

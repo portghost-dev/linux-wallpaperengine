@@ -443,7 +443,7 @@ class SettingsBridge(QObject):
             self._backend.settingsChanged.emit()
             self._backend.playlistsChanged.emit()
             self._backend.themeRefreshRequested.emit()
-            push.sync_all("window", ("BUNDLE", "CURRENT"))
+            push.sync_all("window", ("BUNDLE", "CURRENT"), defer_current=self._backend.delivery_due())
         except Exception:
             pass
         if any(f["kind"] == "engine-restart" for f in r["followups"]):

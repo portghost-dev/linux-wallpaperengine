@@ -2,9 +2,10 @@
 membership, shared by the window and the commands. Plain Python; no Qt.
 
 approve and untrash write one store after the other, each under its own lock. trash and the two
-membership changes are each one change through the change runner: the status read, the store locks,
-the sync marker held across the store write, then the push of every engine-held playlist whose
-members changed. They return the per-item results and the change's push.Outcome.
+membership changes are each one change through the change runner: the status read, then, under the
+playlists store lock, the playlists the change will alter decided and the sync marker set for them
+and held across the store write, then the push of every engine-held playlist whose members
+changed. They return the per-item results and the change's push.Outcome.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from typing import Any
 
 from ..engine import push
 from ..engine.resolve import _wallpapers_dir
-from ..storage import importer, meta, paths, playlists, records, tags
+from ..storage import importer, lock, meta, paths, playlists, records, tags
 
 
 def approve(wid: str, title: str, event: dict | None = None) -> None:
@@ -37,22 +38,23 @@ def _name(slug: str) -> str:
     return str(playlists.load(slug).get("NAME") or slug)
 
 
-def _members_change(locks: Iterable[str], write: Callable[[list[str]], Any], expected: list[str], run: str,
-                    status: tuple[str, dict[str, Any] | None] | None) -> push.Outcome:
-    """One change whose write reports the playlists it changed. The rows first given are the
-    playlists a read before the locks expected to change; the push names the ones that did. A write
-    that changed playlists no read expected, so no marker was set, is followed by sync_all."""
+def _members_change(locks: Iterable[str], write: Callable[[list[str]], Any], affected: Callable[[], list[str]],
+                    run: str, status: tuple[str, dict[str, Any] | None] | None) -> push.Outcome:
+    """One change whose write reports the playlists it changed. Status is read before any lock;
+    then the playlists store lock is held from affected(), which reads the playlists the write
+    will change, through the write, so the change's rows name every one of them and the sync
+    marker is set before any playlist changes. The push names the ones that did."""
+    first = push.read_status() if status is None else status
     changed: list[str] = []
-    rows = [("members", slug) for slug in expected] or [("none", None)]
-    ticket = push.save_change(locks, lambda: write(changed), rows, run=run, status=status)
+    with lock.held("playlists"):
+        rows = [("members", slug) for slug in affected()] or [("none", None)]
+        ticket = push.save_change(locks, lambda: write(changed), rows, run=run, status=first)
     done = tuple(("members", slug) for slug in dict.fromkeys(changed))
-    if ticket.generation is None:
-        return push.sync_all(run) if done else push.deliver(ticket)
     return push.deliver(dataclasses.replace(ticket, rows=done or (("none", None),)))
 
 
 def _holding(wids: Iterable[str]) -> list[str]:
-    """The playlists whose members hold any of wids, read without a lock."""
+    """The playlists whose members hold any of wids."""
     wanted = set(wids)
     return [row["slug"] for row in playlists.list_playlists() if wanted & set(row["MEMBERS"].split())]
 
@@ -115,7 +117,7 @@ def trash(items: Iterable[tuple[str, str]], comment: str | None = None, record: 
             meta.modify(wid, lambda entry: {"depMissing": False} if entry.get("depMissing") else None)
 
     outcome = _members_change(("playlists", "tags", "meta", "records"), write,
-                              _holding(wid for wid, _title in items), run, status)
+                              lambda: _holding(wid for wid, _title in items), run, status)
     for r in results.values():
         r["copy_deletable"] = copy_deletable(r["id"])
         r["dependents"] = dependents(r["id"])
@@ -163,8 +165,9 @@ def add_to_playlists(slugs: Iterable[str], wids: Iterable[str], run: str = "wind
             results.extend({"slug": slug, "name": name, "id": w, "result": "appended" if w in added else "already"}
                            for w in wids)
 
-    expected = [s for s in slugs if not set(wids) <= set(playlists.members(s))]
-    return results, _members_change(("playlists",), write, expected, run, status)
+    return results, _members_change(("playlists",), write,
+                                    lambda: [s for s in slugs if not set(wids) <= set(playlists.members(s))],
+                                    run, status)
 
 
 def remove_from_playlists(slugs: Iterable[str], wids: Iterable[str], run: str = "window",
@@ -184,5 +187,6 @@ def remove_from_playlists(slugs: Iterable[str], wids: Iterable[str], run: str = 
             results.extend({"slug": slug, "name": name, "id": w, "result": "removed" if w in held else "absent"}
                            for w in wids)
 
-    expected = [s for s in slugs if set(wids) & set(playlists.members(s))]
-    return results, _members_change(("playlists",), write, expected, run, status)
+    return results, _members_change(("playlists",), write,
+                                    lambda: [s for s in slugs if set(wids) & set(playlists.members(s))],
+                                    run, status)

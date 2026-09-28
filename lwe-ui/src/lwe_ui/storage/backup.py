@@ -20,6 +20,7 @@ left is a file that is not an LWE backup at all.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime
 import fcntl
 import io
@@ -30,7 +31,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
-from . import foreign, paths, registry, settings, tags, themes
+from . import foreign, meta, paths, registry, settings, tags, themes
+from . import lock as store_lock
 
 FORMAT = 1
 EXTENSION = ".lwebackup"
@@ -227,10 +229,13 @@ def snapshot(r: dict[str, Any]) -> bool:
 
 def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
     """Write a preflight's plan through this build's stores, after a snapshot of what is
-    there now and after the sync marker records BUNDLE and CURRENT with a raised generation,
-    so the engine side is owed before any store changes. Returns the receipt with the plan
-    removed and any write failure added to errors; the receipt is refused only when nothing
-    was written."""
+    there now. The locks of the stores it writes (each Store's name is its lock's) are taken
+    in rank order, then the sync marker records BUNDLE and CURRENT with a raised generation and
+    stays held until the last store write ends, so the engine side is owed before any store
+    changes and no clearer can clear it first; the marker is released before the store locks.
+    A busy store lock, or a marker that cannot be set, refuses the import with nothing written.
+    Returns the receipt with the plan removed and any write failure added to errors; the
+    receipt is refused only when nothing was written."""
     r = dict(plan_receipt)
     plan = r.pop("plan", None) or {}
     if r.get("refused"):
@@ -247,21 +252,29 @@ def apply(plan_receipt: dict[str, Any]) -> dict[str, Any]:
         if not snapshot(r):
             return r
         from ..engine import marker
-        try:
-            with marker.writing(("BUNDLE", "CURRENT")):
-                pass
-        except OSError as exc:
-            r["errors"].append({"file": "sync-pending", "reason": f"The sync marker could not be written: {exc}"})
-            r["refused"] = True
-            return r
-        written = 0
-        for st in registry.STORES:
-            if not st.apply(plan, r):
-                if written == 0:
-                    r["refused"] = True
+        with contextlib.ExitStack() as held:
+            try:
+                for name in sorted({"foreign", *(st.name for st in registry.STORES)}, key=store_lock._ORDER.index):
+                    held.enter_context(tags.held() if name == "tags" else meta.held() if name == "meta"
+                                       else store_lock.held(name))
+            except store_lock.StoreBusy as exc:
+                r["errors"].append({"file": "restore", "reason": str(exc)})
+                r["refused"] = True
                 return r
-            written += 1
-        foreign.apply_plan(plan, r)
+            try:
+                held.enter_context(marker.writing(("BUNDLE", "CURRENT")))
+            except OSError as exc:
+                r["errors"].append({"file": "sync-pending", "reason": f"The sync marker could not be written: {exc}"})
+                r["refused"] = True
+                return r
+            written = 0
+            for st in registry.STORES:
+                if not st.apply(plan, r):
+                    if written == 0:
+                        r["refused"] = True
+                    return r
+                written += 1
+            foreign.apply_plan(plan, r)
     finally:
         lock.close()
     return r

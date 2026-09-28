@@ -5,8 +5,9 @@ the id bad and takes it out of every playlist that holds it: a (active) and b (s
 it. It clears the missing-base mark, and an id already bad is left alone. The tail purges only the
 cache rows the id owns, removes LWE's copy, never follows a symlink at the library slot and leaves a
 reference import's Steam folder; the dependents of a base are counted. The recorder sees one change
-naming exactly the changed playlists. A playlist changed between the read and the lock is re-read
-inside it, and a change no read expected is followed by sync_all. The membership changes append the
+naming exactly the changed playlists. A playlist changed after the read is re-read inside the write,
+and an add from another thread made before trash's write waits for trash's playlists lock, so no
+playlist membership is written outside a marker hold. The membership changes append the
 missing ids at the end in argument order, never touch another playlist, and take out only present
 ids. The window's trash (WorkshopBridge.trashItem through an offscreen Backend) and actions.trash
 plus trash_tail leave identical stores, the window's trash goes through actions.trash, its outcome
@@ -19,6 +20,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -69,14 +71,17 @@ def _state(wid: str) -> str | None:
 
 
 class Recorder:
-    """The change runner's entry as actions calls it: save_change runs for real (the store locks, the
-    marker and the write) and is recorded; deliver and sync_all record their calls and answer
-    applied, sending nothing."""
+    """The change runner's entry as actions calls it: read_status is the real one, save_change
+    runs for real (the store locks, the marker and the write) and is recorded; deliver and sync_all record
+    their calls and answer applied, sending nothing."""
 
     def __init__(self) -> None:
         self.changes: list[tuple] = []
         self.delivered: list[tuple] = []
         self.synced: list[str] = []
+
+    def read_status(self):
+        return push.read_status()
 
     def save_change(self, locks, write, rows, **kwargs):
         self.changes.append((tuple(locks), list(rows), kwargs))
@@ -171,16 +176,31 @@ class ChainTest(unittest.TestCase):
         self.assertEqual(self.rec.changes[0][1], [("members", "a"), ("members", "b")])
         self.assertEqual(self.rec.delivered, [(("members", "a"), ("members", "b"), ("members", "c"))])
 
-    def test_a_change_no_read_expected_is_followed_by_sync_all(self) -> None:
+    def test_a_concurrent_add_before_trashs_write_makes_no_write_without_intent(self) -> None:
+        holding, modify = actions._holding, playlists.modify
+        outside: list[str] = []
+        adders: list[threading.Thread] = []
+
+        def watched(slug, fn):
+            changes = modify(slug, fn)
+            if changes and "marker" not in lock._holding():
+                outside.append(slug)
+            return changes
+
         def raced(wids):
-            playlists.update("c", {"MEMBERS": "444 999"})
-            return []
-        with mock.patch.object(actions, "_holding", raced):
-            results, outcome = actions.trash([("999", "Zulu")], run="command")
-        self.assertEqual((results[0]["left"], outcome), (["Other"], push.Outcome("applied")))
-        self.assertEqual((self.rec.changes[0][1], self.rec.delivered, self.rec.synced),
-                         ([("none", None)], [], ["command"]))
-        self.assertEqual(playlists.members("c"), ["444"])
+            found = holding(wids)
+            adder = threading.Thread(target=actions.add_to_playlists, args=(["c"], ["999"]),
+                                     kwargs={"run": "command"})
+            adders.append(adder)
+            adder.start()
+            adder.join(0.5)
+            return found
+        with mock.patch.object(actions, "_holding", raced), mock.patch.object(playlists, "modify", watched):
+            actions.trash([("999", "Zulu")], run="command")
+            adders[0].join(10)
+        self.assertFalse(adders[0].is_alive())
+        self.assertEqual(outside, [], "a playlist membership was written with no marker held")
+        self.assertEqual(self.rec.synced, [])
 
     def test_an_id_in_no_playlist_is_a_change_with_no_engine_side(self) -> None:
         results, _outcome = actions.trash([("999", "Zulu")])

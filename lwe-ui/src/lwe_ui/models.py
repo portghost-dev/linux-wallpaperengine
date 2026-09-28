@@ -832,7 +832,7 @@ class Backend(QObject):
         if cls == "ok" and status.get("pid") != self._ready_old_pid:
             self._ready_timer.stop()
             try:
-                self._note(push.sync_all("window"), schedule=True)
+                self._note(push.sync_all("window", defer_current=self.delivery_due()), schedule=True)
             except OSError:
                 pass
         elif monotonic() >= self._ready_deadline:
