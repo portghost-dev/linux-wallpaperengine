@@ -7,6 +7,7 @@ happened and who did it, and never predicts or scolds.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 from . import paths, records, tags, tombstones
@@ -115,6 +116,9 @@ def purge_and_ungate(wid: str) -> bool:
     suppressed and can re-import. Wipes BOTH the suppression and the audit trail (the confirm
     must say so). Returns True if a record file was removed."""
     removed = records.purge(wid)
+    if not removed:
+        logging.getLogger(__name__).warning("record for %s not purged; its tags row is kept", wid)
+        return removed
     try:
         tags.remove(wid)
     except Exception:

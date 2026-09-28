@@ -634,6 +634,50 @@ class StoreLockTest(unittest.TestCase):
         backend._follow_engine_playlist("night")
         self.assertEqual(settings.load()["ACTIVE_PLAYLIST"], "night", "a later poll adopts it")
 
+    def test_next_and_prev_step_while_the_settings_store_is_busy(self) -> None:
+        from lwe_ui import api_client, models
+        backend = models.Backend()
+        settings.update({"ROTATION_ENABLED": False})
+        steps: list[str] = []
+        with mock.patch.object(api_client, "next_wallpaper", lambda: steps.append("next") or {"ok": True}), \
+                mock.patch.object(api_client, "prev_wallpaper", lambda: steps.append("prev") or {"ok": True}), \
+                mock.patch.object(lock, "LOCK_WAIT_S", 0.2), self._held_elsewhere("settings"), \
+                self.assertLogs("lwe_ui", level="WARNING") as logged:
+            self.assertTrue(backend.rotateNext())
+            self.assertTrue(backend.rotatePrev())
+        self.assertEqual(steps, ["next", "prev"], "a busy settings store must not block the step")
+        self.assertEqual(len(logged.records), 2)
+        for record in logged.records:
+            self.assertIn("settings.lock", record.getMessage())
+        self.assertFalse(settings.load()["ROTATION_ENABLED"], "the busy resume saved nothing")
+
+    def test_a_purge_that_cannot_take_the_records_lock_ungates_nothing(self) -> None:
+        from lwe_ui.storage import records, records_view, tags
+        records.append("111", {"action": "deleted"})
+        tags.set_state("111", "t", "bad")
+        with mock.patch.object(lock, "LOCK_WAIT_S", 0.2), self._held_elsewhere("records"), \
+                self.assertLogs("lwe_ui", level="WARNING") as logged:
+            self.assertFalse(records_view.purge_and_ungate("111"))
+            self.assertIn("111", tags.known_ids(), "a purge that removed no record must keep the tags row")
+        self.assertEqual(len(logged.records), 1)
+        self.assertTrue(paths.record_file("111").exists())
+
+    def test_the_rotation_setters_log_a_busy_settings_store(self) -> None:
+        from lwe_ui import models
+        backend = models.Backend()
+        keys = ("ORDER", "INTERVAL", "ROTATION_ENABLED")
+        before = {key: settings.load()[key] for key in keys}
+        with mock.patch.object(lock, "LOCK_WAIT_S", 0.2), self._held_elsewhere("settings"), \
+                self.assertLogs("lwe_ui", level="WARNING") as logged:
+            backend.setOrder("sequential")
+            backend.setInterval(600)
+            backend.setRotationEnabled(False)
+        messages = [record.getMessage() for record in logged.records]
+        self.assertEqual(len(messages), 3, messages)
+        for key, message in zip(keys, messages):
+            self.assertIn(key, message)
+        self.assertEqual({key: settings.load()[key] for key in keys}, before, "a busy store saves nothing")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

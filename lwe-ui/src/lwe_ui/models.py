@@ -13,6 +13,7 @@ is plain stdlib + the already-written storage/discovery modules.
 """
 from __future__ import annotations
 
+import logging
 import os
 import time
 import shutil
@@ -895,7 +896,10 @@ class Backend(QObject):
     def rotateNext(self) -> bool:
         # a step is an intent to watch: it resumes a paused rotation first
         if not bool(self._setting("ROTATION_ENABLED", True)):
-            self.setPaused(False)
+            try:
+                self.setPaused(False)
+            except lock.StoreBusy as exc:
+                logging.getLogger(__name__).warning("rotation not resumed before next: %s", exc)
         try:
             reply = api_client.next_wallpaper()
             if reply is not None and reply.get("ok"):
@@ -915,7 +919,10 @@ class Backend(QObject):
     def rotatePrev(self) -> bool:
         # a step is an intent to watch: it resumes a paused rotation first
         if not bool(self._setting("ROTATION_ENABLED", True)):
-            self.setPaused(False)
+            try:
+                self.setPaused(False)
+            except lock.StoreBusy as exc:
+                logging.getLogger(__name__).warning("rotation not resumed before prev: %s", exc)
         try:
             reply = api_client.prev_wallpaper()
             if reply is not None and reply.get("ok"):
@@ -1358,7 +1365,10 @@ class Backend(QObject):
 
     @Slot(str)
     def setOrder(self, value: str) -> None:
-        self._set_setting("ORDER", value)
+        try:
+            self._set_setting("ORDER", value)
+        except lock.StoreBusy as exc:
+            logging.getLogger(__name__).warning("ORDER not saved: %s", exc)
 
     @Slot(result=int)
     def getInterval(self) -> int:
@@ -1369,7 +1379,10 @@ class Backend(QObject):
 
     @Slot(int)
     def setInterval(self, value: int) -> None:
-        self._set_setting("INTERVAL", int(value))
+        try:
+            self._set_setting("INTERVAL", int(value))
+        except lock.StoreBusy as exc:
+            logging.getLogger(__name__).warning("INTERVAL not saved: %s", exc)
 
     @Slot(result=bool)
     def getRotationEnabled(self) -> bool:
@@ -1377,7 +1390,10 @@ class Backend(QObject):
 
     @Slot(bool)
     def setRotationEnabled(self, value: bool) -> None:
-        self._set_setting("ROTATION_ENABLED", bool(value))
+        try:
+            self._set_setting("ROTATION_ENABLED", bool(value))
+        except lock.StoreBusy as exc:
+            logging.getLogger(__name__).warning("ROTATION_ENABLED not saved: %s", exc)
 
     @Slot(result="QStringList")
     def orderOptions(self) -> list[str]:
