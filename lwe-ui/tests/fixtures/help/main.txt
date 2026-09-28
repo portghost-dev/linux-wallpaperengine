@@ -32,8 +32,8 @@ Library
                                     playlist
   remove <wallpaper>... --playlist <playlist>
                                     take it out of that playlist
-  trash <wallpaper>...              out of the pool; untrash lets it back in
-  compress <wallpaper>...           build the fast textures
+  trash <wallpaper>...              out of the pool; untrash (or untrash --all) lets it back in
+  compress <wallpaper>... | --all   build the fast textures
   bench <wallpaper>                 a test window, then its log summary
   wallpaper <wallpaper> ...         one wallpaper's own settings, alias, properties, objects
 
