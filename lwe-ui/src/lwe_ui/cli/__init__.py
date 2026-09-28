@@ -12,7 +12,6 @@ from dataclasses import dataclass
 from typing import TextIO
 
 from .. import version
-from ..storage.lock import StoreBusy
 from . import registry
 
 DONE = 0
@@ -44,6 +43,7 @@ class Context:
 
 
 def main(argv: list[str], *, sender_stamp: str | None = None, cwd_entered: bool = False) -> int:
+    from ..storage.lock import StoreBusy
     words = [w for w in argv if w not in _JSON_FLAGS]
     ctx = Context(len(words) != len(argv), sys.stdout, sys.stderr, sender_stamp, cwd_entered)
     if not words:
