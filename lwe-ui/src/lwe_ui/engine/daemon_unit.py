@@ -131,7 +131,7 @@ def resolve_engine_bin() -> str:
     An empty return means no engine was found; the unit writer refuses.
     """
     binary = str(settings.load().get("ENGINE_BIN") or "").strip()
-    if binary and os.path.basename(binary) != "lwe-engine-api" and os.path.isfile(binary):
+    if binary and os.path.basename(binary) not in ("lwe-engine-api", "lwe") and os.path.isfile(binary):
         return binary
     on_path = shutil.which("linux-wallpaperengine")
     if on_path:
@@ -488,18 +488,29 @@ def parse_env(lines) -> dict[str, str]:
     return out
 
 
+def _systemctl(args: list[str], timeout: float = 30.0) -> tuple[int, str, str]:
+    """`systemctl --user <args>`: (returncode, stdout, stderr). Under LWE_SANDBOX nothing runs. The
+    default RUNNER: the service verbs and _service_main_pid call systemctl only through RUNNER."""
+    if os.environ.get("LWE_SANDBOX") == "1":
+        return 1, "", "systemctl is not run in the test sandbox"
+    try:
+        proc = subprocess.run(["systemctl", "--user", *args], capture_output=True, text=True,
+                              timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 1, "", str(exc)
+    return proc.returncode, proc.stdout or "", proc.stderr or ""
+
+
+RUNNER = _systemctl
+
+
 def _service_main_pid() -> int | None:
     """The engine service's MainPID from systemd; None under LWE_SANDBOX or when there is none."""
     if os.environ.get("LWE_SANDBOX") == "1":
         return None
-    try:
-        proc = subprocess.run(
-            ["systemctl", "--user", "show", C.ENGINE_SERVICE, "-p", "MainPID", "--value"],
-            capture_output=True, text=True, timeout=3, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    pid = (proc.stdout or "").strip()
-    if proc.returncode != 0 or not pid.isdigit() or pid == "0":
+    code, out, _ = RUNNER(["show", C.ENGINE_SERVICE, "-p", "MainPID", "--value"], timeout=3)
+    pid = out.strip()
+    if code != 0 or not pid.isdigit() or pid == "0":
         return None
     return int(pid)
 

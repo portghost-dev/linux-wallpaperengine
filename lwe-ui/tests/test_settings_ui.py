@@ -297,17 +297,18 @@ def _test_no_raw_enum_reaches_the_user() -> None:
 
 
 def _test_regenerate_is_never_reachable_before_the_dial_generator() -> None:
-    """T26: write_files() is called only from the service switch (models.py setMaster and
-    restartMaster); the sec 6.5 path saves through the change runner, which rewrites engine-env
-    alone. The generator already emits the three dial lines (the sec 1.2 sequencing law)."""
+    """T26: write_files() is called only from the window (models.py setMaster and restartMaster)
+    and from the service verbs' start, restart and autostart on (cli/verbs/service.py); a setting's
+    save goes through the change runner, which rewrites engine-env alone. The generator already
+    emits the three dial lines."""
     callers = []
     for path in (_ROOT / "src").rglob("*.py"):
         if path.name == "daemon_unit.py":
             continue
         if "write_files(" in path.read_text(encoding="utf-8"):
             callers.append(path.relative_to(_ROOT).as_posix())
-    assert sorted(callers) == ["src/lwe_ui/models.py"], \
-        f"write_files() must be called only from the service switch, found {callers}"
+    assert sorted(callers) == ["src/lwe_ui/cli/verbs/service.py", "src/lwe_ui/models.py"], \
+        f"write_files() must be called only from the window and the service verbs, found {callers}"
     gen = (_ROOT / "src/lwe_ui/engine/daemon_unit.py").read_text(encoding="utf-8")
     assert "AUDIO_DIAL_ENV" in gen, \
         "the caller exists ONLY because the generator already emits the dial lines"
