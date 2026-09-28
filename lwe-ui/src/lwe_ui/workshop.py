@@ -12,6 +12,7 @@ _spawn_geometry) the wizard reuses; it no longer spawns an engine of its own.
 """
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
@@ -467,13 +468,17 @@ class WorkshopBridge(QObject):
         add, and housekeeping is the power user's.
 
         Staged then renamed, so a crash mid-copy leaves a staging directory the scan ignores
-        rather than a half-built wallpaper that could be benched."""
+        rather than a half-built wallpaper that could be benched. No link inside the folder is
+        followed or copied (importer.copy_without_links); each one left out is written to the
+        panel log, and a project.json that is itself a link counts as none."""
+        from .storage import importer as _importer
         src = str(folder or "").strip()
         if src.startswith("file://"):
             src = QUrl(src).toLocalFile()
         if not src or not os.path.isdir(src):
             return ""
-        if not os.path.isfile(os.path.join(src, "project.json")):
+        pj = os.path.join(src, "project.json")
+        if os.path.islink(pj) or not os.path.isfile(pj):
             return ""
         wid = self._free_wid(self._safe_stem(os.path.basename(os.path.normpath(src))))
         if not paths.is_safe_wid(wid):
@@ -483,11 +488,13 @@ class WorkshopBridge(QObject):
             os.makedirs(str(root), exist_ok=True)
             stage = os.path.join(str(root), f".import-{wid}")
             shutil.rmtree(stage, ignore_errors=True)
-            shutil.copytree(src, stage)
+            skipped = _importer.copy_without_links(src, stage)
             os.rename(stage, os.path.join(str(root), wid))
         except Exception:
             shutil.rmtree(stage, ignore_errors=True)
             return ""
+        for path in skipped:
+            logging.getLogger(__name__).info("add from folder %s: link left out: %s", wid, path)
         self.stateChanged.emit()
         return wid
 

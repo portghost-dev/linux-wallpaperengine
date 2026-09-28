@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 from pathlib import Path
 
 from .. import constants as C
@@ -88,9 +89,10 @@ def _looks_complete(src: Path, proj: dict) -> bool:
     title exists) AND the declared payload is present (scenes: the .pkg or scene.json on
     disk - project.json's `file` says scene.json even when the payload is scene.pkg).
     A payload-less item DECLARING a dependency is a preset publication - complete by
-    construction (its payload is the base item's), handled by the dependency paths."""
+    construction (its payload is the base item's), handled by the dependency paths.
+    A project.json that is itself a link counts as absent: the copy would leave it out."""
     raw = proj.get("raw") or {}
-    if not raw:
+    if not raw or (src / "project.json").is_symlink():
         return False
     if _has_own_payload(src, proj):
         return True
@@ -163,10 +165,27 @@ def _write_conf(wid: str, d: dict) -> None:
                                         if k in wp.IDENTITY_KEYS or k not in present})
 
 
+def copy_without_links(src: str | os.PathLike, dst: str | os.PathLike) -> list[str]:
+    """shutil.copytree that follows and copies no symbolic link inside `src`: every entry os.lstat
+    shows as a link is left out. A `src` that is itself a link is followed, as copytree does. Returns
+    the paths of the links left out, relative to `src`, sorted."""
+    skipped: list[str] = []
+
+    def links(folder: str, names: list[str]) -> set[str]:
+        out = {name for name in names if stat.S_ISLNK(os.lstat(os.path.join(folder, name)).st_mode)}
+        skipped.extend(os.path.relpath(os.path.join(folder, name), src) for name in out)
+        return out
+
+    shutil.copytree(src, dst, ignore=links)
+    return sorted(skipped)
+
+
 def import_one(wid: str, cfg: dict | None = None) -> dict:
     """Run the mechanical pass on one workshop item. Returns
     {"wid", "title", "type", "action"} where action is one of
-    imported-review | imported-good | skipped-<reason>. Never raises."""
+    imported-review | imported-good | skipped-<reason>; an imported item's receipt also
+    carries "skipped_links", the links its copy left out (copy_without_links), [] when
+    nothing was copied. Never raises."""
     cfg = _snapshot() if cfg is None else cfg
     wid = str(wid)
     if not paths.is_safe_wid(wid):
@@ -218,6 +237,7 @@ def import_one(wid: str, cfg: dict | None = None) -> dict:
         return _import_preset(wid, src, proj, title, deps, cfg)
 
     policy = str(_setting_from(cfg, "STORAGE_POLICY", "copy"))
+    skipped: list[str] = []
     if policy == "copy":
         # staged copy + rename: a crash mid-copy leaves only a staging dir the next
         # scan ignores (leading dot = not a wid), never a half-wallpaper
@@ -226,7 +246,7 @@ def import_one(wid: str, cfg: dict | None = None) -> dict:
             lib.mkdir(parents=True, exist_ok=True)
             if stage.exists():
                 shutil.rmtree(stage)
-            shutil.copytree(src, stage)
+            skipped = copy_without_links(src, stage)
             os.replace(stage, lib / wid)
         except OSError:
             try:
@@ -261,14 +281,15 @@ def import_one(wid: str, cfg: dict | None = None) -> dict:
     except Exception:
         return {"wid": wid, "title": title, "type": wtype, "action": "skipped-tag-failed"}
     return {"wid": wid, "title": title, "type": wtype,
-            "action": "imported-review" if review else "imported-good"}
+            "action": "imported-review" if review else "imported-good", "skipped_links": skipped}
 
 
 def _dep_present(dep: str, cfg: dict) -> bool:
     """The base is USABLE, not merely a directory (a bare dir check let
     presets wire through half-downloaded or payload-less bases and reach rotation
     unrenderable): either already imported with a conf whose BG resolves, or an
-    on-disk tree whose OWN payload is complete (so importing it now will succeed).
+    on-disk tree whose OWN payload is complete (so importing it now will succeed);
+    a tree whose project.json is itself a link does not count, as in _looks_complete.
     A payload-less preset dir never counts until it is itself imported - which also
     makes dependency cycles structurally inert (each cycle member holds on the
     other; nothing recurses)."""
@@ -296,7 +317,7 @@ def _dep_present(dep: str, cfg: dict) -> bool:
         return False   # known but unresolvable (tombstoned reference, broken conf)
     ws = str(_setting_from(cfg, "WORKSHOP_DIR", "") or paths.detect_workshop_dir())
     for root in (os.path.join(lib, dep), os.path.join(ws, dep)):
-        if os.path.isdir(root):
+        if os.path.isdir(root) and not os.path.islink(os.path.join(root, "project.json")):
             proj = project.read(root)
             if (proj.get("raw") or {}) and _has_own_payload(Path(root), proj):
                 return True
@@ -325,18 +346,19 @@ def _ensure_dep_imported(dep: str, cfg: dict) -> None:
             _DEP_IMPORT_STACK.discard(dep)
 
 
-def _copy_or_reference(wid: str, src: Path, cfg: dict) -> str | None:
+def _copy_or_reference(wid: str, src: Path, cfg: dict) -> tuple[str, list[str]] | None:
     """The storage-policy move shared by every import path. Returns the BG value
-    (bare wid for copy, absolute source for reference), None on a failed copy."""
+    (bare wid for copy, absolute source for reference) with the links the copy left out
+    ([] for reference), None on a failed copy."""
     lib = Path(str(_setting_from(cfg, "WALLPAPERS_DIR", "") or paths.default_wallpapers_dir()))
     if str(_setting_from(cfg, "STORAGE_POLICY", "copy")) != "copy":
-        return str(src)
+        return str(src), []
     stage = lib / f".import-{wid}"
     try:
         lib.mkdir(parents=True, exist_ok=True)
         if stage.exists():
             shutil.rmtree(stage)
-        shutil.copytree(src, stage)
+        skipped = copy_without_links(src, stage)
         os.replace(stage, lib / wid)
     except OSError:
         try:
@@ -345,7 +367,7 @@ def _copy_or_reference(wid: str, src: Path, cfg: dict) -> str | None:
         except OSError:
             pass
         return None
-    return wid
+    return wid, skipped
 
 
 def _preset_props(raw_preset: dict) -> dict:
@@ -437,7 +459,8 @@ def _import_held(wid: str, src: Path, title: str, missing: list[str], cfg: dict)
     cannot render must never auto-graduate into rotation). `missing` carries ALL
     declared deps (M4): the resolve gate re-checks presence per dep anyway, and a
     consistent stored set keeps depInfo/modal coherent."""
-    if _copy_or_reference(wid, src, cfg) is None:
+    copied = _copy_or_reference(wid, src, cfg)
+    if copied is None:
         return {"wid": wid, "title": title, "type": "", "action": "skipped-copy-failed"}
     d: dict = {"BG": str(src)}   # placeholder; the resolve pass rewires it through the base
     try:
@@ -450,14 +473,16 @@ def _import_held(wid: str, src: Path, title: str, missing: list[str], cfg: dict)
         return {"wid": wid, "title": title, "type": "", "action": "skipped-tag-failed"}
     meta.update(wid, {"depMissing": True, "depWid": " ".join(missing),
                       "depName": _dep_display_name(missing[0], cfg)})
-    return {"wid": wid, "title": title, "type": "", "action": "imported-missing-dep"}
+    return {"wid": wid, "title": title, "type": "", "action": "imported-missing-dep",
+            "skipped_links": copied[1]}
 
 
 def _import_preset(wid: str, src: Path, proj: dict, title: str,
                    deps: list[str], cfg: dict) -> dict:
     """A preset whose base is available: normal landing rules, conf wired through the
     base item."""
-    if _copy_or_reference(wid, src, cfg) is None:
+    copied = _copy_or_reference(wid, src, cfg)
+    if copied is None:
         return {"wid": wid, "title": title, "type": "", "action": "skipped-copy-failed"}
     if not _wire_preset_conf(wid, proj, deps[0], cfg):
         return {"wid": wid, "title": title, "type": "", "action": "skipped-conf-failed"}
@@ -469,7 +494,7 @@ def _import_preset(wid: str, src: Path, proj: dict, title: str,
     meta.update(wid, {"depMissing": False, "depWid": " ".join(deps),
                       "depName": _dep_display_name(deps[0], cfg)})
     return {"wid": wid, "title": title, "type": "",
-            "action": "imported-review" if review else "imported-good"}
+            "action": "imported-review" if review else "imported-good", "skipped_links": copied[1]}
 
 
 def resolve_missing_deps(cfg: dict | None = None) -> int:
