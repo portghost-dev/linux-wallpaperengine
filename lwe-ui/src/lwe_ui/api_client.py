@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -30,14 +31,27 @@ _DONE_TIMEOUT = 30.0
 
 _MAX_REPLY = 64 * 1024  # mirrors the engine's own per-line cap
 
+_reply = threading.local()
+
 
 def socket_path() -> Path:
-    """The engine's command socket: $LWE_SOCKET override, else the runtime-dir default."""
-    override = os.environ.get("LWE_SOCKET", "").strip()
+    """The engine's command socket, found as the engine finds it: $LWE_SOCKET when set and not
+    empty, else $XDG_RUNTIME_DIR/lwe/engine.sock when set and not empty, else
+    /tmp/lwe-<euid>/engine.sock."""
+    override = os.environ.get("LWE_SOCKET", "")
     if override:
         return Path(override)
-    runtime = os.environ.get("XDG_RUNTIME_DIR", "").strip() or f"/run/user/{os.getuid()}"
-    return Path(runtime) / "lwe" / "engine.sock"
+    runtime = os.environ.get("XDG_RUNTIME_DIR", "")
+    if runtime:
+        return Path(runtime) / "lwe" / "engine.sock"
+    return Path("/tmp") / f"lwe-{os.geteuid()}" / "engine.sock"
+
+
+def last_class() -> str | None:
+    """How this thread's last request() ended: "ok" (a reply with ok true), "refused" (ok false),
+    "uncertain" (it may have run: something failed after the connect, or an accepted show never
+    finished) or "away" (nothing ran: the connect failed); None before any request."""
+    return getattr(_reply, "cls", None)
 
 
 def _resolve(sock: "str | os.PathLike | None") -> Path:
@@ -94,20 +108,21 @@ def request(cmd: str, args: dict | None = None, wait_done: bool = True,
     req: dict[str, Any] = {"id": 1, "cmd": cmd}
     if args:
         req["args"] = args
+    _reply.cls = "away"
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(_TIMEOUT)
             s.connect(str(_resolve(sock)))
+            _reply.cls = "uncertain"
             s.sendall((json.dumps(req) + "\n").encode())
             buf = bytearray()
             reply = _read_reply(s, buf)
-            if reply is None or not wait_done:
-                return reply
-            while reply.get("status") == "accepted":
-                s.settimeout(_DONE_TIMEOUT)
-                reply = _read_reply(s, buf)
-                if reply is None:
-                    return None
+            if reply is not None and wait_done:
+                while reply is not None and reply.get("status") == "accepted":
+                    s.settimeout(_DONE_TIMEOUT)
+                    reply = _read_reply(s, buf)
+            if reply is not None:
+                _reply.cls = "ok" if reply.get("ok") else "refused"
             return reply
     except OSError:
         return None
