@@ -37,6 +37,10 @@ from PySide6.QtCore import (
 from . import api_client
 from . import constants as C
 from .discovery import project
+from .engine import push
+from .engine.resolve import (_conf_true, _identity_dir, _wallpapers_dir, effective_speed, resolve_fit,
+                             resolve_fullscreen_behavior, resolve_show_args, resolved_tuning,
+                             split_playlist_parts)
 from .library_order import LibraryOrderModel
 from .storage import meta, paths, playlists, settings, tags, wp
 
@@ -63,14 +67,6 @@ def _sandboxed() -> bool:
     return os.environ.get("LWE_SANDBOX") == "1"
 
 
-def _wallpapers_dir() -> str:
-    """Current WALLPAPERS_DIR from settings (falls back to the resolved default)."""
-    try:
-        return str(settings.load().get("WALLPAPERS_DIR") or paths.default_wallpapers_dir())
-    except Exception:
-        return str(paths.default_wallpapers_dir())
-
-
 def _scan_dir_ids(wallpapers_dir: str) -> list[str]:
     """Immediate subdirectory names of WALLPAPERS_DIR (each is a wallpaper id). Tolerant."""
     out: list[str] = []
@@ -87,32 +83,6 @@ def _scan_dir_ids(wallpapers_dir: str) -> list[str]:
     except (OSError, ValueError):
         return []
     return out
-
-
-def _identity_dir(wid: str, wallpapers_dir: str) -> str:
-    """Where a row's IDENTITY (title, preview, type) is read from - which is NOT always
-    where it RENDERS from. A preset (dependency + preset overlay) renders through its
-    base via BG, but its title/preview live in its OWN dir; reading identity from BG
-    stole the base's name and preview (the reported bug). Order: own library copy, then
-    the item's own workshop dir, then BG as the legacy fallback (a plain reference item
-    whose own dir IS its render dir)."""
-    own = os.path.join(wallpapers_dir, wid)
-    if os.path.isdir(own):
-        return own
-    try:
-        ws = str(settings.load().get("WORKSHOP_DIR") or paths.detect_workshop_dir())
-        ws_own = os.path.join(ws, wid)
-        if os.path.isdir(ws_own):
-            return ws_own
-    except Exception:
-        pass
-    try:
-        bg = str(wp.load(wid).get("BG", "") or "")
-        if bg and os.path.isdir(bg):
-            return bg
-    except Exception:
-        pass
-    return own
 
 
 def _is_present(wid: str, wallpapers_dir: str, dir_ids: set[str]) -> bool:
@@ -159,242 +129,6 @@ def library_ids() -> list[str]:
     ids = (dir_ids - bad) | good | review
     ids.discard("")
     return sorted(ids)
-
-
-def _conf_true(value: Any, default: bool) -> bool:
-    """Shell-parity boolean coercion for conf/settings values ('true'/'1'/'yes' family)."""
-    if value is None or str(value).strip() == "":
-        return default
-    return str(value).strip().lower() in ("1", "true", "yes", "on")
-
-
-def resolve_fullscreen_behavior(s: dict[str, Any], conf: dict[str, Any] | None = None) -> str:
-    """The effective fullscreen policy as the engine spells it: off | pause | stop.
-
-    Global FULLSCREEN_BEHAVIOR decides WHAT happens. Empty means the setting predates
-    this control, so it is derived from the legacy pause-and-recovery pair - an
-    existing install keeps its behavior until the user picks a mode.
-
-    A per-wallpaper FULLSCREEN_PAUSE conf decides WHETHER this wallpaper takes part:
-    false forces off, true opts in (pause when the global has nothing to say), "" or
-    absent inherits. Passing conf=None asks for the global answer alone, which is what
-    the live set-fullscreen push sends.
-    """
-    behavior = str(s.get("FULLSCREEN_BEHAVIOR") or "").strip().lower()
-
-    if behavior not in C.FULLSCREEN_BEHAVIORS:
-        legacy = (str(s.get("PAUSE_RECOVERY_ACTION") or "pause") == "pause"
-                  and str(s.get("PAUSE_RECOVERY_CONDITION") or "off") in ("fullscreen", "both"))
-        behavior = "pause" if legacy else "off"
-
-    if conf is None:
-        return behavior
-
-    raw = conf.get("FULLSCREEN_PAUSE")
-
-    if raw is None or str(raw).strip() == "":
-        return behavior
-
-    if not _conf_true(raw, False):
-        return "off"
-
-    return behavior if behavior != "off" else "pause"
-
-
-def resolved_tuning(wid: str) -> dict[str, float]:
-    """The three audio dials this wallpaper should run: conf override, else the globals.
-    Sent via the existing set-tuning verb after a successful show."""
-    out: dict[str, float] = {}
-    try:
-        present = wp.load_set(wid)
-    except Exception:
-        present = {}
-    s = settings.load()
-    for field, wp_key, skey, cal in (
-        ("audio_gain", "AUDIO_GAIN", "ENGINE_AUDIO_GAIN", 3.0),
-        ("classic_k", "CLASSIC_K", "ENGINE_CLASSIC_K", 0.7),
-        ("classic_exp", "CLASSIC_EXP", "ENGINE_CLASSIC_EXP", 2.6),
-    ):
-        try:
-            out[field] = float(present[wp_key]) if wp_key in present else float(s.get(skey, cal))
-        except (TypeError, ValueError):
-            out[field] = cal
-    return out
-
-
-def split_playlist_parts(entries: list[dict]) -> list[list[dict]]:
-    """Cut `entries` into the parts one playlist-set transfer carries: every part under the
-    engine's entry and byte caps, at most 64 parts. An entry too large for a part on its own
-    is dropped; entries past the last part are dropped. Always at least one part."""
-    import json
-    parts: list[list[dict]] = []
-    part: list[dict] = []
-    for entry in entries:
-        if len(json.dumps([entry])) > C.ENGINE_ROTATE_MAX_BYTES:
-            continue
-        part.append(entry)
-        if len(part) > C.ENGINE_ROTATE_MAX_ENTRIES or len(json.dumps(part)) > C.ENGINE_ROTATE_MAX_BYTES:
-            part.pop()
-            parts.append(part)
-            part = [entry]
-    if part or not parts:
-        parts.append(part)
-    return parts[:64]
-
-
-def effective_speed(wid: str, factor=None) -> float:
-    """The rate the engine runs for `wid`: its conf SPEED when set, else the global speed
-    (the stored ENGINE_TIMESCALE when `factor` is None), clamped to the engine's range."""
-    conf_speed = wp.set_speed(wid) if wid else None
-    if factor is None:
-        try:
-            factor = settings.load().get("ENGINE_TIMESCALE", 1.0)
-        except Exception:
-            factor = 1.0
-    return C.resolve_speed(conf_speed, factor)
-
-
-def resolve_fit(conf: dict[str, Any]) -> dict[str, float]:
-    """The conf's FIT_* keys as the engine's fit object, clamped to the schema's range."""
-    out: dict[str, float] = {}
-    for key, name in (("FIT_ZOOM", "zoom"), ("FIT_PAN_X", "pan_x"), ("FIT_PAN_Y", "pan_y")):
-        spec = C.WP_SCHEMA[key]
-        try:
-            value = float(conf.get(key, spec["default"]))
-        except (TypeError, ValueError):
-            value = float(spec["default"])
-        if value != value:  # NaN never reaches the engine
-            value = float(spec["default"])
-        out[name] = max(float(spec["min"]), min(float(spec["max"]), value))
-    return out
-
-
-def resolve_show_args(wid: str) -> tuple[str, dict[str, Any]]:
-    """Resolve a wallpaper's FULL per-show vocabulary: conf overrides first, engine-global
-    settings fill the gaps, session overrides win last. Returns (engine_wid, kwargs for
-    api_client.show).
-
-    Every value is sent RESOLVED - the engine never sees a conf (scope SS4). This is the
-    single resolution point: showNow uses it now, the rotation-set push (leg B) reuses
-    it for every playlist entry.
-    """
-    s = settings.load()
-    conf: dict[str, Any] = {}
-    try:
-        conf = wp.load(wid)
-    except Exception:
-        pass  # unreadable conf must never kill a show; identity is safe (is_safe_wid gated)
-
-    args: dict[str, Any] = {}
-    engine_wid = wid
-
-    # color correction: an absent CC is the authored look (derive_cc over the item's own
-    # project.json), NOT identity - a published preset's grading IS the wallpaper
-    cc = [1.0, 1.0, 1.0, 0.0]
-    cc_str = str(conf.get("CC") or "")
-    if not cc_str:
-        try:
-            raw = (project.read(_identity_dir(wid, _wallpapers_dir())) or {}).get("raw")
-            if isinstance(raw, dict):
-                preset = raw.get("preset")
-                cc_str = project.derive_cc(preset if isinstance(preset, dict) else raw)
-        except Exception:
-            cc_str = ""
-    try:
-        parts = [float(x) for x in str(cc_str or "1 1 1 0").split()]
-        if len(parts) == 4:
-            cc = parts
-    except (TypeError, ValueError):
-        pass
-    args["cc"] = cc
-
-    args["speed"] = C.resolve_speed(wp.set_speed(wid), s.get("ENGINE_TIMESCALE"))
-
-    raw_props = conf.get("props")
-    if isinstance(raw_props, dict) and raw_props:
-        args["properties"] = {str(k): str(v) for k, v in raw_props.items()}
-
-    # presets have no project of their own: conf BG names the base the engine loads
-    bg = str(conf.get("BG") or "").strip()
-    if bg:
-        base = os.path.basename(bg.rstrip("/"))
-        if paths.is_safe_wid(base):
-            engine_wid = base
-
-    # scaling/clamp: editor-saved confs always carry SCALING (wp.load fills the schema
-    # default for the rest), so the conf value wins; the ENGINE_* globals only reach a
-    # hand-written conf that clamp-omits. Empty clamp = the engine's launch default.
-    args["scaling"] = str(conf.get("SCALING") or s.get("ENGINE_SCALING") or "default")
-    clamp = str(conf.get("CLAMPING") or s.get("ENGINE_CLAMP") or "").strip()
-    if clamp:
-        args["clamp"] = clamp
-
-    # the wallpaper layer of the fit window, always sent resolved so an omitted key is
-    # identity on the engine too; the lane layer is the engine's own (set_fit)
-    args["fit"] = resolve_fit(conf)
-
-    try:
-        volume_present = "VOLUME" in wp.load_set(wid)
-    except Exception:
-        volume_present = True
-    if volume_present:
-        try:
-            volume = int(str(conf.get("VOLUME")).strip())
-        except (TypeError, ValueError):
-            volume = 0
-    else:
-        # same units and source as the popup's global Volume row (pushed via set_volume)
-        try:
-            volume = int(str(s.get("ENGINE_VOLUME", 15)).strip())
-        except (TypeError, ValueError):
-            volume = 15
-    if _conf_true(s.get("OVERRIDE_MUTE"), False):
-        volume = 0
-    args["volume"] = max(0, min(volume, 128))
-
-    audio = _conf_true(conf.get("AUDIO_REACTIVE"), _conf_true(s.get("AUDIO_REACTIVE_DEFAULT"), False))
-    if _conf_true(s.get("OVERRIDE_AUDIO_OFF"), False):
-        audio = False
-    args["audio_processing"] = audio
-
-    mouse = _conf_true(conf.get("MOUSE"), _conf_true(s.get("MOUSE_DEFAULT"), False))
-    if _conf_true(s.get("OVERRIDE_MOUSE_OFF"), False):
-        mouse = False
-    args["mouse"] = mouse
-
-    args["automute"] = _conf_true(conf.get("AUTOMUTE"), _conf_true(s.get("AUTOMUTE_DEFAULT"), True))
-
-    # fullscreen policy, resolved to the engine's three-state vocabulary. The global
-    # FULLSCREEN_BEHAVIOR says WHAT happens; the per-wallpaper conf says WHETHER this
-    # wallpaper takes part ("" = inherit). A wallpaper that opts in while the global is
-    # off still gets the historical meaning of that flag, which is pause.
-    args["fullscreen_behavior"] = resolve_fullscreen_behavior(s, conf)
-
-    # the quality switches ride the show only when the wallpaper set them; absent means
-    # the engine's launch environment, which is where the global setting already lives
-    res = str(conf.get("RENDER_RESOLUTION") or "").strip()
-    if res in C.RENDER_RESOLUTIONS:
-        args["ssfactor"] = 0.0 if res == "wallpaper" else 1.0
-        args["clampcomposites"] = 1.0 if res == "screen" else 0.0
-    texcomp = conf.get("TEXCOMP")
-    if texcomp is not None and str(texcomp).strip() != "":
-        args["texcomp"] = _conf_true(texcomp, True)
-    detail = str(conf.get("TEXTURE_DETAIL") or "").strip()
-    if detail in C.TEXTURE_DETAILS:
-        args["texdetail"] = detail
-    # leg-A alias, kept so an older engine still reads a truthful boolean off the show
-    args["fullscreen_pause"] = args["fullscreen_behavior"] != "off"
-
-    skips = []
-    for tok in str(conf.get("SKIP") or "").split():
-        try:
-            skips.append(int(tok))
-        except ValueError:
-            continue
-    if skips:
-        args["skip_objects"] = skips
-
-    return engine_wid, args
 
 
 class _Row:
@@ -698,10 +432,7 @@ class Backend(QObject):
         self._frames_last: tuple[float, int, Any] | None = None
 
     def _active_slug(self) -> str:
-        try:
-            return playlists.active_slug()
-        except Exception:
-            return ""
+        return push._active_slug()
 
     def _active_members(self) -> set[str]:
         slug = self._active_slug()
@@ -801,13 +532,7 @@ class Backend(QObject):
         # the launch wallpaper's color grade (engine burn-in incident 3, visibly wrong
         # colors).
         try:
-            engine_wid, show_args = resolve_show_args(wid)
-            reply = api_client.show(engine_wid, ui_id=wid, **show_args)
-            if reply is not None and reply.get("ok"):
-                try:
-                    api_client.set_tuning(**resolved_tuning(wid))
-                except Exception:
-                    pass
+            if push.show(wid):
                 self.statusChanged.emit()
                 return True
         except Exception:
@@ -1084,22 +809,10 @@ class Backend(QObject):
             return False
 
     def _schedule_entries(self) -> list[dict[str, str]]:
-        """The stored SCHEDULE as the engine's entries, in stored order (row 1 is where day
-        begins, row 2 where it ends); an entry naming a missing playlist is dropped."""
-        packed = str(self._setting("SCHEDULE", "") or "")
-        out: list[dict[str, str]] = []
-        for item in packed.split(";"):
-            head, _, slug = item.strip().partition("=")
-            head, slug = head.strip(), slug.strip()
-            if not head or not slug or not paths.is_safe_wid(slug):
-                continue
-            if not paths.playlist_file(slug).exists():
-                continue
-            out.append({"at": head, "playlist": slug})
-        return out
+        return push._schedule_entries()
 
     def _schedule_enabled(self) -> bool:
-        return bool(self._setting("SCHEDULE_ENABLED", False)) and len(self._schedule_entries()) >= 2
+        return push._schedule_enabled()
 
     @staticmethod
     def _to_minute(text: str) -> int:
@@ -1140,48 +853,10 @@ class Backend(QObject):
                 "is_day": self.scheduleIsDay(), "held": bool(self._schedule_held)}
 
     def _push_schedule(self) -> bool:
-        """Send every scheduled playlist the engine does not already hold from the active push,
-        then the schedule itself. Returns False when anything was refused."""
-        try:
-            entries = self._schedule_entries()
-            active = self._active_slug() or "default"
-            for slug in sorted({e["playlist"] for e in entries} - {active}):
-                e, interval, order, enabled, label = self._playlist_payload(slug)
-                parts = split_playlist_parts(e)
-                for number, part in enumerate(parts, start=1):
-                    reply = api_client.playlist_set(slug, part, order, interval, part=number,
-                                                    of=len(parts), label=label)
-                    if reply is None or not reply.get("ok"):
-                        return False
-            reply = api_client.schedule_set(self._schedule_enabled(), entries)
-            return bool(reply is not None and reply.get("ok"))
-        except Exception:
-            return False
+        return push._push_schedule()
 
     def _playlist_payload(self, slug: str) -> tuple[list, int, str, bool, str]:
-        """Resolve one stored playlist into the engine's terms: (entries in stored order,
-        interval_s, order, enabled, label). Each entry is a complete resolved show-args
-        object - the engine executes, never resolves. Member order is the stored order."""
-        d = playlists.load(slug)
-        entries = []
-        for wid in str(d.get("MEMBERS") or "").split():
-            if not paths.is_safe_wid(wid):
-                continue
-            try:
-                engine_wid, args = resolve_show_args(wid)
-            except Exception:
-                continue  # one broken conf must not sink the whole set
-            entries.append({"id": engine_wid, "ui_id": wid, **args})
-        mode = str(d.get("MODE") or "shuffle")
-        order = mode if mode in C.PLAYLIST_MODES else "shuffle"
-        enabled = (bool(self._setting("ROTATION_ENABLED", True)) and mode != "static"
-                   and bool(entries))
-        try:
-            interval = int(d.get("INTERVAL") or 900)
-        except (TypeError, ValueError):
-            interval = 900
-        label = str(d.get("NAME") or slug)
-        return entries, interval, order, enabled, label
+        return push._playlist_payload(slug)
 
     @Slot(bool, str)
     def onItemCommitted(self, ok: bool, _reason: str) -> None:
@@ -1204,47 +879,16 @@ class Backend(QObject):
             pass
 
     def _sync_engine(self, manual: bool = False) -> None:
-        """Push the active playlist to the engine by slug, in parts, then the scheduled
-        playlists and the schedule, then bind the lane (policy push). The engine owns the
-        walk and the schedule; the panel owns resolution. `manual` marks the user's own
-        playlist switch, which the engine holds until the next boundary (R67). Best-effort by
-        design: a dead socket is retried by the status poll's pid-change tracker, never
-        surfaced to the caller."""
-        try:
-            if not api_client.available():
-                self._policy_dirty = True
-                return
-            self._policy_dirty = True   # cleared below, once the lane binding was answered
-            slug = self._active_slug() or "default"
-            entries, interval, order, enabled, label = self._playlist_payload(slug)
-            parts = split_playlist_parts(entries)
-            for number, part in enumerate(parts, start=1):
-                reply = api_client.playlist_set(slug, part, order, interval, part=number,
-                                                of=len(parts), label=label)
-                if reply is None or not reply.get("ok"):
-                    return  # a refused part must never bind a half-sent playlist
-            # a refused or unknown schedule must not leave the lane unbound, but the cell
-            # must not claim a schedule the engine did not take
-            self._schedule_refused = not self._push_schedule()
-            lane: dict[str, Any] = {"id": "all", "playlist": slug, "enabled": enabled}
-            if manual:
-                lane["manual"] = True
-            reply = api_client.lanes_set([lane])
+        outcome = push._sync_engine(manual)
+        if "policy_dirty" in outcome:
+            self._policy_dirty = outcome["policy_dirty"]
+        if "schedule_refused" in outcome:
+            self._schedule_refused = outcome["schedule_refused"]
+        if "rotation_clock" in outcome:
             try:
-                # the reply is the envelope: {ok, result: {lanes: [...]}}; an unanswered push
-                # (socket gone mid-way) leaves the policy marked for the next poll
-                if isinstance(reply, dict) and reply.get("ok"):
-                    self._policy_dirty = False
-                result = reply.get("result") if isinstance(reply, dict) and reply.get("ok") else None
-                lanes = result.get("lanes") if isinstance(result, dict) else None
-                if isinstance(lanes, list) and lanes:
-                    ms, iv = lanes[0].get("next_in_ms"), lanes[0].get("interval_s")
-                    if isinstance(ms, (int, float)) and int(ms) >= 0:
-                        self.rotationClock.emit(int(ms), int(iv) if isinstance(iv, (int, float)) else -1)
+                self.rotationClock.emit(*outcome["rotation_clock"])
             except Exception:
                 pass
-        except Exception:
-            pass
 
     @Slot(result=bool)
     def rotateNext(self) -> bool:
@@ -1290,8 +934,7 @@ class Backend(QObject):
         except Exception:
             pass
 
-    _SESSION_KEYS = {"mute": "OVERRIDE_MUTE", "audio": "OVERRIDE_AUDIO_OFF",
-                     "parallax": "OVERRIDE_PARALLAX_OFF", "mouse": "OVERRIDE_MOUSE_OFF"}
+    _SESSION_KEYS = push._SESSION_KEYS
 
     @Slot(str, result=bool)
     def sessionOverride(self, key: str) -> bool:
@@ -1319,17 +962,10 @@ class Backend(QObject):
 
     @Slot(float, result=float)
     def effectiveSpeed(self, factor: float) -> float:
-        """The rate the engine should run for the wallpaper on screen under `factor`."""
-        return effective_speed(self._current_ui_wid(), factor)
+        return push.effectiveSpeed(factor)
 
     def _current_ui_wid(self) -> str:
-        """The ui_id of whatever the daemon is showing right now, "" when idle/down."""
-        try:
-            api = api_client.status()
-            cur = (api or {}).get("current") or {}
-            return str(cur.get("ui_id") or "")
-        except Exception:
-            return ""
+        return push._current_ui_wid()
 
     @Slot(str)
     def onWallpaperSaved(self, wid: str) -> None:
@@ -1753,127 +1389,23 @@ class Backend(QObject):
         return list(C.ORDERS)
 
     def _setting(self, key: str, default: Any) -> Any:
-        try:
-            return settings.load().get(key, default)
-        except Exception:
-            return default
+        return push._setting(key, default)
 
-    #: settings whose value feeds resolve_fullscreen_behavior; changing any of them has
-    #: to reach the RUNNING scene, not wait for the next swap
-    _FULLSCREEN_KEYS = ("FULLSCREEN_BEHAVIOR", "PAUSE_RECOVERY_ACTION", "PAUSE_RECOVERY_CONDITION")
+    _FULLSCREEN_KEYS = push._FULLSCREEN_KEYS
 
-    _LIVE_GLOBAL_KEYS = ("ENGINE_FPS", "PARALLAX_DEFAULT", "PARTICLES_DEFAULT",
-                         "OVERRIDE_PARALLAX_OFF", "OVERRIDE_MUTE", "OVERRIDE_MOUSE_OFF",
-                         "OVERRIDE_AUDIO_OFF", "ENGINE_TIMESCALE", "ENGINE_VOLUME",
-                         "AUDIO_REACTIVE_DEFAULT", "MOUSE_DEFAULT",
-                         "APP_CONDITION_BEHAVIOR")
+    _LIVE_GLOBAL_KEYS = push._LIVE_GLOBAL_KEYS
 
     def _fullscreen_ignore_ids(self) -> list[str]:
-        """app_ids exempt from the fullscreen policy, from the pause-blacklist file."""
-        try:
-            text = (paths.config_dir() / "pause-blacklist.txt").read_text(encoding="utf-8")
-        except OSError:
-            return []
-        out = []
-        for line in text.splitlines():
-            entry = line.strip()
-            if entry and not entry.startswith("#"):
-                out.append(entry[:128])
-        return out[:128]
+        return push._fullscreen_ignore_ids()
 
     def _app_condition_names(self) -> list[str]:
-        """Process names (comm) for the engine's running-apps condition, from the
-        hand-edited list file. NOT the fullscreen exceptions list - comm names and
-        window app_ids are different identifier spaces and must never merge."""
-        try:
-            text = (paths.config_dir() / "app-condition.txt").read_text(encoding="utf-8")
-        except OSError:
-            return []
-        out = []
-        for line in text.splitlines():
-            entry = line.strip()
-            if entry and not entry.startswith("#"):
-                out.append(entry[:64])
-        return out[:128]
+        return push._app_condition_names()
 
     def _push_live_globals(self) -> None:
-        """Push the engine-global toggles to the running engine.
-
-        These are NOT per-wallpaper, so they never ride a show and a restarted engine
-        knows nothing about them - hence this is also called from the pid-change
-        reconnect. Idempotent and best-effort: a dead socket is picked up by the next
-        status poll, never surfaced.
-
-        ENGINE_FPS empty means "whatever the engine launched with", so there is nothing
-        to push; it takes effect on the next service restart.
-        """
-        try:
-            s = settings.load()
-            if not api_client.available():
-                return
-
-            fps = str(s.get("ENGINE_FPS") or "").strip()
-            if fps:
-                try:
-                    api_client.set_fps(max(1, min(480, int(fps))))
-                except ValueError:
-                    pass
-
-            # the engine holds one speed number, the resolved rate of the wallpaper on
-            # screen, so the global speed is pushed through the same resolve as a show.
-            # independently tolerant, like every other push in this method: one verb that
-            # cannot answer must never cost the rest of the fan-out
-            try:
-                api_client.set_speed(self.effectiveSpeed(float(s.get("ENGINE_TIMESCALE") or 1.0)))
-            except Exception:
-                pass
-
-            parallax = _conf_true(s.get("PARALLAX_DEFAULT"), True) and not _conf_true(
-                s.get("OVERRIDE_PARALLAX_OFF"), False)
-            api_client.set_parallax(parallax)
-            api_client.set_particles(_conf_true(s.get("PARTICLES_DEFAULT"), True))
-            api_client.set_fullscreen_ignore(self._fullscreen_ignore_ids())
-            # a restarted engine restores conditions from its own state file; this push
-            # covers the fresh-install boot and any hand-edit of the list file
-            api_client.set_app_conditions(
-                self._app_condition_names(),
-                str(s.get("APP_CONDITION_BEHAVIOR") or "off"))
-
-            # mute + mouse (v1.10 sec 4: set-volume/set-mouse ship). These are NOT globals -
-            # the honest live value is the CURRENT wallpaper's resolved one, so it is
-            # computed by the same resolve_show_args every show uses. No wallpaper showing
-            # (idle daemon) means nothing to retune; the next show carries the override.
-            wid = self._current_ui_wid()
-            if wid:
-                _, args = resolve_show_args(wid)
-                if "volume" in args:
-                    api_client.set_volume(int(args["volume"]))
-                if "mouse" in args:
-                    api_client.set_mouse(bool(args["mouse"]))
-                if "audio_processing" in args:
-                    api_client.set_audio(bool(args["audio_processing"]))
-        except Exception:
-            pass
+        push._push_live_globals()
 
     def _push_fullscreen_behavior(self) -> None:
-        """Apply the fullscreen policy to the live engine.
-
-        The verb changes the RUNNING scene: turning the mode off un-latches a pause or
-        hands the outputs back at once, instead of waiting for the next swap.
-
-        The rotation set also has to be refreshed whenever this changes, because every
-        stored entry carries its own resolved copy and the next timed advance would
-        otherwise restore the old policy. That is NOT done here: every caller already
-        follows a settings write with _sync_engine(), and doing it in both places
-        pushed 54 entries twice per change.
-        """
-        try:
-            s = settings.load()
-            if not api_client.available():
-                return
-            api_client.set_fullscreen(resolve_fullscreen_behavior(s))
-        except Exception:
-            pass
+        push._push_fullscreen_behavior()
 
     def _set_setting(self, key: str, value: Any) -> None:
         try:
@@ -2346,7 +1878,7 @@ class ImportBridge(QObject):
             except Exception:
                 pass
             try:
-                self._sync_engine()
+                self._backend._sync_engine()
             except Exception:
                 pass
         # only now, repair fully done, run the startup scan a mode owed (serialized so
@@ -2462,7 +1994,7 @@ class ImportBridge(QObject):
             except Exception:
                 pass
             try:
-                self._sync_engine()
+                self._backend._sync_engine()
             except Exception:
                 pass
         self.busyChanged.emit()

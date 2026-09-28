@@ -194,7 +194,7 @@ def _test_fullscreen_legacy_keys_have_no_row_but_keep_their_keys() -> None:
     engine = _code("SettingsEngine.qml")
     for key in ("PAUSE_RECOVERY_CONDITION", "PAUSE_RECOVERY_ACTION"):
         assert key not in engine, f"{key} must have no UI row"
-    models = (_ROOT / "src/lwe_ui/models.py").read_text(encoding="utf-8")
+    models = (_ROOT / "src/lwe_ui/engine/resolve.py").read_text(encoding="utf-8")
     assert "PAUSE_RECOVERY_ACTION" in models and "PAUSE_RECOVERY_CONDITION" in models, \
         "both keys stay in the legacy derive path"
     print("OK T14 legacy pause keys lose their row and keep their key")

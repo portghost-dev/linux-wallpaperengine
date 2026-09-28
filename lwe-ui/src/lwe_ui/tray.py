@@ -32,9 +32,9 @@ from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import api_client
-from . import constants as C
+from .engine import resolve
 from .proctitle import set_process_name
-from .storage import settings, wp
+from .storage import settings
 
 
 def _fallback_icon() -> QIcon:
@@ -152,12 +152,7 @@ class TrayProcess(QObject):
             # resume restores the resolved rate of the wallpaper on screen, the same
             # number a show or the panel's own resume would send
             wid = str(((st.get("current") or {}).get("ui_id")) or "")
-            conf_speed = wp.set_speed(wid) if wid else None
-            try:
-                factor = settings.load().get("ENGINE_TIMESCALE", 1.0)
-            except Exception:
-                factor = 1.0
-            api_client.set_speed(C.resolve_speed(conf_speed, factor))
+            api_client.set_speed(resolve.effective_speed(wid))
         else:
             api_client.set_speed(0.0)
 
