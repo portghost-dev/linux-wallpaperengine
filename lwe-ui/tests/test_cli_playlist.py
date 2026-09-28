@@ -6,9 +6,12 @@ and nothing is made. playlist <p> saves only the ACTIVE_PLAYLIST line and sends 
 lanes-set with the playlist and manual, whether or not the engine's schedule is on, and the receipt names
 the next start time. With the schedule on in the store and the engine away it exits 2 with nothing saved
 and no marker; with it off, the switch is saved and pending; an engine lost after the status read
-leaves it saved, pending and not made. The playlist already playing gets one lanes-set naming it with
-manual and nothing else, so an engine held after a refused restore releases, with nothing written; one the
-store names while the engine is bound elsewhere under the schedule gets the manual bind with nothing written.
+leaves it saved, pending and not made. The playlist already playing, the engine's lane bound to it, gets one
+lanes-set naming it with manual and nothing else, so an engine held after a refused restore releases, with
+nothing written; one the store names while the engine's lane is bound elsewhere, under the schedule or on a
+new engine that lacks it, gets its transfer and then the manual bind with nothing written. With the engine
+away the saved playlist is already playing, and one the lane is bound to while the store names another, the
+schedule off, is switched.
 playlist load binds the saved playlist without manual. A name shared by two files exits 1 listing both,
 and the words list and load win over playlists with those names.
 
@@ -426,6 +429,37 @@ class PlaylistVerbTest(unittest.TestCase):
                                              ("lanes-set", {"lanes": [{"id": "all", "playlist": "main",
                                                                        "enabled": True, "manual": True}]})])
         self.assertEqual(self.snapshot(), before)
+
+    def test_the_saved_playlist_picked_on_an_engine_whose_lane_is_bound_elsewhere_is_uploaded_then_bound(
+            self) -> None:
+        self.four()
+        before = self.snapshot()
+        engine = self.engine(served=False, restore_refused=True,
+                             lanes=[{"id": "all", "playlist": "default", "enabled": False}])
+        cold = self.lwe("playlist", "main")
+        uploaded = (cold, self.sent(engine), releases(engine.calls))
+        engine.set(lanes=[{"id": "all", "playlist": "main", "enabled": True}], restore_refused=False)
+        engine.calls.clear()
+        control = (self.lwe("playlist", "main"), self.sent(engine))
+        self.assertEqual(uploaded, ((0, SWITCHED.format("Main (3)"), ""),
+                                    [("playlist-set", "main", "shuffle", 900, 1, 1, 2),
+                                     ("lanes-set", {"lanes": [{"id": "all", "playlist": "main", "enabled": True,
+                                                               "manual": True}]})], True))
+        self.assertEqual(control, ((0, "Main (3) is already playing.\n", ""),
+                                   [("lanes-set", {"lanes": [{"id": "all", "playlist": "main", "manual": True}]})]))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_the_saved_playlist_is_already_playing_while_away_and_a_lane_bound_elsewhere_is_switched(self) -> None:
+        self.four()
+        before = self.snapshot()
+        self.assertEqual(self.lwe("playlist", "main"), (0, "Main (3) is already playing.\n", ""))
+        self.assertEqual(self.snapshot(), before)
+        engine = self.engine(lanes=[{"id": "all", "playlist": "night"}])
+        self.assertEqual(self.lwe("playlist", "night"), (0, SWITCHED.format("Night (4)"), ""))
+        self.assertEqual((self.read("settings.conf"), self.sent(engine)),
+                         ("ACTIVE_PLAYLIST=night\n", [("playlist-set", "night", "sequential", 90, 1, 1, 1),
+                                                     ("lanes-set", {"lanes": [{"id": "all", "playlist": "night",
+                                                                               "enabled": True, "manual": True}]})]))
 
     def test_a_shared_name_exits_1_listing_both_and_the_words_list_and_load_win(self) -> None:
         self.assertEqual(self.lwe("playlist"), (0, "No playlists.\n", ""))

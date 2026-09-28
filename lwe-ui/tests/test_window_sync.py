@@ -19,15 +19,21 @@ pid that changes between polls, or one that arrives after the marker was cleared
 and is then recorded as served. While the engine reports that it refused its restore, a new window's first
 sight still sends its lanes-set as configured, enabled included; an explicit show, next or prev, from the
 window or the tray, carries no automatic flag and nothing follows it; the window's playlist switch sends
-manual with the schedule off, and its pick of the playlist already playing sends one lanes-set naming it with
-manual and nothing else, which releases a held engine; and a re-show the engine held sends no tail and never
-counts against the drain's retries. After a suspend the polls send the same engine nothing,
+manual with the schedule off, and its pick of the playlist already playing, the lane bound to it, sends one
+lanes-set naming it with manual and nothing else, which releases a held engine, while its pick of the saved
+playlist on a held new engine that lacks it uploads the playlist before the manual lanes-set that releases
+it. The pick of the playlist already playing is the derived one the lane is bound to, a rebind reply that
+is not a done ok logs one warning, and a pick of the saved playlist while the engine is away sends nothing
+and leaves the bundle; a re-show the engine held sends no tail and never counts against the drain's
+retries. After a
+suspend the polls send the same engine nothing,
 a bundle that takes 6 s serves its engine once, an engine whose status gives no uptime stays unserved but
 gets only the bounded retries, and a deferred first sight followed by a build edit of another wallpaper
 shows once. An engine that reuses the pid of one whose window bundle stopped at its budget gets the
 playlists the old one took, so it is served even when it refuses a lanes-set naming a playlist it never
-received, and a writer during the last failed drain gets retries of its own, a served engine's as well,
-while a drain that finds sync busy keeps the generation its own ensure gave. After an uncertain first
+received, and a writer during the last failed drain gets retries of its own, a served engine's as well, as
+does one between the poll's marker read and the drain's ensure, while a drain that finds sync busy keeps the
+generation its own ensure gave. After an uncertain first
 sight, one change under a persistent refusal reloads once and no poll reloads again, and an uncertain
 deferred first sight followed by a build edit of another wallpaper shows once.
 A manual switch while the engine is away with the schedule on writes nothing. A switch to a playlist
@@ -917,7 +923,7 @@ class WindowSyncTest(unittest.TestCase):
             sent = len(rec.calls)
             models.Backend().status()
         after = rec.calls[sent:]
-        self.assertEqual((first, notes), ([True], []))
+        self.assertEqual((first, notes), ([True], [push.BRAKED]))
         self.assertEqual([lane for verb, args, _k in after if verb == "lanes_set" for lane in args[0]],
                          [{"id": "all", "playlist": "main", "enabled": True}])
 
@@ -944,6 +950,111 @@ class WindowSyncTest(unittest.TestCase):
         lane = {"id": "all", "playlist": "main", "manual": True}
         self.assertEqual(got, [(True, ["lanes_set"], [lane], False, True), (False, ["lanes_set"], [lane], False, True)])
         self.assertEqual(settings.load()["ACTIVE_PLAYLIST"], "main")
+
+    def test_the_windows_pick_of_the_saved_playlist_on_a_held_new_engine_uploads_it_then_releases(self) -> None:
+        cold = status(pid=5000, restore_refused=True, lanes=[{"id": "all", "playlist": "default", "enabled": False}])
+        with self.engine(cold) as rec:
+            received: set[str] = set()
+            answers: list[bool] = []
+
+            def upload() -> None:
+                received.add(rec.calls[-1][1][0])
+
+            def lanes() -> None:
+                lane = rec.calls[-1][1][0][0]
+                known = lane.get("playlist", "default") in received | {"default"}
+                answers.append(known)
+                if not known:
+                    rec.answer("lanes_set", REFUSED)
+                elif lane.get("manual") is True:
+                    rec.status_reply["restore_refused"] = False
+
+            def show() -> None:
+                if rec.status_reply["restore_refused"] and rec.calls[-1][2].get("automatic") is True:
+                    rec.answer("show", HELD)
+            rec.hooks.update(playlist_set=upload, lanes_set=lanes, show=show)
+            self.backend.setActivePlaylist("main")
+        manual = [lane for verb, args, _k in rec.calls if verb == "lanes_set" for lane in args[0] if lane.get("manual")]
+        self.assertEqual((answers, manual, rec.status_reply["restore_refused"], marker.served()),
+                         ([True] * len(answers), [{"id": "all", "playlist": "main", "enabled": True, "manual": True}],
+                          False, 5000))
+
+    def test_the_windows_playing_pick_is_the_derived_playlist_its_lane_is_bound_to(self) -> None:
+        got = []
+        for schedule_on in (True, False):
+            settings.update({"ACTIVE_PLAYLIST": "main", "SCHEDULE": "07:00=main;20:00=night",
+                             "SCHEDULE_ENABLED": schedule_on})
+            with self.engine(status(schedule={"enabled": schedule_on},
+                                    lanes=[{"id": "all", "playlist": "night"}])) as rec:
+                self.backend.setActivePlaylist("night")
+            got.append((schedule_on, "playlist_set" in rec.verbs(),
+                        [lane for verb, args, _k in rec.calls if verb == "lanes_set" for lane in args[0]],
+                        settings.load()["ACTIVE_PLAYLIST"]))
+        self.assertEqual(got, [(True, False, [{"id": "all", "playlist": "night", "manual": True}], "main"),
+                               (False, True, [{"id": "all", "playlist": "night", "enabled": True, "manual": True}],
+                                "night")])
+
+    def test_a_rebind_of_the_playing_playlist_that_is_not_answered_ok_logs_one_warning(self) -> None:
+        got = []
+        for reply in ({"id": 1, "ok": False, "error": "unknown playlist: send playlist-set first"}, "uncertain"):
+            with self.engine(status()) as rec, self.assertLogs("lwe_ui.models", "WARNING") as logged:
+                rec.answer("lanes_set", reply)
+                self.backend.setActivePlaylist("main")
+            got.append((rec.verbs(), logged.output))
+        self.assertEqual(got, [(["lanes_set"], ["WARNING:lwe_ui.models:playlist switch not made: unknown playlist: "
+                                                "send playlist-set first"]),
+                               (["lanes_set"], ["WARNING:lwe_ui.models:playlist switch not made: the engine did not "
+                                                "answer"])])
+
+    def test_the_windows_pick_of_the_saved_playlist_while_the_engine_is_away_sends_nothing(self) -> None:
+        with self.engine(None, "away") as rec:
+            self.backend.setActivePlaylist("main")
+        self.assertEqual((rec.verbs(), marker.read()["classes"], settings.load()["ACTIVE_PLAYLIST"]),
+                         ([], ["BUNDLE"], "main"))
+
+    def test_a_writer_between_the_polls_marker_read_and_the_drains_ensure_gets_retries_of_its_own(self) -> None:
+        real = push.sync_all
+        got = []
+        for fourth in ("refused", "uncertain"):
+            marker._file().unlink(missing_ok=True)
+            marker.record_served(4242, 9900.0)
+            settings.update({"ENGINE_FPS": 60})
+            self.backend = models.Backend()
+            self.backend._engine_pid_seen = 4242
+            marker.ensure(("BUNDLE",))
+            clock = Clock()
+            tickets: list = []
+            armed: list = []
+
+            def writer_first(*args, **kwargs):
+                if armed and not tickets:
+                    thread = threading.Thread(target=lambda: tickets.append(push.save_change(
+                        ("settings",), lambda: settings.update({"ENGINE_FPS": 77}), [("verb", "ENGINE_FPS")],
+                        run="command", status=("ok", status()))), daemon=True)
+                    thread.start()
+                    thread.join(10)
+                return real(*args, **kwargs)
+            with mock.patch.object(models, "monotonic", clock), mock.patch.object(push, "sync_all", writer_first):
+                with self.engine(status()) as rec:
+                    for step in range(4):
+                        clock.now = 1000.0 + 100.0 * step
+                        if step < 3 or fourth == "refused":
+                            rec.answer("set_particles", REFUSED)
+                        else:
+                            rec.answer("schedule_set", "uncertain")
+                        armed[:] = [True] if step == 3 else []
+                        self.backend.status()
+                    failures = self.backend._drain_failures
+                    healthy = []
+                    for _ in range(3):
+                        clock.now += 100.0
+                        sent = len(rec.calls)
+                        self.backend.status()
+                        healthy.append("set_fps" in [verb for verb, _a, _k in rec.calls[sent:]])
+                    fps77 = ("set_fps", (77,)) in [(verb, args) for verb, args, _k in rec.calls]
+            got.append((fourth, len(tickets), failures, healthy, marker.read()["classes"], fps77))
+        self.assertEqual(got, [("refused", 1, 1, [True, False, False], [], True),
+                               ("uncertain", 1, 1, [True, False, False], [], True)])
 
     def test_a_held_reshow_never_counts_against_the_drains_retries(self) -> None:
         self.backend._engine_pid_seen = 4242

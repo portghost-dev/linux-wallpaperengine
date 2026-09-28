@@ -1,7 +1,8 @@
 """The live and next-wallpaper setting commands: each saves one line of settings.conf and sends the
 key's targeted push through the change runner, with the runner's outcome as the receipt; speed 0 and
 audiosmoothing go to the engine under sync and are never saved; a restart-class load's re-show is marked
-automatic. A re-show the engine held, marked automatic and followed by no tail, in a bundle that ended
+automatic, and one the engine held sends no skip or speed after it and prints the brake note, not the "shown
+again" line. A re-show the engine held, marked automatic and followed by no tail, in a bundle that ended
 applied prints the brake note through the command's output, one {"note": ...} line on stderr under -j, and
 one in a bundle that did not end applied prints none.
 
@@ -294,6 +295,20 @@ class LiveSettingTest(unittest.TestCase):
         engine = self.engine(config={"LWE_SSFACTOR": {"value": "1"}})
         self.assertEqual(self.lwe("resclamp", "load")[0], 0)
         self.assertEqual([args.get("automatic") for cmd, args in self.sent(engine) if cmd == "show"], [True])
+
+    def test_a_quality_load_whose_reshow_the_engine_held_sends_no_tail_and_prints_the_brake_note(self) -> None:
+        from lwe_ui.engine import push
+        self.wp.update_set("111", {"SKIP": "123"})
+        engine = self.engine(speed=0.0)
+        got = []
+        for name in ("resclamp", "effectclamp", "texturecache", "texturedetail"):
+            engine.calls.clear()
+            engine.script("show", _fake_engine.done({"held": True}))
+            code, out, err = self.lwe(name, "load")
+            verbs = [cmd for cmd, _args in self.sent(engine)]
+            got.append((name, code, out, err, verbs))
+        self.assertEqual(got, [(name, 0, "", push.BRAKED + "\n", ["show"])
+                               for name in ("resclamp", "effectclamp", "texturecache", "texturedetail")])
 
     def test_a_running_engine_from_another_build_refuses_and_writes_nothing(self) -> None:
         engine = self.engine(version="0.0.1-other")

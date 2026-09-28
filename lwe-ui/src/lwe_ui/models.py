@@ -630,15 +630,24 @@ class Backend(QObject):
 
     @Slot(str)
     def setActivePlaylist(self, slug: str) -> None:
-        """The user's own pick of a playlist. The one already playing gets push.rebind's manual
-        lanes-set while status answers, so a held engine releases, with no store change; any other is
-        switched through the change runner, bound with manual."""
+        """The user's own pick of a playlist. The one already playing, the engine's lane bound to it in
+        the status just read, gets push.rebind's manual lanes-set, so a held engine releases, with no
+        store change, and a reply that is not ok logs one warning as a refused switch does; any other,
+        the saved one on an engine whose lane is bound elsewhere included, is switched through the change
+        runner, which sends the playlist before its manual bind."""
         first = push.read_status()
-        if first[0] == "ok" and push.derived_active(first[1])[0] == slug:
+        lanes = first[1].get("lanes") if first[0] == "ok" else None
+        bound = lanes[0].get("playlist") if isinstance(lanes, list) and lanes and isinstance(lanes[0], dict) else None
+        if bound == slug and push.derived_active(first[1])[0] == slug:
             try:
-                push.rebind(slug)
+                reply = push.rebind(slug)
             except lock.StoreBusy as exc:
                 logging.getLogger(__name__).warning("playlist pick not sent: %s", exc)
+                return
+            if not (isinstance(reply, dict) and reply.get("ok") is True and reply.get("status") == "done"):
+                reason = reply.get("error") if isinstance(reply, dict) else None
+                logging.getLogger(__name__).warning("playlist switch not made: %s",
+                                                    reason or "the engine did not answer")
             return
         # the user's own switch: under a schedule the engine holds it until the next boundary
         if self._change("playlist switch", ("playlists", "settings"), lambda: playlists.set_active(slug),
@@ -1021,7 +1030,9 @@ class Backend(QObject):
         when the retry after the 45 s wait fails, none follows until a writer raises the generation or
         another engine answers. The failures count against the generation the drain's own run worked
         from (the outcome's), its ensure and owed bundle included, so a writer's generation that lands
-        during that run still gets retries of its own. A run that found sync busy, an unresponsive
+        during that run still gets retries of its own, and the count restarts when the generation that
+        ensure found is not the one the count belongs to, so one that lands between the poll's marker read
+        and that ensure gets them too. A run that found sync busy, an unresponsive
         status or another build's engine counts nothing; an away one counts, as the poll has just read
         status, and so does an applied one after which that engine is still not the served one, as an
         engine whose status gives no uptime_s stays."""
@@ -1046,6 +1057,8 @@ class Backend(QObject):
         except OSError:
             return
         self._note(outcome, schedule=True)
+        if outcome.found != self._drain_generation:
+            self._drain_failures, self._drain_after = 0, 0.0
         if outcome.generation is not None:
             self._drain_generation = outcome.generation
         if outcome.kind in ("refused", "uncertain") or outcome.reason == "away" \

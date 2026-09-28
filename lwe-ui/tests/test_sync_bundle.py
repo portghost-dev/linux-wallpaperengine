@@ -26,8 +26,10 @@ change. Every re-show carries "automatic": the owed one, directly or completing 
 reload's and a build change's; an explicit show never does, and a user's playlist switch sends manual
 whether or not the schedule is on. A re-show the engine held sends no tail, takes back the owed CURRENT,
 serves the engine when the rest of the bundle ended ok and keeps the brake note for a command run only,
-not for one whose own switch released the engine; restore_refused in the status changes nothing the panel
-sends, and two quick restarts of a healthy engine get full bundles and no note. The start is taken once
+not for one whose own switch released the engine; a command run that ended applied on an engine whose status
+reports restore_refused keeps the note too, once, and a window run or a refused one keeps none;
+restore_refused in the status changes nothing the panel sends, and two quick restarts of a healthy engine get
+full bundles and no note. The start is taken once
 per status on the engine's clock, so after a suspend or a wall-clock step the same engine gets nothing
 more, and a bundle that takes 6 s serves its engine once; a status without uptime_s is never named served.
 An owed re-show that never ran, or was refused, is kept for the next bundle, and so is one whose set-tuning
@@ -36,7 +38,11 @@ the retry shows again; the delivery that re-shows a deferred CURRENT takes it, s
 the deferred run ended uncertain before its re-show and when an import runs during a due delivery of a
 ticket that found a marker, and a bundling delivery whose marker cannot be read still runs. An owed
 CURRENT kept past a writer's change is taken back by the next whole re-show, so a persistent refusal
-reloads once, not on every change, and a slow refused run takes back the CURRENT its engine owed.
+reloads once, not on every change, and a slow refused run takes back the CURRENT its engine owed. A refused
+set-skip after the owed re-show keeps CURRENT for the retry; a window run whose status gives no pid records
+and skips nothing; a writer's CURRENT standing when a new engine is owed is never taken back; a deferring
+delivery that finds a newer marker keeps its own generation. A switch saved by another process between a
+delivery's generation and its store read reaches the engine, through that delivery or the next drain.
 The engine is an api_client recorder with a scripted status unless a test names the socket server; its
 clock is frozen at 10000 and its status reports uptime_s 100 unless a test says otherwise.
 
@@ -877,6 +883,109 @@ class SyncBundleTest(unittest.TestCase):
         parts = [(args[0], kwargs["part"], kwargs["of"]) for verb, args, kwargs in rec.calls if verb == "playlist_set"]
         self.assertEqual(parts, [("main", 1, 2), ("main", 2, 2)])
         self.assertEqual(outcome, push.Outcome("pending", reason="budget", recorded=1))
+
+    def test_a_switch_saved_between_a_deliverys_generation_and_its_store_read_reaches_the_engine(self) -> None:
+        got = []
+        for existed, pid in ((True, 4242), (False, 5000)):
+            for point in ("_unserved", "derived_active"):
+                marker._file().unlink(missing_ok=True)
+                marker.record_served(4242, 9900.0)
+                settings.update({"ACTIVE_PLAYLIST": "main"})
+                if existed:
+                    marker.ensure(("BUNDLE",))
+                writes: list = []
+
+                def switch() -> None:
+                    writes.append(push.save_change(
+                        ("settings",), lambda: settings.update({"ACTIVE_PLAYLIST": "night"}),
+                        [("active", "ACTIVE_PLAYLIST")], slug="night", manual=True, run="command",
+                        status=("ok", status())))
+
+                def then_switch(arg, real=getattr(push, point)):
+                    out = real(arg)
+                    if not writes:
+                        thread = threading.Thread(target=switch, daemon=True)
+                        thread.start()
+                        thread.join(10)
+                    return out
+                with self.engine(status(pid=pid)) as rec:
+                    ticket = push.save_change(("settings",), lambda: settings.update({"ENGINE_FPS": 40}),
+                                              [("verb", "ENGINE_FPS")], run="command")
+                    with mock.patch.object(push, point, then_switch):
+                        kind = push.deliver(ticket).kind
+                    sent = len(rec.calls)
+                    after = marker.read()["classes"]
+                    follow = push.sync_all("window", wait_s=0).kind if after else None
+                got.append((existed, point, ticket.existed, kind, len(writes),
+                            [lane.get("playlist") for lane in self.lanes(rec.calls[:sent])], after, follow,
+                            [lane.get("playlist") for lane in self.lanes(rec.calls[sent:])], marker.read()["classes"]))
+        self.assertEqual(got, [
+            (True, "_unserved", True, "applied", 1, ["night"], [], None, [], []),
+            (True, "derived_active", True, "applied", 1, ["main"], ["BUNDLE"], "applied", ["night"], []),
+            (False, "_unserved", False, "applied", 1, ["night"], [], None, [], []),
+            (False, "derived_active", False, "applied", 1, ["main"], ["BUNDLE", "CURRENT"], "applied", ["night"], [])])
+
+    def test_a_refused_set_skip_after_the_owed_reshow_keeps_current_so_the_retry_shows_again(self) -> None:
+        wp.update_set("111", {"SKIP": "7"})
+        with self.engine(status(pid=5000)) as rec:
+            rec.answer("set_skip", OK, {"id": 1, "ok": False, "error": "no"})
+            first = push.sync_all("command").kind
+            kept = marker.read()["classes"]
+            push.sync_all("command")
+        self.assertEqual((first, kept, rec.verbs().count("show")), ("refused", ["BUNDLE", "CURRENT"], 2))
+
+    def test_a_window_run_whose_status_gives_no_pid_records_and_skips_nothing(self) -> None:
+        pidless = status()
+        del pidless["pid"]
+        with self.engine(pidless) as rec:
+            rec.answer("set_particles", {"id": 1, "ok": False, "error": "no"})
+            first = push.sync_all("window").kind
+            sent = marker.read()["sent"]
+            second = push.sync_all("window").kind
+        self.assertEqual((first, sent, second, rec.playlists()),
+                         ("refused", {"pid": None, "playlists": []}, "applied", ["main", "night", "main", "night"]))
+
+    def test_a_writers_current_standing_when_a_new_engine_is_owed_is_never_taken_back(self) -> None:
+        refused = {"id": 1, "ok": False, "error": "no"}
+        with self.engine(status(pid=5000)) as rec:
+            ticket = push.save_change(("overrides",), lambda: wp.update_set("111", {"SCALING": "fill"}),
+                                      [("wp_build", "SCALING")], wid="111")
+            rec.answer("set_particles", refused, refused)
+            first = push.sync_all("command").kind
+            kept = marker.read()["classes"]
+            push.sync_all("command")
+        self.assertEqual((ticket.existed, first, kept, marker.owed_record()["current"], rec.verbs().count("show")),
+                         (False, "refused", ["BUNDLE", "CURRENT"], None, 2))
+
+    def test_a_deferring_delivery_that_finds_a_newer_marker_keeps_its_own_generation(self) -> None:
+        with self.engine(status()):
+            marker.ensure(("BUNDLE",))
+            ticket = push.save_change(("settings",), lambda: settings.update({"ENGINE_FPS": 40}),
+                                      [("verb", "ENGINE_FPS")])
+            other = push.save_change(("settings",), lambda: settings.update({"ENGINE_FPS": 41}),
+                                     [("verb", "ENGINE_FPS")])
+            kind = push.deliver(ticket, defer_current=True).kind
+        self.assertEqual((ticket.existed, kind, marker.read()["classes"], marker.generation()),
+                         (True, "applied", ["BUNDLE"], other.generation))
+
+    def test_a_command_run_on_an_engine_that_reports_restore_refused_prints_the_brake_note_once(self) -> None:
+        refused = {"id": 1, "ok": False, "error": "no"}
+        got = []
+        for fps, run, st, answers in (
+                (40, "command", status(pid=5000, current="", restore_refused=True), {}),
+                (41, "window", status(pid=5001, current="", restore_refused=True), {}),
+                (42, "command", status(pid=5002, restore_refused=True), {"show": HELD}),
+                (43, "command", status(pid=5003, current=""), {}),
+                (44, "command", status(pid=5004, current="", restore_refused=True), {"set_particles": refused})):
+            with self.engine(st) as rec:
+                for verb, reply in answers.items():
+                    rec.answer(verb, reply)
+                outcome = push.run_change(("settings",), lambda fps=fps: settings.update({"ENGINE_FPS": fps}),
+                                          [("verb", "ENGINE_FPS")], run=run)
+            got.append((run, outcome.kind, rec.verbs().count("show"), push.brake_notes()))
+        self.assertEqual(got, [("command", "applied", 0, [push.BRAKED]), ("window", "applied", 0, []),
+                               ("command", "applied", 1, [push.BRAKED]), ("command", "applied", 0, []),
+                               ("command", "refused", 0, [])])
 
 
 if __name__ == "__main__":

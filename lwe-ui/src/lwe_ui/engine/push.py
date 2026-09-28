@@ -240,7 +240,8 @@ class Outcome:
     budget stop recorded in the marker; warning says the marker could not be cleared; clock is the
     lane clock (next_in_ms, interval_s) of the last ok lanes-set reply; refused_verb names the verb
     of the first refused request; generation is the marker generation the run or sync_all worked
-    from."""
+    from; found, for sync_all only, is the generation its ensure found, read with it under the marker
+    lock before any class ensure added raised it (None with no marker file)."""
     kind: str
     reason: str | None = None
     message: str | None = None
@@ -250,6 +251,7 @@ class Outcome:
     clock: tuple[int, int] | None = field(default=None, compare=False)
     refused_verb: str | None = field(default=None, compare=False)
     generation: int | None = field(default=None, compare=False)
+    found: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -812,8 +814,9 @@ def _owe(run: _Run) -> None:
 
 
 def brake_notes() -> list[str]:
-    """The brake notes of this process's command runs that ended applied with a re-show the engine held,
-    kept since the last call, which are then forgotten."""
+    """The brake notes of this process's command runs that ended applied with a re-show the engine held
+    or on an engine whose status reported restore_refused true, kept since the last call, which are
+    then forgotten."""
     notes = list(_brake_notes)
     _brake_notes.clear()
     return notes
@@ -838,8 +841,8 @@ def _record_served(run: _Run) -> None:
 def _finish(run: _Run, env: str | None = None, keep_current: bool = False) -> Outcome:
     """Record the run's engine (_record_served), clear the marker when every request ended ok,
     CURRENT kept when `keep_current`, and name the outcome; a command run that ended applied with a
-    re-show the engine held keeps the brake note for brake_notes(), unless its own manual switch
-    released the engine."""
+    re-show the engine held, or whose status reported restore_refused true, keeps the brake note once
+    for brake_notes(), unless its own manual switch released the engine."""
     _record_served(run)
     warning = None
     if run.all_ok and not run.stopped:
@@ -862,7 +865,7 @@ def _finish(run: _Run, env: str | None = None, keep_current: bool = False) -> Ou
         return Outcome("pending", reason="budget", recorded=run.recorded, **seen)
     if run.refused is not None:
         return Outcome("refused", message=run.refused, **seen)
-    if run.held and not run.released and not run.window:
+    if (run.held or run.status.get("restore_refused") is True) and not run.released and not run.window:
         _brake_notes.append(BRAKED)
     return Outcome("applied", warning=warning, **seen)
 
@@ -875,7 +878,6 @@ def _deliver(ticket: Ticket, defer_current: bool = False) -> Outcome:
         if isinstance(status, Outcome):
             return status
         run = _Run(ticket.run, ticket.generation, status)
-        derived = derived_active(status)[0]
         rows = [row for row, _key in ticket.rows]
         reload = "reload" in rows
         reshow = bool(ticket.wid) and ticket.wid == _on_screen(status) and "wp_build" in rows
@@ -886,6 +888,7 @@ def _deliver(ticket: Ticket, defer_current: bool = False) -> Outcome:
             _adopt_current(run, whole)
         if unserved:
             _owe(run)
+        derived = derived_active(status)[0]
         if bundle:
             _bundle(run, derived, reshow=not reshow and not defer_current, reload=reload,
                     defer=defer_current and not reshow)
@@ -898,7 +901,9 @@ def _adopt_current(run: _Run, whole: bool) -> None:
     """A delivery that re-shows the wallpaper on screen serves what the marker holds, so it takes and
     clears that marker's generation: with its whole bundle and its re-show (`whole`), everything the marker
     holds, as sync_all and _owe do, and with only its own build re-show, a marker left holding only
-    CURRENT by a deferred re-show. A marker that cannot be read leaves the run's own generation."""
+    CURRENT by a deferred re-show. The delivery takes it, and its owed bundle's, before its first store
+    read (derived_active), so a writer that lands after that read raises the generation and the clear
+    fails. A marker that cannot be read leaves the run's own generation."""
     with contextlib.suppress(OSError):
         state = marker.read()
         if state["classes"] == ["CURRENT"] or (whole and state["classes"]):
@@ -1015,16 +1020,18 @@ def sync_all(run: str, classes: Iterable[str] = ("BUNDLE",), wait_s: float = 2.0
     for that engine, and a bundle whose every request ended ok, its re-show included, records it as
     served; the re-show is marked automatic, and one the engine held counts as suppressed. The
     outcome carries the generation the run worked from: the one ensure gave, or the one its owed bundle
-    raised it to."""
+    raised it to; and the generation ensure found (Outcome.found)."""
     classes = tuple(classes)
-    generation = marker.ensure(classes)
+    with lock.held("marker"):
+        found = marker.generation()
+        generation = marker.ensure(classes)
     with contextlib.ExitStack() as stack:
         status = _synced(stack, wait_s, None)
         if isinstance(status, Outcome):
-            return replace(status, generation=generation)
+            return replace(status, generation=generation, found=found)
         r = _Run(run, generation, status)
         reload = "CURRENT" in classes
         if _unserved(r.engine):
             _owe(r)
         _bundle(r, derived_active(status)[0], reshow=not defer_current, reload=reload, defer=defer_current)
-        return _finish(r, keep_current=defer_current)
+        return replace(_finish(r, keep_current=defer_current), found=found)

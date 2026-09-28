@@ -2,7 +2,7 @@
 changed since reload's own snapshot, the warnings and the cleanup are printed, the store is applied
 through sync_all with the re-show, engine-env is rebuilt, and the restart line names what waits. The
 reload's re-show carries automatic and its lanes-set carries enabled, also while the engine reports that it
-refused its restore, and no note is printed.
+refused its restore, when the brake note follows on stderr.
 
 Each form runs through cli.main in this process with HOME and the XDG folders at scratch
 (_cli_env.scratch_home), daemon_unit's subprocess call replaced by a recorder, one screen faked, the
@@ -108,9 +108,10 @@ class ReloadTest(unittest.TestCase):
         self.assertEqual(self.lwe("reload")[1].splitlines(), [SAME, "Applied."])
 
     def test_the_reload_reshow_is_marked_automatic_and_its_lanes_set_sent_as_configured(self) -> None:
+        from lwe_ui.engine import push
         engine = self.engine(served=False, restore_refused=True)
         code, out, err = self.lwe("reload")
-        self.assertEqual((code, out.splitlines()[-1], err), (0, "Applied.", ""))
+        self.assertEqual((code, out.splitlines()[-1], err), (0, "Applied.", push.BRAKED + "\n"))
         self.assertEqual([args.get("automatic") for cmd, args in engine.calls if cmd == "show"], [True])
         self.assertIn(("lanes-set", {"lanes": [{"id": "all", "playlist": "main", "enabled": True}]}), engine.calls)
         self.assertEqual(self.marker.served(), os.getpid())

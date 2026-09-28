@@ -369,7 +369,8 @@ def _load(ctx: Context, name: str) -> int:
 def _reshow_load(ctx: Context, name: str) -> int:
     """resclamp, effectclamp, texturecache or texturedetail load: one re-show of the wallpaper on screen,
     marked automatic as a side effect that must not release a held engine, keeping the speed status
-    reported, plus the restart line when the saved value differs from the engine's start value."""
+    reported, plus the restart line when the saved value differs from the engine's start value. A re-show
+    the engine held sends no skip or speed after it and prints the brake note instead of the shown line."""
     from ... import api_client, version
     from ...engine import push, resolve
     from ...storage import lock, settings
@@ -393,17 +394,21 @@ def _reshow_load(ctx: Context, name: str) -> int:
     speed = status.get("speed")
     with lock.held("sync"):
         reply = push.show_final(screen, automatic=True)
+        held = push._held(reply)
         skips = resolve.resolve_show_args(screen)[1].get("skip_objects")
-        if skips:
+        if skips and not held:
             api_client.set_skip(skips)
-        if isinstance(speed, (int, float)) and not isinstance(speed, bool):
+        if isinstance(speed, (int, float)) and not isinstance(speed, bool) and not held:
             api_client.set_speed(speed)
     if not isinstance(reply, dict):
         return _refuse(ctx, f"{name} load: the engine did not answer", REFUSED)
     if not reply.get("ok"):
         return _refuse(ctx, f"{name} load: the engine refused it: {reply.get('error') or 'no reason given'}", REFUSED)
     shown = row.format(settings_table.read(name, None)[0])
-    print(f"{name} {shown}: the wallpaper on screen was shown again with it; nothing written.", file=ctx.out)
+    if held:
+        ctx.note(push.BRAKED)
+    else:
+        print(f"{name} {shown}: the wallpaper on screen was shown again with it; nothing written.", file=ctx.out)
     entry = (status.get("config") or {}).get(_RESHOW_LOADS[name])
     started = entry.get("value") if isinstance(entry, dict) else None
     saved = settings.load()[row.key]

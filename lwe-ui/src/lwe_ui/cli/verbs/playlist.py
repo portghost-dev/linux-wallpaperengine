@@ -266,9 +266,10 @@ def _list(ctx: Context) -> int:
 def _switch(ctx: Context, word: str) -> int:
     """playlist <p>: the pick and one status read here (the version check and the schedule's
     state), then ACTIVE_PLAYLIST through the change runner, which binds p with manual. The
-    playlist already playing gets push.rebind's one manual lanes-set while status answers, so a held
-    engine releases, with no store change; when only the store names p, the manual bind is sent under
-    the sync lock with no store change."""
+    playlist already playing, the engine's lane bound to it when status answers, gets push.rebind's one
+    manual lanes-set, so a held engine releases, with no store change; when only the store names p, as on
+    an engine whose lane is bound elsewhere or a new one that lacks it, p's transfer and then the manual
+    bind are sent under the sync lock with no store change."""
     from ...engine import push
     from ...storage import paths, playlists, settings
     from .. import select
@@ -285,7 +286,8 @@ def _switch(ctx: Context, word: str) -> int:
     if schedule_on and first[0] != "ok":
         return _refuse(ctx, SWITCH_AWAY, ENGINE_DOWN)
     title = f"{pick.name or pick.slug} ({pick.number})"
-    if settings_table.derived_active_playlist(status)[0] == pick.slug:
+    if settings_table.derived_active_playlist(status)[0] == pick.slug and (first[0] != "ok" or
+                                                                           _bound(status) == pick.slug):
         if first[0] == "ok":
             code = _answered(ctx, push.rebind(pick.slug))
             if code is not None:
