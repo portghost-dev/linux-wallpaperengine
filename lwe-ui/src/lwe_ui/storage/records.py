@@ -174,7 +174,8 @@ def purge(wid: str) -> bool:
     if not paths.is_safe_wid(wid):
         return False
     try:
-        paths.record_file(wid).unlink()
+        with lock.held("records"):
+            paths.record_file(wid).unlink()
         return True
     except (FileNotFoundError, OSError):
         return False

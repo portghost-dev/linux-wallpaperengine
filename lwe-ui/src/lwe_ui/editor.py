@@ -1558,27 +1558,30 @@ class EditorBridge(QObject):
         tag = str(tag or "").strip()
         if not tag or not self._wid:
             return
-        cur = self.tags()
-        if tag not in cur:
-            cur.append(tag)
-            try:
-                meta.update(self._wid, {"tags": cur})
-                self._meta["tags"] = cur
-            except Exception:
-                self.commitFailed.emit(["TAGS"])
-                return
+
+        def add(entry: dict) -> dict:
+            cur = entry.get("tags") if isinstance(entry.get("tags"), list) else []
+            return {} if tag in cur else {"tags": [*cur, tag]}
+        try:
+            entry = meta.modify(self._wid, add)
+        except Exception:
+            self.commitFailed.emit(["TAGS"])
+            return
+        self._meta["tags"] = entry.get("tags", [])
         self.metadataChanged.emit()
         self.loaded.emit()
 
     @Slot(str)
     def removeTag(self, tag: str) -> None:
-        cur = [t for t in self.tags() if t != tag]
+        def remove(entry: dict) -> dict:
+            cur = entry.get("tags") if isinstance(entry.get("tags"), list) else []
+            return {"tags": [t for t in cur if t != tag]}
         try:
-            meta.update(self._wid, {"tags": cur})
-            self._meta["tags"] = cur
+            entry = meta.modify(self._wid, remove)
         except Exception:
             self.commitFailed.emit(["TAGS"])
             return
+        self._meta["tags"] = entry["tags"]
         self.metadataChanged.emit()
         self.loaded.emit()
 
@@ -1602,14 +1605,12 @@ class EditorBridge(QObject):
         """Flip meta.favorite for the loaded wallpaper."""
         if not self._wid:
             return
-        cur = bool(self._meta.get("favorite")) if isinstance(self._meta, dict) else False
-        new = not cur
         try:
-            meta.update(self._wid, {"favorite": new})
+            entry = meta.modify(self._wid, lambda e: {"favorite": not bool(e.get("favorite"))})
         except Exception:
             self.commitFailed.emit(["FAVORITE"])
             return
-        self._meta["favorite"] = new
+        self._meta["favorite"] = entry["favorite"]
         self.metadataChanged.emit()
         self.loaded.emit()
 

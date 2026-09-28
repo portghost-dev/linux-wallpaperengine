@@ -42,7 +42,7 @@ from .engine.resolve import (_conf_true, _identity_dir, _wallpapers_dir, effecti
                              resolve_fullscreen_behavior, resolve_show_args, resolved_tuning,
                              split_playlist_parts)
 from .library_order import LibraryOrderModel
-from .storage import meta, paths, playlists, settings, tags, wp
+from .storage import lock, meta, paths, playlists, rules, settings, tags, wp
 
 # Role ids for LibraryModel. Start past Qt.UserRole so they never collide with built-ins.
 _ROLE_ID = Qt.ItemDataRole.UserRole + 1
@@ -609,9 +609,10 @@ class Backend(QObject):
 
     def _follow_engine_playlist(self, slug: str) -> None:
         """Adopt the playlist the engine's schedule switched to, grid membership included; no
-        push back, the engine is the source."""
+        push back, the engine is the source. A busy settings store skips it until a later poll."""
         try:
-            playlists.set_active(slug)
+            with lock.held("settings", wait_s=0):
+                playlists.set_active(slug)
         except Exception:
             return
         try:
@@ -1127,8 +1128,7 @@ class Backend(QObject):
     def _ensure_open(self, name: str, header: str) -> None:
         fp = paths.config_dir() / name
         try:
-            if not fp.exists():
-                fp.write_text(header, encoding="utf-8")
+            rules.modify(name, lambda text: text if fp.exists() else header)
         except OSError:
             pass
         self.openPath(str(fp))
@@ -1343,19 +1343,14 @@ class Backend(QObject):
 
     @Slot(str)
     def toggleFavorite(self, wid: str) -> None:
-        """Flip meta.favorite for a wallpaper and persist via meta.update."""
+        """Flip meta.favorite for a wallpaper, from a fresh read inside the meta lock."""
         if not wid:
             return
         try:
-            cur = bool(meta.get(wid).get("favorite"))
-        except Exception:
-            cur = False
-        new = not cur
-        try:
-            meta.update(wid, {"favorite": new})
+            entry = meta.modify(wid, lambda e: {"favorite": not bool(e.get("favorite"))})
         except Exception:
             return
-        self._model.set_favorite(wid, new)
+        self._model.set_favorite(wid, entry["favorite"])
 
     @Slot(result=str)
     def getOrder(self) -> str:
@@ -1410,6 +1405,8 @@ class Backend(QObject):
     def _set_setting(self, key: str, value: Any) -> None:
         try:
             settings.update({key: value})
+        except lock.StoreBusy:
+            raise
         except Exception:
             return
         self.settingsChanged.emit()
@@ -2090,9 +2087,7 @@ class ThemeBridge(QObject):
         try:
             if str(key) not in {t["key"] for t in themes.theme_list()}:
                 return
-            cfg = themes.load_config()
-            cfg["active"] = str(key)
-            themes.save_config(cfg)
+            themes.modify(lambda cfg: cfg.update(active=str(key)))
         except Exception:
             return
         self._push()
@@ -2108,12 +2103,12 @@ class ThemeBridge(QObject):
         parsed = themes.parse_color(text)
         if not parsed:
             return False
-        try:
-            cfg = themes.load_config()
+        def overlay(cfg: dict) -> None:
             ov = dict(cfg["overlays"].get(cfg["active"], {}))
             ov[role] = parsed
             cfg["overlays"][cfg["active"]] = ov
-            themes.save_config(cfg)
+        try:
+            themes.modify(overlay)
         except Exception:
             return False
         self._push()
@@ -2124,9 +2119,7 @@ class ThemeBridge(QObject):
         """Reset restores the selected theme's defaults (drops its overlay entirely)."""
         from .storage import themes
         try:
-            cfg = themes.load_config()
-            cfg["overlays"].pop(cfg["active"], None)
-            themes.save_config(cfg)
+            themes.modify(lambda cfg: cfg["overlays"].pop(cfg["active"], None))
         except Exception:
             return
         self._push()
@@ -2145,13 +2138,13 @@ class ThemeBridge(QObject):
         from .storage import themes
         if not self._edit_key:
             return
-        try:
-            cfg = themes.load_config()
+        def revert(cfg: dict) -> None:
             if self._edit_snapshot is None:
                 cfg["overlays"].pop(self._edit_key, None)
             else:
                 cfg["overlays"][self._edit_key] = dict(self._edit_snapshot)
-            themes.save_config(cfg)
+        try:
+            themes.modify(revert)
         except Exception:
             return
         self._edit_snapshot = None

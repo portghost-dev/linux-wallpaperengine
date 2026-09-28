@@ -19,6 +19,7 @@ and event emission are provable with no GPU. The real QProcess path is exercised
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
 import threading
@@ -67,6 +68,14 @@ def bench_overlay_text(title: str, sample: dict | None, run_remaining: float | N
     return overlay_text(title, sample) + "\n\n" + tail
 
 _ENGINE_COMM = "linux-wallpaper"
+
+
+def _record(wid: str, event: dict) -> None:
+    """Append one record event; a busy or failed record store is logged and the action goes on."""
+    try:
+        records.append(wid, event)
+    except OSError as exc:
+        logging.getLogger("lwe_ui.wizard").warning("record for %s not written: %s", wid, exc)
 
 
 class WizardBridge(QObject):
@@ -228,7 +237,7 @@ class WizardBridge(QObject):
     @Slot(str)
     def importUntested(self, comment: str) -> None:
         """P1 power-user door: graduate to the library with no bench (approved-untested event)."""
-        records.append(self._wid, wizard.approved_untested(where="workshop", comment=comment or None))
+        _record(self._wid, wizard.approved_untested(where="workshop", comment=comment or None))
         self._backend.approveReview(self._wid)
         self.graduated.emit(self._wid)
         self.close()
@@ -663,7 +672,7 @@ class WizardBridge(QObject):
 
     @Slot(str)
     def approve(self, comment: str) -> None:
-        records.append(self._wid, wizard.approved_via_wizard(
+        _record(self._wid, wizard.approved_via_wizard(
             content_hash=self._chash, comment=comment or None))
         self._backend.approveReview(self._wid)
         self.graduated.emit(self._wid)
@@ -672,7 +681,7 @@ class WizardBridge(QObject):
     @Slot(str)
     def deny(self, comment: str) -> None:
         wid, title = self._wid, self._title
-        records.append(wid, wizard.deleted_wizard_recommended(
+        _record(wid, wizard.deleted_wizard_recommended(
             lineage=(self._lineage + ["recommended_trash"]),
             content_hash=self._chash,
             repair_attempts=(["applied"] if self._fixed else []),
@@ -689,7 +698,7 @@ class WizardBridge(QObject):
         is recalled and blame rests on the user; the item stays pending. A pre-bench cancel logs
         nothing."""
         if self._session and self._session.verdict == "crashed":
-            records.append(self._wid, wizard.benched_no_decision(
+            _record(self._wid, wizard.benched_no_decision(
                 lineage=(self._lineage + ["recommended_trash"]),
                 content_hash=self._chash,
                 repair_attempts=(["applied"] if self._fixed else []),

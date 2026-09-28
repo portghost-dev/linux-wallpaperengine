@@ -204,7 +204,11 @@ def main(argv: list[str] | None = None) -> int:
     # the tray process: dispatch before the heavy imports below ever run
     if "--tray" in argv:
         paths.ensure_dirs()
-        settings.ensure_exists()
+        try:
+            settings.ensure_exists()
+        except OSError as exc:
+            from . import logbook
+            logbook.install("tray").warning("settings.conf could not be created: %s", exc)
         _settle_state_tree("tray")
         from .tray import main as tray_main
         return tray_main([a for a in argv if a != "--tray"])
@@ -237,7 +241,11 @@ def main(argv: list[str] | None = None) -> int:
         libc = None
 
     paths.ensure_dirs()
-    settings.ensure_exists()
+    try:
+        settings.ensure_exists()
+    except OSError as exc:
+        from . import logbook
+        logbook.install("window").warning("settings.conf could not be created: %s", exc)
     _settle_state_tree("window")
     apply_interface_scale(os.environ)
 
@@ -353,6 +361,9 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, RuntimeError) as exc:
         _msg = f"Engine service config not updated: {exc}"
         QTimer.singleShot(0, lambda: backend.notice.emit(_msg))
+    except OSError as exc:
+        from . import logbook
+        logbook.install("window").warning("engine env file not updated: %s", exc)
 
     backend.reconcileAutostart()
 

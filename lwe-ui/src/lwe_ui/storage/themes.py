@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import zipfile
-from typing import Any
+from typing import Any, Callable
 
 from . import atomic, foreign, lock, migrate, paths
 from .store import Store
@@ -193,6 +193,16 @@ def save_config(cfg: dict[str, Any]) -> None:
             "active": cfg.get("active", DEFAULT_ACTIVE),
             "overlays": cfg.get("overlays", {}),
         })
+
+
+def modify(fn: Callable[[dict[str, Any]], Any]) -> dict[str, Any]:
+    """Under the theme lock: load theme.json fresh, let fn change the dict, and save it.
+    Returns the dict as saved."""
+    with lock.held("theme"):
+        cfg = load_config()
+        fn(cfg)
+        save_config(cfg)
+        return cfg
 
 
 def theme_list() -> list[dict[str, str]]:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import zipfile
-from typing import Any
+from typing import Any, Callable
 
 from . import atomic, lock, paths
 from .store import Store
@@ -41,6 +41,22 @@ def update(id: str, patch: dict[str, Any]) -> None:
     Thread-safe."""
     with _WRITE_LOCK, lock.held("meta"):
         _update_locked(id, patch)
+
+
+def modify(id: str, fn: Callable[[dict[str, Any]], dict[str, Any] | None]) -> dict[str, Any]:
+    """Under the meta locks: fn receives a copy of the entry for `id`, read fresh, and returns
+    the keys to merge into it; the map is saved only when there are any. Returns the entry as
+    it stands after the call. Thread-safe."""
+    with _WRITE_LOCK, lock.held("meta"):
+        data = load()
+        entry = data.get(id)
+        entry = dict(entry) if isinstance(entry, dict) else {}
+        patch = fn(dict(entry)) or {}
+        if patch:
+            entry.update(patch)
+            data[id] = entry
+            save(data)
+        return entry
 
 
 def _update_locked(id: str, patch: dict[str, Any]) -> None:

@@ -173,9 +173,13 @@ def delete(slug: str) -> None:
             dst_dir = paths.legacy_playlists_dir()
             dst_dir.mkdir(parents=True, exist_ok=True)
             src.replace(dst_dir / f"{slug}.conf.{time.strftime('%Y%m%d-%H%M%S')}")
-    if active_slug(validate=False) == slug:
+
+    def repoint(cfg: dict[str, Any]) -> dict[str, Any]:
+        if str(cfg.get("ACTIVE_PLAYLIST") or "") != slug:
+            return {}
         remaining = list_playlists()
-        set_active(remaining[0]["slug"] if remaining else "")
+        return {"ACTIVE_PLAYLIST": remaining[0]["slug"] if remaining else ""}
+    settings.modify(repoint)
 
 
 def members(slug: str) -> list[str]:
@@ -238,22 +242,24 @@ def ensure_default() -> str:
     """First-run/migration: no playlists yet -> build one from the legacy single-playlist
     state (good pool + ORDER/INTERVAL; stored 'weighted' arrives snapped to 'shuffle' by
     the settings enum). Idempotent; returns the active slug either way."""
-    existing = list_playlists()
-    if existing:
-        slug = active_slug()
-        if not slug:
-            slug = existing[0]["slug"]
-            set_active(slug)  # persist the pointer
-        return slug
     from . import tags  # local import: keep module import cost flat
-    s = settings.load()
-    mode = s.get("ORDER") if s.get("ORDER") in C.PLAYLIST_MODES else "shuffle"
-    if not s.get("ROTATION_ENABLED", True):
-        mode = "static"
-    slug = create(C.DEFAULT_PLAYLIST_NAME, members=sorted(tags.good_ids()),
-                  mode=mode, interval=int(s.get("INTERVAL") or 900), unit="min")
-    set_active(slug)
-    return slug
+    with lock.held("playlists"):
+        existing = list_playlists()
+        if existing:
+            slug = existing[0]["slug"]
+        else:
+            s = settings.load()
+            mode = s.get("ORDER") if s.get("ORDER") in C.PLAYLIST_MODES else "shuffle"
+            if not s.get("ROTATION_ENABLED", True):
+                mode = "static"
+            slug = create(C.DEFAULT_PLAYLIST_NAME, members=sorted(tags.good_ids()),
+                          mode=mode, interval=int(s.get("INTERVAL") or 900), unit="min")
+
+    def adopt(cfg: dict[str, Any]) -> dict[str, Any]:
+        current = str(cfg.get("ACTIVE_PLAYLIST") or "")
+        return {} if current and paths.playlist_file(current).exists() else {"ACTIVE_PLAYLIST": slug}
+    settings.modify(adopt)
+    return active_slug() or slug
 
 
 # --- backup ---------------------------------------------------------------------------

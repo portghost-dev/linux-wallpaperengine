@@ -63,7 +63,7 @@ from .editor import (
     _skip_set,
     resolve_render_dir,
 )
-from .storage import meta, paths, settings, wp
+from .storage import lock, meta, paths, settings, wp
 
 SOURCE_PENDING = bench_mod.SOURCE_PENDING
 SOURCE_GOOD = bench_mod.SOURCE_GOOD
@@ -83,30 +83,31 @@ def seed_pending_conf(wid: str, workshop_dir: str | Path) -> dict[str, Any]:
     STICKY: an existing conf is returned unchanged, so an in-progress tuning session is never
     clobbered by a reopen.
     """
-    if paths.wp_file(wid).exists():
-        return wp.load(wid)
+    with lock.held("overrides"):
+        if paths.wp_file(wid).exists():
+            return wp.load(wid)
 
-    wdir = Path(workshop_dir) / wid
-    proj = project_disc.read(wdir)
+        wdir = Path(workshop_dir) / wid
+        proj = project_disc.read(wdir)
 
-    d: dict[str, Any] = {k: spec["default"] for k, spec in C.WP_SCHEMA.items()}
-    d["props"] = {}
+        d: dict[str, Any] = {k: spec["default"] for k, spec in C.WP_SCHEMA.items()}
+        d["props"] = {}
 
-    wtype = proj.get("type") or ""
-    if wtype in C.WALLPAPER_TYPES:
-        d["TYPE"] = wtype
-    # else: keep the schema default ("scene"); read() never clamps, so guard the enum here.
+        wtype = proj.get("type") or ""
+        if wtype in C.WALLPAPER_TYPES:
+            d["TYPE"] = wtype
+        # else: keep the schema default ("scene"); read() never clamps, so guard the enum here.
 
-    d["BG"] = str(wdir)
-    # color-grade keys live NESTED under project.json's `preset` block in real WE wallpapers
-    # (verified: 0/53 local presets carry wec_* at top level). Fall back to the raw top level
-    # for any odd pack that puts them there.
-    raw = proj.get("raw") or {}
-    preset = raw.get("preset")
-    d["CC"] = project_disc.derive_cc(preset if isinstance(preset, dict) else raw)
+        d["BG"] = str(wdir)
+        # color-grade keys live NESTED under project.json's `preset` block in real WE wallpapers
+        # (verified: 0/53 local presets carry wec_* at top level). Fall back to the raw top level
+        # for any odd pack that puts them there.
+        raw = proj.get("raw") or {}
+        preset = raw.get("preset")
+        d["CC"] = project_disc.derive_cc(preset if isinstance(preset, dict) else raw)
 
-    wp.save(wid, d)
-    return d
+        wp.save(wid, d)
+        return d
 
 
 def _default_process_factory() -> QProcess:
@@ -501,18 +502,15 @@ class BenchBridge(QObject):
             })
         return out
 
-    def _persist_draft(self, changes: dict[str, Any] | None = None) -> None:
-        """Persist the working copy to wp/<id>.conf.
-
-        `changes` names the keys that actually moved so the write stays presence-preserving
-        (an unnamed key is never materialized); omitting it writes the whole dict, which is
-        what the props path needs since a removed prop has no key left to name.
-        """
+    def _persist_draft(self, changes: dict[str, Any], *, prop: bool = False) -> None:
+        """Persist the keys that moved to wp/<id>.conf, each from a fresh read inside the
+        overrides lock, so an unnamed key is never materialized. A property is written through
+        modify_set, where None removes its key."""
         if not self._wid:
             return
         try:
-            if changes is None:
-                wp.save(self._wid, self._draft)
+            if prop:
+                wp.modify_set(self._wid, lambda _present: dict(changes))
             else:
                 wp.update_set(self._wid, changes)
         except Exception:
@@ -604,7 +602,7 @@ class BenchBridge(QObject):
             props.pop(name, None)
         else:
             props[name] = sval
-        self._persist_draft()
+        self._persist_draft({f"{C.WP_PROP_PREFIX}{name}": sval or None}, prop=True)
 
     @Slot(str, bool)
     def setObjectGroupEnabled(self, otype: str, on: bool) -> None:
