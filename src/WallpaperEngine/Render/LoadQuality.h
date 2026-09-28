@@ -3,7 +3,7 @@
 #include <optional>
 #include <string>
 
-/** the show's quality switches, resolved at scene load; an empty value is the launch environment */
+/** the show's quality switches, resolved at scene load; an empty value is the launch flag, else environment */
 namespace WallpaperEngine::Render::LoadQuality {
 float ssfactor (std::optional<float> perShow);
 float clampComposites (std::optional<float> perShow);

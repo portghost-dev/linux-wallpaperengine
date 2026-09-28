@@ -170,7 +170,7 @@ public:
 		WallpaperEngine::Render::WallpaperState::TextureUVsScaling scalingMode;
 	    } window;
 
-	    /** quality switches of the current show, read at scene load; empty = the launch environment */
+	    /** quality switches of the current show, read at scene load; empty = the launch flag, else environment */
 	    struct {
 		std::optional<float> ssfactor;
 		std::optional<float> clampComposites;

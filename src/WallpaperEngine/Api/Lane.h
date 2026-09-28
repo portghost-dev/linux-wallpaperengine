@@ -68,7 +68,7 @@ struct Look {
     bool automute = true;
     std::string scaling;
     std::string clamp;
-    /** the show's quality switches, empty = the launch environment (see settings.render.quality) */
+    /** the show's quality switches, empty = the launch flag, else environment (see settings.render.quality) */
     std::optional<float> ssfactor;
     std::optional<float> clampComposites;
     std::string texcomp;

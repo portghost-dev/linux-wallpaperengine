@@ -1986,7 +1986,7 @@ nlohmann::json WallpaperApplication::apiStatus () const {
     // NOT listed - they are not in the registry, precisely because they cannot be changed.
     result["instruments"] = Logging::instrumentsEnabled ();
     result["fullscreen_pause"] = this->m_context.settings.render.fullscreenBehavior != FullscreenBehavior::Off;
-    // the quality switches this show set; empty = the launch environment's value
+    // the quality switches this show set; empty = the launch value (the flag, else the environment)
     result["quality"] = { { "ssfactor", this->m_context.settings.render.quality.ssfactor },
 			  { "clampcomposites", this->m_context.settings.render.quality.clampComposites },
 			  { "texcomp", this->m_context.settings.render.quality.texcomp },
@@ -3194,7 +3194,7 @@ void WallpaperApplication::restoreRuntimeState () {
 	}
 
 	if (state.contains ("fullscreen_behavior")) {
-	    // --daemon forces Off at parse time; the persisted policy wins on restore,
+	    // --daemon sets Stop at parse time; the persisted policy wins on restore,
 	    // and the launch default follows (same pairing as the set-fullscreen verb)
 	    if (const auto parsed = parseFullscreenBehavior (state["fullscreen_behavior"].get<std::string> ());
 		parsed.has_value ()) {

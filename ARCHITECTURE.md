@@ -35,7 +35,7 @@ This fork turns that into a small system of cooperating processes:
 │                                                                          │
 │  - daemon mode: boots with surfaces up, restores its own persisted       │
 │    state (wallpaper, rotation, settings), or waits idle for work         │
-│  - command API: 25 verbs, strictly validated, id-correlated replies      │
+│  - command API: 30 verbs, strictly validated, id-correlated replies      │
 │  - renders scenes/video into offscreen FBOs, presents to layer surfaces  │
 │  - owns all GL, all wallpaper state, the rotation engine, fullscreen     │
 │    policy, the running-apps rule, and the VRAM residency machinery       │
@@ -150,7 +150,7 @@ New directory `src/WallpaperEngine/Api/`, two classes:
   `{"id": int, "cmd": verb, "args": {...}}`. Every verb and argument is validated
   before any handler runs (`Api/CommandDispatcher.cpp::parse`); nesting depth is pre-capped
   to stop parser stack exhaustion (Api/CommandDispatcher.cpp::parse); wallpaper ids must match
-  `[A-Za-z0-9_-]{1,64}`, so no wire input can be path-shaped (Api/CommandDispatcher.cpp::validBackgroundId). The 25 verbs
+  `[A-Za-z0-9_-]{1,64}`, so no wire input can be path-shaped (Api/CommandDispatcher.cpp::validBackgroundId). The 30 verbs
   and their argument contracts are tabulated in docs/FORK-MAP.md chapters 1 and 8.
 
 Replies follow an **accepted-then-done** pattern: long commands (`show`, `next`,
@@ -198,9 +198,9 @@ project first, then invokes `applyShowCore`
    because they key the mirror groups (WallpaperApplication.cpp::applyShowCore).
 3. Rebuild everything: tear down scenes, evict sole-owner cache textures, reload,
    rebuild (`rebuildForCurrentBackgrounds`, WallpaperApplication.cpp::rebuildForCurrentBackgrounds).
-4. On any exception, restore the 12 snapshotted previous settings and rebuild the old
+4. On any exception, restore the 14 snapshotted previous settings and rebuild the old
    set (WallpaperApplication.cpp::applyShowCore). A failed show never leaves a half-applied state.
-5. On success, push the previous show onto a 20-deep history deque (this is what
+5. On success, push the previous show onto a 100-deep history deque (this is what
    `prev` pops) and stamp the current show with the client's opaque `ui_id`, which
    survives engine-driven advances so the panel can tell "the tile the user clicked"
    apart from "the base wallpaper".
@@ -208,8 +208,8 @@ project first, then invokes `applyShowCore`
 ### 2.5 Rotation
 
 `rotate-set` replaces the whole playlist atomically; each entry carries the full
-per-show vocabulary. The engine then owns the schedule: sequential / shuffle (full
-permutation before reshuffle) / random, and `avoid_repeat` re-rolls against the
+per-show vocabulary. The engine then owns the schedule: sequential, shuffle (full
+permutation before reshuffle) and static, with random accepted for one release, and `avoid_repeat` re-rolls against the
 current display id. Disabling freezes the countdown: re-pushing an unchanged disabled
 set preserves the remaining time (a changed set freezes at the full interval), and
 re-enabling the same set resumes where it froze via a backdated clock
@@ -261,7 +261,7 @@ the largest screen the wallpaper plays on, the largest monitor even for a bench 
 `LWE_CLAMPCOMPOSITES` at 0 or below leaves the composites uncapped, so effect chains keep their
 texel size), and mip residency can cap uploads to the
 largest live output dimension with per-frame demand expansion (on by default,
-`LWE_TEXDETAIL=full` opts out;
+any `LWE_TEXDETAIL` other than auto opts out;
 `MipResidency.cpp`). Offline BC7/BC4/BC5 compression is ingested from a disk cache
 keyed by sha256 of the stored mip0 bytes, after the container's LZ4 wrapping is
 reversed and before any image decode (`uploadFromTexcache`, `CTexture.cpp::uploadFromTexcache`;
@@ -334,7 +334,7 @@ is to be the daemon API's reference client and the system's owner:
   row's keys; one tap restarts the service in place for every row that is pending.
   The same three switches can be chosen per wallpaper in the scene editor's `Quality and
   memory` rule; a chosen value rides the show and the engine resolves it at scene load, an
-  absent one inherits the engine's launch environment.
+  absent one inherits the engine's launch value (the flag when given, else the environment).
 - It **writes overrides sparsely**: a per-wallpaper conf carries only what the user set or
   the wallpaper declares; a present key pins, an absent key inherits the global, so a
   default shipped later reaches every wallpaper that never chose otherwise.

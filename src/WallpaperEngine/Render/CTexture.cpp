@@ -340,7 +340,7 @@ CTexture::CTexture (RenderContext& context, TextureUniquePtr header, const int c
 }
 
 void CTexture::createGL () {
-    // the show's compression switch, the launch environment when it says nothing
+    // the show's compression switch, the launch value (the flag, else the environment) when it says nothing
     const bool allowCache
 	= LoadQuality::texcomp (this->getContext ().getApp ().getContext ().settings.render.quality.texcomp);
     if (getenv ("LWE_BASELEVEL_PROBE") != nullptr) {

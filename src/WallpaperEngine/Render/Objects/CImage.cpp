@@ -283,7 +283,7 @@ CImage::CImage (Wallpapers::CScene& scene, const Image& image) :
 	    );
 	}
     }
-    // unclamped composites keep effect chains at their authored size
+    // unclamped composites keep effect chains at their uncapped size
     const glm::vec2 fboSize = scene.clampToEffectCap (fboBase);
     const uint32_t fboFlags = this->m_texture->getFlags ();
     const TextureFormat compositeFormat = scene.isHdrBloom () ? TextureFormat_RGBA16161616f : TextureFormat_ARGB8888;

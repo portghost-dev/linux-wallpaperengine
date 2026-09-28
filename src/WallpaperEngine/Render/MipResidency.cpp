@@ -52,7 +52,7 @@ void recordPass (const std::string& shader, const TextureMap& textures, const bo
 
 namespace WallpaperEngine::Render::MipResidency {
 namespace {
-// set at every scene load from the show's texdetail, the launch environment as the default
+// set at every scene load from the show's texdetail, the launch flag, else environment, as the default
 bool g_enabled = Application::Config::get ().texdetailAuto.value;
 } // namespace
 

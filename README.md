@@ -110,12 +110,12 @@ now look right, and the ones that do not are how the work continues.
   invisible and no client has to babysit the engine. A crash-loop guard boots
   it idle instead of restoring into a repeating failure.
 - Live property reload, a fullscreen-app policy handled by the engine itself
-  (it frees the outputs when something goes fullscreen and takes them back the
-  moment it clears), and a running-apps rule: while a listed process is up, for
-  example a local LLM that needs the VRAM, the engine pauses or stands down on
-  its own and comes back when the process exits. A stood-down engine is honest
-  about it: VRAM is freed and resident memory drops to roughly 60 MB until the
-  outputs come back.
+  (keep playing, pause, or free the outputs until the fullscreen window closes;
+  freeing needs Wayland), and a running-apps rule: while a listed process is up,
+  for example a local LLM that needs the VRAM, the engine pauses or stands down
+  on its own and comes back when the process exits. A stood-down engine is
+  honest about it: VRAM is freed and resident memory drops to roughly 60 MB
+  until the outputs come back.
 - Console output from a misbehaving wallpaper is rate-limited so it cannot
   drown the engine's own logs.
 - Hardened parsers for the binary formats a wallpaper package can carry, and hard
@@ -240,6 +240,100 @@ argument and bound is in [`docs/FORK-MAP.md`](docs/FORK-MAP.md) chapters 1 and
 
 `linux-wallpaperengine --version` prints the engine's version stamp alone on one line and exits, and the
 `status` reply carries the same stamp in its `version` field.
+
+## Settings
+
+`linux-wallpaperengine --help` lists every flag with its values and default.
+The engine takes thirteen settings. Give each one as a launch flag, or as the
+environment variable beside it; when both are set, the flag wins. A flag's value
+is checked when the engine starts, and a bad value stops it with a message that
+names the flag. The `status` reply's `config` block shows each setting's value
+and whether it came from a flag, the environment or the default.
+
+| Flag | Variable | Takes | Default | What it does |
+|---|---|---|---|---|
+| `--resclamp` | `LWE_SSFACTOR` | a number up to 4; 0 or below is no cap | 1 | Caps the size a scene is drawn at, as a multiple of your largest screen. Lower saves video memory. It never enlarges anything, and turning it off can remove blur this cap caused. |
+| `--effectclamp` | `LWE_CLAMPCOMPOSITES` | a number up to 4; 0 or below is no cap | 1 | The same cap for glow, blur and the other effect layers, set on its own. |
+| `--texturecache` | `LWE_TEXCOMP` | on or off | on | Uses the compressed textures the panel builds; off loads the originals and deletes nothing. |
+| `--texturedetail` | `LWE_TEXDETAIL` | auto or full | auto | auto loads smaller textures when your screen does not need the full size; full always loads everything. |
+| `--videodecode` | `LWE_HWDEC` | software or auto | software | How video wallpapers are decoded; auto uses the graphics card when it can. |
+| `--color` | `LWE_CC` | "brightness contrast saturation hue" | "1 1 1 0" | The color correction every wallpaper starts with. The flag takes the hue in degrees; the variable takes radians. |
+| `--speed` | `LWE_TIMESCALE` | a number from 0 to 10 | 1 | How fast scene animation runs; 0 freezes it. |
+| `--watchdog` | `LWE_DEADMAN` | whole seconds, or a whole number with s, m or h, up to 24h; 0 is off | 300 | If the engine has drawn nothing and heard nothing from the panel for this long, it frees your screens. It restarts nothing. |
+| `--lightdimming` | `LWE_CLASSICK` | 0.01 to 1000 | 16 | Overall brightness of the lights inside scenes; higher is dimmer. |
+| `--lightfalloff` | `LWE_CLASSICEXP` | 0.5 to 6 | 2 | How quickly scene lights fade with distance. |
+| `--audiogain` | `LWE_AUDIOGAIN` | 0.1 to 20 | 1 | How strongly wallpapers react to sound. |
+| `--audiosmoothing` | `LWE_AUDIOSMOOTH` | 0 to 500 milliseconds, as 90 or 90ms | 90 | How smoothly the sound levels wallpapers react to change. |
+| `--socket` | `LWE_SOCKET` | a path | `$XDG_RUNTIME_DIR/lwe/engine.sock`, else `/tmp/lwe-<uid>/engine.sock` | Where the engine listens for commands. |
+
+Apart from `--watchdog`, number flags take plain decimal numbers: a sign, a
+decimal point and an exponent such as 1e3 are fine, but not hex, inf or nan, and
+-0 means 0.
+
+Good to know:
+- The panel's service passes its own settings to the engine, so when the panel
+  runs the engine, change these in the panel. The flags are for an engine you
+  start yourself: from a shell, a compositor config or your own unit.
+- The variables keep their old forms: `LWE_CC` takes the hue in radians,
+  `LWE_DEADMAN` plain seconds, `LWE_TIMESCALE` any speed up to 20, and
+  `LWE_HWDEC` any of mpv's hardware decoding modes.
+- With `--daemon`, a saved state brings back speed, color, light dimming, light
+  falloff and sound strength right after launch, unless the command line gives a
+  screen a wallpaper (`--screen` with `--wallpaper` or `--steamplaylist`). The
+  `config` block still shows the flag's value.
+- A `show` command that carries its own caps or texture choices keeps them for
+  that wallpaper, whatever the flags say.
+- A value that starts with a dash can't be given unless it is a plain number
+  such as -1; write a path that starts with a dash as `./-name`.
+
+```
+linux-wallpaperengine --screen DP-1 --wallpaper 2317494988 --resclamp 0 --texturedetail full --speed 0.5 --color "1.1 1 1.2 15" --watchdog 10m
+```
+
+### Plainer flag names
+
+Every flag keeps its old spelling. Fifteen also have a plainer name. Both
+spellings are the same flag, so giving both for a flag that can appear only once
+is refused.
+
+| Plainer name | Old name |
+|---|---|
+| `--screen` | `-r`, `--screen-root` |
+| `--span` | `--screen-span` |
+| `--wallpaper` | `-b`, `--bg` |
+| `--steamplaylist` | `--playlist` |
+| `--edge` | `--clamp` |
+| `--mute` | `-s`, `--silent` |
+| `--no-automute` | `--noautomute` |
+| `--no-audioreactive` | `--no-audio-processing` |
+| `--listen` | `--api-socket` |
+| `--assetsfolder` | `--assets-dir` |
+| `--no-particles` | `--disable-particles` |
+| `--no-mouse` | `--disable-mouse` |
+| `--no-parallax` | `--disable-parallax` |
+| `--fullscreen-active-only` | `--fullscreen-pause-only-active` |
+| `--fullscreen-ignore` | `--fullscreen-pause-ignore-appid` |
+
+`--edge` takes extend, blank or tile, the same as the old words clamp, border
+and repeat, which still work. The default is extend. It applies to the screen
+named just before it; given before any screen, it sets the window and the
+starting value for the screens named after it.
+
+`--fullscreen keep`, `pause` or `stop` sets what happens while a game or app is
+fullscreen: keep playing, pause, or stop and free the screens (stop needs
+Wayland). Without it the engine pauses, or stops with `--daemon`; `--fullscreen`
+wins over `--daemon` in either order. `--no-fullscreen-pause` does the same as
+`keep`, unless a later `--daemon` sets stop. `--fullscreen` and
+`--no-fullscreen-pause` can't be given together. With `--daemon`, a restored
+state also brings back its saved fullscreen choice.
+
+### Debugging switches
+
+The engine also has about eighty debugging switches for diagnosing problems.
+They are unsupported and can change or disappear in any release.
+`linux-wallpaperengine --help-debug` lists them, and `--debug switch=value` sets
+one, for example `--debug audit=on`. Each name is an alias for an engine
+variable, which still works.
 
 ## Troubleshooting
 
