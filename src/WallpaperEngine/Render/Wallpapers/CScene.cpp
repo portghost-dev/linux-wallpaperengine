@@ -11,18 +11,19 @@
 #include "CScene.h"
 #include "WallpaperEngine/Logging/Log.h"
 
+#include "WallpaperEngine/Application/WallpaperApplication.h"
 #include "WallpaperEngine/Data/Model/Wallpaper.h"
 #include "WallpaperEngine/Data/Parsers/ObjectParser.h"
 #include "WallpaperEngine/Render/Drivers/Output/OutputViewport.h"
-#include "WallpaperEngine/Render/MipResidency.h"
 #include "WallpaperEngine/Render/LoadQuality.h"
-#include "WallpaperEngine/Application/WallpaperApplication.h"
+#include "WallpaperEngine/Render/MipResidency.h"
 #include "WallpaperEngine/Render/Utils/WorkPool.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <ranges>
+#include <unordered_map>
 
 extern float g_Time;
 extern float g_TimeLast;
@@ -158,8 +159,10 @@ CScene::CScene (
     }
 
     // copy over objects by render order
-    for (const auto& object : scene->objects) {
-	this->addObjectToRenderOrder (*object);
+    const auto order = renderOrder (scene->objects, [this] (const int id) { return this->m_objects.contains (id); });
+
+    for (const int id : order.ids) {
+	this->m_objectsByRenderOrder.emplace_back (this->m_objects.at (id));
     }
 
     const float bloomBaseW = static_cast<float> (this->m_sceneFBO->getRealWidth ());
@@ -1009,13 +1012,27 @@ Render::CObject* CScene::dispatchObjectType (const Object& object) {
     return renderObject;
 }
 
-void CScene::addObjectToRenderOrder (const Object& object) {
-    const auto obj = this->m_objects.find (object.id);
+namespace {
+struct RenderOrderWalk {
+    const std::function<bool (int)>& created;
+    std::unordered_map<int, const Object*> firstById;
+    std::unordered_set<const Object*> done;
+    std::unordered_set<const Object*> onPath;
+    std::vector<const Object*> path;
+    std::unordered_set<int> placed;
+    RenderOrder order;
+};
+
+void addObjectToRenderOrder (const Object& object, RenderOrderWalk& walk) {
+    walk.order.steps++;
 
     // ignores not created objects like particle systems
-    if (obj == this->m_objects.end ()) {
+    if (!walk.created (object.id) || walk.done.contains (&object)) {
 	return;
     }
+
+    walk.path.push_back (&object);
+    walk.onPath.insert (&object);
 
     // take into account any dependency first
     for (const auto& dep : object.dependencies) {
@@ -1025,23 +1042,50 @@ void CScene::addObjectToRenderOrder (const Object& object) {
 	}
 
 	// add the dependency to the list if it's created
-	auto depIt = std::ranges::find_if (this->getScene ().objects, [&dep] (const auto& o) { return o->id == dep; });
+	const auto depIt = walk.firstById.find (dep);
 
-	if (depIt != this->getScene ().objects.end ()) {
-	    this->addObjectToRenderOrder (**depIt);
-	} else {
+	if (depIt == walk.firstById.end ()) {
 	    sLog.error ("Cannot find dependency ", dep, " for object ", object.id);
+	} else if (walk.onPath.contains (depIt->second)) {
+	    std::string ids;
+
+	    for (auto it = std::ranges::find (walk.path, depIt->second); it != walk.path.end (); ++it) {
+		ids += std::to_string ((*it)->id) + ", ";
+	    }
+
+	    sLog.error (
+		"Dependency cycle among scene objects ", ids, dep, ": render order ignores the dependency of ",
+		object.id, " on ", dep
+	    );
+	} else {
+	    addObjectToRenderOrder (*depIt->second, walk);
 	}
     }
 
-    // ensure we're added only once to the render list
-    const auto renderIt = std::ranges::find_if (this->m_objectsByRenderOrder, [&object] (const auto& o) {
-	return o->getId () == object.id;
-    });
+    walk.onPath.erase (&object);
+    walk.path.pop_back ();
+    walk.done.insert (&object);
 
-    if (renderIt == this->m_objectsByRenderOrder.end ()) {
-	this->m_objectsByRenderOrder.emplace_back (obj->second);
+    // ensure we're added only once to the render list
+    if (walk.placed.insert (object.id).second) {
+	walk.order.ids.push_back (object.id);
     }
+}
+} // namespace
+
+RenderOrder
+WallpaperEngine::Render::Wallpapers::renderOrder (const ObjectList& objects, const std::function<bool (int)>& created) {
+    RenderOrderWalk walk { .created = created };
+
+    for (const auto& object : objects) {
+	walk.firstById.emplace (object->id, object.get ());
+    }
+
+    for (const auto& object : objects) {
+	addObjectToRenderOrder (*object, walk);
+    }
+
+    return walk.order;
 }
 
 ScriptEngine& CScene::getScriptEngine () const { return *this->m_scriptEngine; }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <set>
 #include <unordered_set>
 
@@ -18,6 +19,13 @@ using namespace WallpaperEngine::Data::Model;
 
 // "WxH" to a size, {0,0} for anything else; the LWE_CLAMPOUTPUT test override reads through it
 [[nodiscard]] glm::ivec2 parseOutputSize (const char* text);
+
+struct RenderOrder {
+    std::vector<int> ids;
+    size_t steps = 0;
+};
+
+[[nodiscard]] RenderOrder renderOrder (const ObjectList& objects, const std::function<bool (int)>& created);
 
 class CScene final : public CWallpaper {
 public:
@@ -143,7 +151,6 @@ private:
     Render::CObject* dispatchObjectType (const Object& object);
     /** Recomputes m_lightState from the scene's light objects (colors/intensity can be dynamic) */
     void updateLights ();
-    void addObjectToRenderOrder (const Object& object);
     void collectSharedComposites (const Scene& scene);
     void reportPoolHighWater () const;
     [[nodiscard]] glm::vec2 clampToFactor (glm::vec2 size, float factor) const;
