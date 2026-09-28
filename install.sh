@@ -68,9 +68,9 @@ make -C build -j"$(nproc)"
 
 echo
 echo "== step 4/6: installing the engine to ~/.local =="
-# cmake --install rather than a plain copy: the install step rewrites each binary's
-# library search path from the build tree to its own directory, so the install
-# keeps working after the build directory is gone
+# cmake --install rather than a plain copy: it installs only the lwe component, with
+# permissions; each binary already looks for its libraries in its own directory
+# ($ORIGIN), so the install keeps working after the build directory is gone
 mkdir -p "$ENGINE_HOME" "$HOME/.local/bin"
 cmake --install build --prefix "$ENGINE_HOME" --component lwe
 ln -sf "$ENGINE_HOME/linux-wallpaperengine" "$HOME/.local/bin/linux-wallpaperengine"

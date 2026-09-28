@@ -150,13 +150,12 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/output)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
 set(TARGET_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/output)
 
-# RPATH configuration: use build directories during development, but $ORIGIN after installation
+# RPATH: $ORIGIN in the build tree and after install; a separate build RPATH gets an empty entry (the working directory)
 # NOTE: \$ORIGIN must be escaped because CMake treats $VAR as variable expansion.
 # IMPORTANT: This must be set BEFORE any add_executable()/add_library() calls in this directory.
-set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
 set(CMAKE_INSTALL_RPATH "\$ORIGIN;\$ORIGIN/lib;\$ORIGIN/lib64")
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
-set(CMAKE_BUILD_RPATH "${TARGET_OUTPUT_DIRECTORY}")
 
 add_subdirectory(${CEF_LIBCEF_DLL_WRAPPER_PATH} libcef_dll_wrapper)
 add_subdirectory(src/External/glslang-WallpaperEngine glslang)
@@ -864,8 +863,8 @@ if(BUILD_TESTING)
     REPLACED_SET_EXECUTABLE_TARGET_PROPERTIES(lwe-web-frame-probe)
 endif()
 
-# Install the main executable and shared library via install(TARGETS)
-# so that CMake automatically strips/replaces the build-time RPATH.
+# Install the main executable and shared library via install(TARGETS), which sets their
+# permissions; they already carry the install RPATH, so nothing is rewritten at install time.
 install(TARGETS linux-wallpaperengine
     RUNTIME DESTINATION . COMPONENT lwe
 )
