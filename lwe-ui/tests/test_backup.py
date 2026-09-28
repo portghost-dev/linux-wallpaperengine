@@ -2,8 +2,8 @@
 (the migration tables applied, unknown keys kept aside and named, every adjustment named),
 overrides keep their set-ness, overrides and tags for wallpapers not in the library are
 held, a machine path that does not exist here is re-resolved, a newer format restores with
-a note, the export is atomic, and the importer keeps a pre-seeded override's user keys at
-first arrival only."""
+a note, the export is atomic, the importer keeps a pre-seeded override's user keys at
+first arrival only, and a wallpaper's list of meta tags travels while a mixed list is dropped."""
 from __future__ import annotations
 
 import _sandbox  # noqa: F401  (pins the engine socket and the host probes before any lwe_ui import)
@@ -497,6 +497,43 @@ def doors() -> None:
           "snapshots kept")
 
 
+def meta_tag_lists() -> None:
+    """The list of tags the editor writes into meta.json travels: a list of strings, empty included, and
+    the older string form are restored exactly; a list holding anything but strings is dropped and named."""
+    home = tempfile.mkdtemp(prefix="lwe-backup-meta-")
+    os.environ["XDG_CONFIG_HOME"] = os.path.join(home, "c")
+    os.environ["XDG_STATE_HOME"] = os.path.join(home, "s")
+    os.environ["XDG_DATA_HOME"] = os.path.join(home, "d")
+    from lwe_ui.storage import backup, meta, paths, settings
+
+    paths.ensure_dirs()
+    settings.ensure_exists()
+    lib = os.path.join(home, "walls")
+    for wid in ("aaa", "bbb", "ccc", "ddd"):
+        os.makedirs(os.path.join(lib, wid))
+    settings.save({**settings.load(), "WALLPAPERS_DIR": lib})
+    meta.update("aaa", {"tags": ["space", "night"]})
+    meta.update("bbb", {"tags": []})
+    meta.update("ccc", {"tags": "legacy"})
+    base = os.path.join(home, "base.lwebackup")
+    assert backup.export_to(base)["errors"] == []
+    mixed = _doctor(base, os.path.join(home, "mixed.lwebackup"), {
+        "meta.json": lambda d: json.dumps({**json.loads(d), "ddd": {"tags": ["space", 1]}}).encode()})
+    pre = backup.preflight(mixed)
+    assert [(d["kind"], d["id"]) for d in pre["dropped"]] == [("meta", "ddd:tags")], pre["dropped"]
+    assert pre["plan"]["meta"] == {"aaa": {"tags": ["space", "night"]}, "bbb": {"tags": []},
+                                   "ccc": {"tags": "legacy"}}, pre["plan"]["meta"]
+    meta.save({})
+    r = backup.apply(pre)
+    assert r["errors"] == [], r["errors"]
+    assert {wid: meta.get(wid).get("tags") for wid in ("aaa", "bbb", "ccc")} == \
+        {"aaa": ["space", "night"], "bbb": [], "ccc": "legacy"}, meta.load()
+    assert "ddd" not in meta.load(), meta.load()
+    shutil.rmtree(home, ignore_errors=True)
+    print("OK backup meta tags: lists of strings and strings restored, a mixed list dropped and named")
+
+
 if __name__ == "__main__":
     main()
     doors()
+    meta_tag_lists()

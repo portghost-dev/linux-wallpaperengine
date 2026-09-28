@@ -1,7 +1,7 @@
 """lwe help: each screen through cli.main in this process, byte for byte against the fixture screens
 in tests/fixtures/help (help resclamp still prints its fixed page), a page made from every command, setting
-and per-wallpaper row, five of them pinned in tests/fixtures/help/pages, and help --debug through a
-fake engine named by ENGINE_BIN.
+and per-wallpaper row, five of them pinned in tests/fixtures/help/pages, help remove giving the remove
+--playlist page, and help --debug through a fake engine named by ENGINE_BIN.
 
 The environment is rebuilt from nothing before any lwe_ui import: HOME, the XDG folders, the engine
 socket and PATH all point into a scratch folder, so the fake engine that help --debug starts inherits
@@ -165,6 +165,14 @@ class CliHelpTest(unittest.TestCase):
         code, out, err = self._help("speed")
         self.assertEqual((code, err), (0, ""))
         self.assertIn("0.1 to 10 (1 is normal; 0 freezes it and is not saved)", " ".join(out.split()))
+
+    def test_help_remove_shows_the_remove_playlist_page(self) -> None:
+        page = ("remove <wallpaper>... --playlist <playlist>\n"
+                "\n"
+                "Takes wallpapers out of that playlist; repeat --playlist for more than\n"
+                "one. It only ever touches playlists: without --playlist it refuses and\n"
+                "points to trash. Not in that playlist: nothing changes and it says so.\n")
+        self.assertEqual((self._help("remove"), self._help("remove", "--playlist")), ((0, page, ""), (0, page, "")))
 
     def test_an_unknown_topic_exits_3(self) -> None:
         code, out, err = self._help("nosuchtopic")

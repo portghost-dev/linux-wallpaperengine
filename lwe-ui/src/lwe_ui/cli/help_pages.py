@@ -68,8 +68,14 @@ def wallpaper_page(row: dict[str, str]) -> str:
     return _page([f"wallpaper <wallpaper> {row['name']} {_token(row['values'])}"], [row["what"], facts])
 
 
+#: help topics that name a command whose page is under a longer name
+_TOPIC_ALIASES = {"remove": "remove --playlist"}
+
+
 def page(topic: str) -> str | None:
-    """The page for a command name, else a setting name, else a per-wallpaper word; None if none."""
+    """The page for a command name (or a topic alias of one), else a setting name, else a per-wallpaper word;
+    None if none."""
+    topic = _TOPIC_ALIASES.get(topic, topic)
     for row in vocabulary.COMMANDS:
         if row["name"] == topic:
             return command_page(row)

@@ -75,7 +75,7 @@ def _preview(ctx: Context, path: str) -> int:
     paths.ensure_dirs()
     r = backup.preflight(path)
     r.pop("plan", None)
-    headline = f"Refused {path}" if r.get("refused") else "Would restore: " + (backup.receipt_line(r) or "nothing")
+    headline = f"Refused {path}" if r.get("refused") else backup.receipt_line(r, preview=True) or "Would restore: nothing"
     _print(ctx, headline, r)
     return REFUSED if r.get("refused") else DONE
 

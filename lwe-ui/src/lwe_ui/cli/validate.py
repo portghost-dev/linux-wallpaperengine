@@ -265,7 +265,8 @@ def check_all(status: dict | None = None) -> tuple[list[str], list[str], list[di
 
 
 def census() -> dict[str, Path]:
-    """{the name reload prints: the path} for every file reload reads that exists."""
+    """{the name reload prints: the path} for every file reload reads that exists, and tags.csv, which it
+    only compares."""
     from ..storage import paths
     out: dict[str, Path] = {}
     if paths.settings_file().is_file():
@@ -278,6 +279,8 @@ def census() -> dict[str, Path]:
         path = paths.config_dir() / name
         if path.is_file():
             out[name] = path
+    if paths.tags_file().is_file():
+        out["tags.csv"] = paths.tags_file()
     return out
 
 
@@ -309,7 +312,8 @@ def _names(name: str) -> dict[str, str]:
 
 
 def changes() -> list[str] | None:
-    """What changed since the last snapshot, one line each; None when there is no snapshot yet."""
+    """What changed since the last snapshot, one line each (tags.csv as one line when its bytes differ); None
+    when there is no snapshot yet."""
     old_root = snapshot_dir()
     if not old_root.is_dir():
         return None
@@ -322,6 +326,10 @@ def changes() -> list[str] | None:
             continue
         if name not in now:
             lines.append(f"{name}: removed")
+            continue
+        if name == "tags.csv":
+            if before[name].read_bytes() != now[name].read_bytes():
+                lines.append(f"{name}: changed")
             continue
         old, new = _read(before[name], name), _read(now[name], name)
         if isinstance(new, list) and isinstance(old, list):

@@ -411,18 +411,21 @@ def import_from(path: str | Path) -> dict[str, Any]:
     return apply(preflight(path))
 
 
-def receipt_line(r: dict[str, Any]) -> str:
+def receipt_line(r: dict[str, Any], preview: bool = False) -> str:
     """The one-line receipt the Configuration row shows after an import. Once any write
-    failed the line names the failure and no count, since the counts were the plan."""
+    failed the line names the failure and no count, since the counts were the plan. With
+    `preview`, a preflight's receipt says what an import would restore, in the same counts and
+    suffixes, and names what it could not read without saying a restore ran."""
     if r.get("refused") or (r.get("errors") and not r.get("counts")):
         return ""
     errors = r.get("errors") or []
-    if (len(errors) == 1 and errors[0].get("file") == RECOVERY
+    if (not preview and len(errors) == 1 and errors[0].get("file") == RECOVERY
             and str(errors[0].get("reason", "")).startswith(_NOT_REMOVED + ":")):
         return f"Restored · {RECOVERY} could not be removed"
     if r.get("errors"):
         first = r["errors"][0].get("file", "")
-        return f"Restore incomplete · {len(r['errors'])} failed" + (f" ({first})" if first else "")
+        return (f"{'Preview' if preview else 'Restore'} incomplete · {len(r['errors'])} failed"
+                + (f" ({first})" if first else ""))
     c = r.get("counts", {})
     parts = []
     if c.get("playlists"):
@@ -431,7 +434,7 @@ def receipt_line(r: dict[str, Any]) -> str:
         parts.append(f"{c['overrides']} override{'s' if c['overrides'] != 1 else ''}")
     if c.get("tags"):
         parts.append(f"{c['tags']} tag{'s' if c['tags'] != 1 else ''}")
-    line = "Restored " + (", ".join(parts) if parts else "settings")
+    line = ("Would restore: " if preview else "Restored ") + (", ".join(parts) if parts else "settings")
     waiting = c.get("overrides_held", 0) + c.get("tags_held", 0)
     if waiting:
         line += f" · {waiting} waiting for wallpapers"
@@ -461,7 +464,7 @@ def _print_receipt(r: dict[str, Any], dry_run: bool = False) -> int:
     if r.get("kind") == "export":
         print(f"Exported {r['path']}")
     elif dry_run and not r.get("refused"):
-        print("Would restore: " + (receipt_line(r) or "nothing"))
+        print(receipt_line(r, preview=True) or "Would restore: nothing")
     else:
         print(receipt_line(r) or f"Refused {r['path']}")
     counts = r.get("counts") or {}

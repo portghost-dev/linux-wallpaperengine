@@ -98,6 +98,14 @@ MACHINE_META = ("depMissing", "depWid", "depName", "resolution")
 _TYPES = {"favorite": bool, "tags": str, "title": str, "note": str}
 
 
+def _holds(key: str, val: Any) -> bool:
+    """Whether this version holds `val` for a user key: its type, and for tags also the list of strings the
+    editor writes, empty included."""
+    if key == "tags" and isinstance(val, list):
+        return all(isinstance(tag, str) for tag in val)
+    return isinstance(val, _TYPES[key])
+
+
 def _user_keys(entry: dict) -> dict:
     return {k: v for k, v in entry.items() if k in USER_META}
 
@@ -134,7 +142,7 @@ def _backup_preflight(z: zipfile.ZipFile, r: dict[str, Any], plan: dict[str, Any
                     reason = ("derived on the machine that wrote the backup" if key in MACHINE_META
                               else "unknown to this version")
                     r["dropped"].append({"kind": "meta", "id": f"{wid}:{key}", "reason": reason})
-                elif not isinstance(val, _TYPES[key]):
+                elif not _holds(key, val):
                     entry.pop(key)
                     r["dropped"].append({"kind": "meta", "id": f"{wid}:{key}", "reason": "not a value this version holds"})
             kept = _user_keys(entry)

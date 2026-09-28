@@ -1,6 +1,6 @@
 """lwe reload: every file checked from its raw text; any error applies and writes nothing; otherwise what
-changed since reload's own snapshot, the warnings and the cleanup are printed, the store is applied
-through sync_all with the re-show, engine-env is rebuilt, and the restart line names what waits. The
+changed since reload's own snapshot (tags.csv as one line), the warnings and the cleanup are printed, the store
+is applied through sync_all with the re-show, engine-env is rebuilt, and the restart line names what waits. The
 reload's re-show carries automatic and its lanes-set carries enabled, also while the engine reports that it
 refused its restore, when the brake note follows on stderr.
 
@@ -126,6 +126,28 @@ class ReloadTest(unittest.TestCase):
         self.assertEqual(out.splitlines(), ["settings.conf: volume 15 -> 40", "settings.conf: fps set to 30",
                                             "Applied."])
         self.assertIn(("set-volume", {"volume": 40}), engine.calls)
+
+    def test_a_changed_added_or_removed_tags_csv_is_named_and_the_store_is_still_sent(self) -> None:
+        engine = self.engine()
+        tags = self.paths.config_dir() / "tags.csv"
+        tags.write_text('id,title,state\n111,"One, the first",good\n222,Two,review\n', encoding="utf-8")
+        self.assertEqual(self.lwe("reload")[0], 0)
+        got = []
+        for edit in ('id,title,state\n111,"One, the first",good\n222,Two,good\n', None, "remove", "add"):
+            if edit == "remove":
+                tags.unlink()
+            elif edit == "add":
+                tags.write_text("id,title,state\n111,One,good\n", encoding="utf-8")
+            elif edit is not None:
+                tags.write_text(edit, encoding="utf-8")
+            engine.calls.clear()
+            code, out, err = self.lwe("reload")
+            got.append((code, err, out.splitlines()[0], "lanes-set" in self.sent(engine)))
+        tags.write_text("id,title,state\n111,One,bad\n", encoding="utf-8")
+        code, out, err = self.lwe("-j", "reload")
+        self.assertEqual(got, [(0, "", "tags.csv: changed", True), (0, "", SAME, True),
+                               (0, "", "tags.csv: removed", True), (0, "", "tags.csv: added", True)])
+        self.assertEqual((code, err, json.loads(out)["changes"]), (0, "", ["tags.csv: changed"]))
 
     def test_a_bad_value_in_one_playlist_refuses_everything(self) -> None:
         engine = self.engine()

@@ -117,9 +117,37 @@ class BackupHandoffTest(unittest.TestCase):
         self.settings("ENGINE_LAYER=bottom\n")
         before = (self.config / "settings.conf").read_bytes()
         code, out, err = self.lwe("backup", "preview", str(archive))
-        self.assertEqual((code, out.splitlines()[0], err), (0, "Would restore: Restored settings", ""))
+        self.assertEqual((code, out.splitlines()[0], err), (0, "Would restore: settings", ""))
         self.assertEqual((self.config / "settings.conf").read_bytes(), before)
         self.assertFalse((Path(self.env["XDG_STATE_HOME"]) / "lwe" / "backups").exists(), "a preview takes no snapshot")
+
+    def test_a_preview_counts_what_it_would_restore_and_names_a_member_it_cannot_read(self) -> None:
+        walls = self.root / "walls"
+        (walls / "111").mkdir(parents=True)
+        self.settings(f"WALLPAPERS_DIR={walls}\n")
+        (self.config / "tags.csv").write_text("id,title,state\n111,One,good\n", encoding="utf-8")
+        archive = self.root / "a.lwebackup"
+        self.assertEqual(self.lwe("backup", "export", str(archive))[0], 0)
+        broken = self.root / "b.lwebackup"
+        with zipfile.ZipFile(archive) as zin, zipfile.ZipFile(broken, "w") as zout:
+            for name in zin.namelist():
+                zout.writestr(name, b"{" if name == "meta.json" else zin.read(name))
+        first = [self.lwe("backup", "preview", str(path))[1].splitlines()[0] for path in (archive, broken)]
+        self.assertEqual(first, ["Would restore: 1 tag", "Preview incomplete · 1 failed (meta.json)"])
+        self.assertFalse((Path(self.env["XDG_STATE_HOME"]) / "lwe" / "backups").exists(), "a preview takes no snapshot")
+
+    def test_import_keeps_a_review_row_with_its_copy(self) -> None:
+        walls = self.root / "walls"
+        (walls / "3766506663").mkdir(parents=True)
+        self.settings(f"WALLPAPERS_DIR={walls}\n")
+        rows = "id,title,state\n3766506663,Griffith - Neroreyli,review\n"
+        (self.config / "tags.csv").write_text(rows, encoding="utf-8")
+        archive = self.root / "a.lwebackup"
+        self.assertEqual(self.lwe("backup", "export", str(archive))[0], 0)
+        with _fake_engine.FakeEngine(self.env["LWE_SOCKET"]):
+            code, out, err = self.lwe("backup", "import", str(archive))
+        self.assertEqual((code, err, out.splitlines()[0]), (0, "", "Restored 1 tag"), out)
+        self.assertEqual((self.config / "tags.csv").read_text(encoding="utf-8"), rows)
 
     def test_import_restores_then_syncs_the_running_engine(self) -> None:
         self.settings("ENGINE_FPS=45\n")
